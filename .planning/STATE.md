@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Checkpoint at Task 2 - awaiting human verification of capture pipeline endpoints
-last_updated: "2026-03-23T21:51:34.151Z"
+stopped_at: Completed 02-capture-pipeline-color-extraction 02-02-PLAN.md
+last_updated: "2026-03-23T21:53:47.975Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 6
@@ -55,6 +55,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 01-infrastructure-and-dtls-spike P03 | 5 | 2 tasks | 13 files |
 | Phase 02-capture-pipeline-color-extraction P01 | 3m 24s | 2 tasks | 5 files |
 | Phase 02-capture-pipeline-color-extraction P02 | 15min | 1 tasks | 4 files |
+| Phase 02-capture-pipeline-color-extraction P02 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,8 @@ Recent decisions affecting current work:
 - [Phase 02-capture-pipeline-color-extraction]: asyncio.Lock added to LatestFrameCapture.get_frame() to prevent concurrent read races
 - [Phase 02-capture-pipeline-color-extraction]: Lifespan captures RuntimeError from capture.open() and logs warning (non-fatal) — backend runnable without hardware; snapshot returns 503 instead
 - [Phase 02-capture-pipeline-color-extraction]: Debug color endpoint uses hard-coded center polygon to satisfy Phase 2 CIE xy success criterion
+- [Phase 02-capture-pipeline-color-extraction]: Lifespan catches RuntimeError from capture.open() and logs a warning instead of crashing — backend runnable without hardware; snapshot returns 503
+- [Phase 02-capture-pipeline-color-extraction]: Debug color endpoint uses hard-coded center polygon to satisfy Phase 2 CIE xy success criterion
 
 ### Pending Todos
 
@@ -88,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T21:51:34.139Z
-Stopped at: Checkpoint at Task 2 - awaiting human verification of capture pipeline endpoints
+Last session: 2026-03-23T21:53:47.962Z
+Stopped at: Completed 02-capture-pipeline-color-extraction 02-02-PLAN.md
 Resume file: None

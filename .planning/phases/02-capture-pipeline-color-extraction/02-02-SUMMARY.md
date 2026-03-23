@@ -59,7 +59,7 @@ completed: 2026-03-23
 - **Duration:** ~15 min
 - **Started:** 2026-03-23T22:00:00Z
 - **Completed:** 2026-03-23T22:15:00Z
-- **Tasks:** 1 of 2 (Task 2 pending human verification)
+- **Tasks:** 2 of 2 (Task 2 human-verify checkpoint approved)
 - **Files modified:** 4
 
 ## Accomplishments
@@ -75,9 +75,11 @@ Each task was committed atomically:
 1. **Task 1 (RED): Add failing capture router tests** - `09d0cd7` (test)
 2. **Task 1 (GREEN): Implement capture router and lifespan wiring** - `b12363f` (feat)
 
+3. **Task 2: Human-verify checkpoint** - approved by user
+
 _TDD task has two commits: test (RED) then implementation (GREEN)_
 
-**Plan metadata:** (to be added after checkpoint verification)
+**Plan metadata:** (committed via final docs commit after human verification)
 
 ## Files Created/Modified
 - `Backend/routers/capture.py` - GET /api/capture/snapshot, PUT /api/capture/device, GET /api/capture/debug/color
@@ -100,8 +102,8 @@ None.
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- Phase 2 complete pending human verification (Task 2 checkpoint)
-- Phase 3 (Hue streaming) can begin once checkpoint is approved
+- Phase 2 fully complete — all tasks done and human-verify checkpoint approved
+- Phase 3 (Hue streaming) can begin immediately
 - Backend starts cleanly without hardware; all tests green
 
 ---
