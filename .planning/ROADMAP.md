@@ -47,7 +47,7 @@ Six phases take the project from zero to a fully operational ambient lighting sy
 - `hue-entertainment-pykit` DTLS session may fail with specific bridge firmware versions — spike with physical hardware immediately; no simulated fallback
 - nginx `proxy_pass` to host-network backend requires `127.0.0.1:8000` not `backend:8000` — verify during Phase 1 Docker setup
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 01-01-PLAN.md — Docker Compose + FastAPI skeleton + SQLite schema + test scaffold
@@ -288,7 +288,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Infrastructure and DTLS Spike | 1/4 | In Progress|  |
+| 1. Infrastructure and DTLS Spike | 2/4 | In Progress|  |
 | 2. Capture Pipeline and Color Extraction | 0/TBD | Not started | - |
 | 3. Entertainment API Streaming Integration | 0/TBD | Not started | - |
 | 4. Frontend Canvas Editor | 0/TBD | Not started | - |

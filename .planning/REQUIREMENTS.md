@@ -7,11 +7,11 @@
 
 ### Bridge Integration
 
-- [ ] **BRDG-01**: User can pair with Hue Bridge via link button press from the web UI
-- [ ] **BRDG-02**: Bridge credentials (application key + client key) are persisted and survive restarts
-- [ ] **BRDG-03**: Application discovers all lights, rooms, and entertainment configurations from the bridge
+- [x] **BRDG-01**: User can pair with Hue Bridge via link button press from the web UI
+- [x] **BRDG-02**: Bridge credentials (application key + client key) are persisted and survive restarts
+- [x] **BRDG-03**: Application discovers all lights, rooms, and entertainment configurations from the bridge
 - [ ] **BRDG-04**: Gradient-capable devices (Festavia, Flux, Play Gradient) are identified with their per-segment channel count
-- [ ] **BRDG-05**: Entertainment configuration can be selected from the UI (lists available configs from bridge)
+- [x] **BRDG-05**: Entertainment configuration can be selected from the UI (lists available configs from bridge)
 
 ### Frame Capture
 
@@ -100,11 +100,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BRDG-01 | Phase 1 | Pending |
-| BRDG-02 | Phase 1 | Pending |
-| BRDG-03 | Phase 1 | Pending |
+| BRDG-01 | Phase 1 | Complete |
+| BRDG-02 | Phase 1 | Complete |
+| BRDG-03 | Phase 1 | Complete |
 | BRDG-04 | Phase 5 | Pending |
-| BRDG-05 | Phase 1 | Pending |
+| BRDG-05 | Phase 1 | Complete |
 | CAPT-01 | Phase 2 | Pending |
 | CAPT-02 | Phase 2 | Pending |
 | CAPT-03 | Phase 3 | Pending |
