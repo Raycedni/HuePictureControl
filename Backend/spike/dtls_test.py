@@ -170,22 +170,29 @@ def select_entertainment_config(entertainment: Entertainment, config_name: str |
         )
         raise SystemExit(1)
 
-    print(f"[spike] Found {len(configs)} entertainment configuration(s):")
-    for cfg in configs:
-        print(f"  - {cfg}")
+    # configs may be a dict (keyed by UUID) or list depending on library version
+    if isinstance(configs, dict):
+        config_list = list(configs.values())
+        config_keys = list(configs.keys())
+    else:
+        config_list = list(configs)
+        config_keys = [str(i) for i in range(len(config_list))]
+
+    print(f"[spike] Found {len(config_list)} entertainment configuration(s):")
+    for key, cfg in zip(config_keys, config_list):
+        cfg_name = getattr(cfg, "name", key)
+        print(f"  - {key} ({cfg_name})")
 
     if config_name is not None:
-        for cfg in configs:
-            # The config object's string representation or name attribute —
-            # try both to be safe.
+        for cfg in config_list:
             cfg_label = getattr(cfg, "name", str(cfg))
             if cfg_label.lower() == config_name.lower():
                 print(f"[spike] Selected config by name: {cfg_label!r}")
                 return cfg
         print(f"[spike] WARNING: No config named {config_name!r} found; using first config.")
 
-    selected = configs[0]
-    print(f"[spike] Using first entertainment config: {selected}")
+    selected = config_list[0]
+    print(f"[spike] Using first entertainment config: {config_keys[0]}")
     return selected
 
 
@@ -214,7 +221,7 @@ def main() -> None:
     # 5. Send the chosen color to channel 0.
     x, y, brightness = COLOR_PRESETS[args.color]
     print(f"[spike] Sending color: {args.color!r}  (x={x}, y={y}, bri={brightness})")
-    streaming.set_input(x, y, brightness, channel_id=0)
+    streaming.set_input((x, y, brightness, 0))
 
     print(f"Sent {args.color} to channel 0 — check your light!")
 

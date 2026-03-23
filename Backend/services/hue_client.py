@@ -59,11 +59,11 @@ def fetch_bridge_metadata(bridge_ip: str, username: str) -> dict:
 
     bridge_data = data["data"][0]
     return {
-        "bridge_id": bridge_data["bridge_id"],
-        "rid": bridge_data["id"],
-        "hue_app_id": bridge_data["owner"]["rid"],
-        "swversion": bridge_data["swversion"],
-        "name": bridge_data["metadata"]["name"],
+        "bridge_id": bridge_data.get("bridge_id", ""),
+        "rid": bridge_data.get("id", ""),
+        "hue_app_id": bridge_data.get("owner", {}).get("rid", ""),
+        "swversion": bridge_data.get("swversion", bridge_data.get("software_version", "0")),
+        "name": bridge_data.get("metadata", {}).get("name", "Hue Bridge"),
     }
 
 
