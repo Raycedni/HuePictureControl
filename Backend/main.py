@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from database import DATABASE_PATH, close_db, init_db
 from routers.health import router as health_router
+from routers.hue import router as hue_router
 
 
 @asynccontextmanager
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(health_router)
+app.include_router(hue_router)
 
 
 if __name__ == "__main__":
