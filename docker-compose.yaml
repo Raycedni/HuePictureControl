@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    network_mode: host  # INFR-03: required for DTLS/UDP on port 2100 and mDNS to Hue Bridge
+    devices:
+      - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough
+    group_add:
+      - video  # Required for /dev/video0 device access (host GID 44)
+    volumes:
+      - hue_data:/app/data  # INFR-05: SQLite persistence
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE_PATH=/app/data/config.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Placeholder — Plan 03 replaces with Vite+React build
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Makes host.docker.internal resolve to host on Linux
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hue_data:
