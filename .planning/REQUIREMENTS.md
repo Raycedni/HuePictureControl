@@ -58,11 +58,11 @@
 
 ### Infrastructure
 
-- [ ] **INFR-01**: Backend and frontend run as separate Docker Compose services
-- [ ] **INFR-02**: USB capture card is passed through to the backend container
-- [ ] **INFR-03**: Backend uses host networking for DTLS/UDP and mDNS access to Hue Bridge
+- [x] **INFR-01**: Backend and frontend run as separate Docker Compose services
+- [x] **INFR-02**: USB capture card is passed through to the backend container
+- [x] **INFR-03**: Backend uses host networking for DTLS/UDP and mDNS access to Hue Bridge
 - [ ] **INFR-04**: Frontend is served via nginx with reverse proxy to backend API and WebSocket
-- [ ] **INFR-05**: Configuration persists in SQLite database with volume mount
+- [x] **INFR-05**: Configuration persists in SQLite database with volume mount
 
 ## v2 Requirements
 
@@ -133,11 +133,11 @@
 | UI-04 | Phase 4 | Pending |
 | UI-05 | Phase 4 | Pending |
 | UI-06 | Phase 4 | Pending |
-| INFR-01 | Phase 1 | Pending |
-| INFR-02 | Phase 1 | Pending |
-| INFR-03 | Phase 1 | Pending |
+| INFR-01 | Phase 1 | Complete |
+| INFR-02 | Phase 1 | Complete |
+| INFR-03 | Phase 1 | Complete |
 | INFR-04 | Phase 6 | Pending |
-| INFR-05 | Phase 1 | Pending |
+| INFR-05 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 38 total
