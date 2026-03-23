@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-23T21:47:57.341Z"
+stopped_at: Checkpoint at Task 2 - awaiting human verification of capture pipeline endpoints
+last_updated: "2026-03-23T21:51:34.151Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 25
 ---
 
@@ -54,6 +54,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 01-infrastructure-and-dtls-spike P02 | 8 | 2 tasks | 6 files |
 | Phase 01-infrastructure-and-dtls-spike P03 | 5 | 2 tasks | 13 files |
 | Phase 02-capture-pipeline-color-extraction P01 | 3m 24s | 2 tasks | 5 files |
+| Phase 02-capture-pipeline-color-extraction P02 | 15min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,8 @@ Recent decisions affecting current work:
 - [Phase 01-infrastructure-and-dtls-spike]: PairingFlow uses 5-step state machine: checking/unpaired/pairing/paired/error for explicit step transitions
 - [Phase 02-capture-pipeline-color-extraction]: Inlined Gamut C color math algorithm (20 lines) rather than rgbxy dependency (unmaintained since 2020)
 - [Phase 02-capture-pipeline-color-extraction]: asyncio.Lock added to LatestFrameCapture.get_frame() to prevent concurrent read races
+- [Phase 02-capture-pipeline-color-extraction]: Lifespan captures RuntimeError from capture.open() and logs warning (non-fatal) — backend runnable without hardware; snapshot returns 503 instead
+- [Phase 02-capture-pipeline-color-extraction]: Debug color endpoint uses hard-coded center polygon to satisfy Phase 2 CIE xy success criterion
 
 ### Pending Todos
 
@@ -85,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T21:47:57.329Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-03-23T21:51:34.139Z
+Stopped at: Checkpoint at Task 2 - awaiting human verification of capture pipeline endpoints
 Resume file: None
