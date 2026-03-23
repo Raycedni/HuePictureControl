@@ -15,8 +15,8 @@
 
 ### Frame Capture
 
-- [ ] **CAPT-01**: Backend captures frames from a USB UVC device (HDMI capture card) at 640x480 MJPEG
-- [ ] **CAPT-02**: Capture device path is configurable (e.g. `/dev/video0`)
+- [x] **CAPT-01**: Backend captures frames from a USB UVC device (HDMI capture card) at 640x480 MJPEG
+- [x] **CAPT-02**: Capture device path is configurable (e.g. `/dev/video0`)
 - [ ] **CAPT-03**: Capture loop runs only when explicitly enabled via the UI toggle
 - [ ] **CAPT-04**: Capture loop stops cleanly when disabled (releases device, closes connections)
 - [ ] **CAPT-05**: A snapshot of the current camera frame is available via REST endpoint
@@ -105,8 +105,8 @@
 | BRDG-03 | Phase 1 | Complete |
 | BRDG-04 | Phase 5 | Pending |
 | BRDG-05 | Phase 1 | Complete |
-| CAPT-01 | Phase 2 | Pending |
-| CAPT-02 | Phase 2 | Pending |
+| CAPT-01 | Phase 2 | Complete |
+| CAPT-02 | Phase 2 | Complete |
 | CAPT-03 | Phase 3 | Pending |
 | CAPT-04 | Phase 3 | Pending |
 | CAPT-05 | Phase 2 | Pending |
