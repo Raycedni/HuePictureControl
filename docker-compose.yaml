@@ -21,9 +21,9 @@ services:
       retries: 3
       start_period: 15s
 
-  # Placeholder — Plan 03 replaces with Vite+React build
   frontend:
-    image: nginx:alpine
+    build:
+      context: ./Frontend
     ports:
       - "80:80"
     extra_hosts:
