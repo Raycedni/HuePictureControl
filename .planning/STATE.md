@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 01-infrastructure-and-dtls-spike/01-02-PLAN.md
-last_updated: "2026-03-23T20:55:18.958Z"
+stopped_at: Completed 01-infrastructure-and-dtls-spike/01-03-PLAN.md
+last_updated: "2026-03-23T20:58:22.105Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
   percent: 25
 ---
 
@@ -52,6 +52,7 @@ Progress: [███░░░░░░░] 25%
 *Updated after each plan completion*
 | Phase 01-infrastructure-and-dtls-spike P01 | 3 | 2 tasks | 14 files |
 | Phase 01-infrastructure-and-dtls-spike P02 | 8 | 2 tasks | 6 files |
+| Phase 01-infrastructure-and-dtls-spike P03 | 5 | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,8 @@ Recent decisions affecting current work:
 - [Phase 01-infrastructure-and-dtls-spike]: Docker Compose validation done via Python yaml parser (Docker Desktop WSL integration not active in dev environment)
 - [Phase 01-infrastructure-and-dtls-spike]: requests for sync pair/metadata calls; httpx.AsyncClient for async discovery (list_entertainment_configs, list_lights)
 - [Phase 01-infrastructure-and-dtls-spike]: Single-row bridge_config (id=1 fixed) supports exactly one paired bridge at a time
+- [Phase 01-infrastructure-and-dtls-spike]: Test files excluded from tsconfig.app.json to prevent Node global type conflict in browser build
+- [Phase 01-infrastructure-and-dtls-spike]: PairingFlow uses 5-step state machine: checking/unpaired/pairing/paired/error for explicit step transitions
 
 ### Pending Todos
 
@@ -79,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T20:55:18.949Z
-Stopped at: Completed 01-infrastructure-and-dtls-spike/01-02-PLAN.md
+Last session: 2026-03-23T20:58:22.095Z
+Stopped at: Completed 01-infrastructure-and-dtls-spike/01-03-PLAN.md
 Resume file: None
