@@ -80,7 +80,11 @@ Plans:
 **Risks:**
 - `cap.read()` blocking duration at 640x480 MJPEG on actual hardware may exceed 40ms — measure empirically and apply `run_in_executor` if asyncio starvation is observed
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Capture service + color math module with TDD tests
+- [ ] 02-02-PLAN.md — Capture REST endpoints + lifespan wiring + hardware verification
 
 ---
 
@@ -289,7 +293,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Infrastructure and DTLS Spike | 3/4 | In Progress|  |
-| 2. Capture Pipeline and Color Extraction | 0/TBD | Not started | - |
+| 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
 | 3. Entertainment API Streaming Integration | 0/TBD | Not started | - |
 | 4. Frontend Canvas Editor | 0/TBD | Not started | - |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
