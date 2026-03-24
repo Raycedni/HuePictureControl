@@ -105,23 +105,35 @@ def _make_channel_row(channel_id, polygon_points=None):
 # Import path
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def service_imports():
-    """Provide the StreamingService class under pykit mocks."""
+    """Provide the StreamingService class under pykit mocks (module-scoped: import once)."""
+    import sys
+    import importlib
+
     mock_bridge_cls = MagicMock()
     mock_entertainment_cls = MagicMock()
     mock_streaming_cls = MagicMock()
     mock_create_bridge = MagicMock(return_value=mock_bridge_cls())
 
-    with patch.dict("sys.modules", {
-        "hue_entertainment_pykit": MagicMock(
-            create_bridge=mock_create_bridge,
-            Entertainment=mock_entertainment_cls,
-            Streaming=mock_streaming_cls,
-        )
-    }):
-        from services.streaming_service import StreamingService
-        yield StreamingService, mock_create_bridge, mock_entertainment_cls, mock_streaming_cls
+    pykit_mock = MagicMock()
+    pykit_mock.create_bridge = mock_create_bridge
+    pykit_mock.Entertainment = mock_entertainment_cls
+    pykit_mock.Streaming = mock_streaming_cls
+
+    # Patch the module before import and keep it for the entire test module
+    sys.modules["hue_entertainment_pykit"] = pykit_mock
+
+    # Remove cached streaming_service if present (force reimport with mocked pykit)
+    sys.modules.pop("services.streaming_service", None)
+
+    from services.streaming_service import StreamingService
+
+    yield StreamingService, mock_create_bridge, mock_entertainment_cls, mock_streaming_cls
+
+    # Cleanup
+    sys.modules.pop("hue_entertainment_pykit", None)
+    sys.modules.pop("services.streaming_service", None)
 
 
 # ---------------------------------------------------------------------------
@@ -148,25 +160,26 @@ async def test_start_transitions_to_streaming(service_imports):
         return fn(*args, **kwargs)
 
     with patch("asyncio.to_thread", side_effect=fake_to_thread):
-        # Make frame loop exit quickly
-        run_count = 0
+        with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+            # Make frame loop exit quickly
+            run_count = 0
 
-        async def controlled_get_frame():
-            nonlocal run_count
-            run_count += 1
-            if run_count > 1:
-                service._run_event.clear()
-            return _solid_blue_frame()
+            async def controlled_get_frame():
+                nonlocal run_count
+                run_count += 1
+                if run_count > 1:
+                    service._run_event.clear()
+                return _solid_blue_frame()
 
-        mocks["capture"].get_frame = AsyncMock(side_effect=controlled_get_frame)
+            mocks["capture"].get_frame = AsyncMock(side_effect=controlled_get_frame)
 
-        await service.start("cfg-001")
+            await service.start("cfg-001")
 
-        assert service.state in ("starting", "streaming")
+            assert service.state in ("starting", "streaming")
 
-        # Wait for the loop to finish
-        if service._task:
-            await service._task
+            # Wait for the loop to finish
+            if service._task:
+                await service._task
 
     assert service.state == "idle"
 
@@ -447,13 +460,9 @@ async def test_frame_loop_16_channels(service_imports):
     mocks = _make_mocks()
     service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
 
-    ran = False
-
     async def one_frame():
-        nonlocal ran
-        if ran:
-            service._run_event.clear()
-        ran = True
+        # Clear event during get_frame so exactly one frame is processed
+        service._run_event.clear()
         return _solid_blue_frame()
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
@@ -473,7 +482,7 @@ async def test_frame_loop_16_channels(service_imports):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
                     await service._frame_loop(mocks["streaming"], channel_map)
 
-    # 16 channels should each get set_input called
+    # 16 channels should each get set_input called (exactly one frame processed)
     assert len(set_input_calls) == 16
 
 
@@ -485,13 +494,9 @@ async def test_frame_loop_1_channel_non_gradient(service_imports):
     mocks = _make_mocks()
     service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
 
-    ran = False
-
     async def one_frame():
-        nonlocal ran
-        if ran:
-            service._run_event.clear()
-        ran = True
+        # Clear event during get_frame so exactly one frame is processed
+        service._run_event.clear()
         return _solid_blue_frame()
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
