@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
 stopped_at: Completed 03.1-02-PLAN.md (hardware verified)
-last_updated: "2026-03-24T20:33:07.954Z"
+last_updated: "2026-03-24T20:37:07.070Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
