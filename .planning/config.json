@@ -6,7 +6,8 @@
     "research_enabled": true,
     "researcher_model": "sonnet",
     "synthesizer_model": "sonnet",
-    "roadmapper_model": "sonnet"
+    "roadmapper_model": "sonnet",
+    "_auto_chain_active": true
   },
   "preferences": {
     "backend": "python",
