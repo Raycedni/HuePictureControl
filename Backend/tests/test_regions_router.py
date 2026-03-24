@@ -6,6 +6,10 @@ Tests cover:
 - GET /api/regions returns regions after DB insert
 - POST /api/regions/auto-map returns 422 on empty channels (ValueError)
 - POST /api/regions/auto-map includes warning when streaming is active
+- POST /api/regions creates a region (CRUD)
+- PUT /api/regions/{id} updates polygon and/or light_id
+- DELETE /api/regions/{id} removes a region
+- GET /api/regions/ includes light_id field in each region
 """
 import json
 import pytest
@@ -260,3 +264,142 @@ class TestAutoMapEndpoint:
         regions = get_response.json()
         assert len(regions) == 1
         assert regions[0]["id"] == "auto:cfg-001:0"
+
+
+# ---------------------------------------------------------------------------
+# CRUD endpoint tests (POST, PUT, DELETE, GET with light_id)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateRegion:
+    async def test_create_region_returns_201(self, regions_client):
+        """POST /api/regions returns 201 with created region including id."""
+        client, _ = regions_client
+        payload = {
+            "name": "Left Zone",
+            "polygon": [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]],
+        }
+        response = client.post("/api/regions/", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert "id" in data
+        assert data["name"] == "Left Zone"
+        assert data["polygon"] == payload["polygon"]
+        assert data["light_id"] is None
+
+    async def test_create_region_with_light_id(self, regions_client):
+        """POST /api/regions with light_id stores and returns it."""
+        client, _ = regions_client
+        payload = {
+            "name": "Right Zone",
+            "polygon": [[0.5, 0.0], [1.0, 0.0], [1.0, 0.5], [0.5, 0.5]],
+            "light_id": "light-abc-123",
+        }
+        response = client.post("/api/regions/", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["light_id"] == "light-abc-123"
+
+    async def test_create_region_generates_unique_id(self, regions_client):
+        """POST /api/regions generates distinct UUIDs for each region."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        r1 = client.post("/api/regions/", json={"name": "R1", "polygon": polygon})
+        r2 = client.post("/api/regions/", json={"name": "R2", "polygon": polygon})
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+        assert r1.json()["id"] != r2.json()["id"]
+
+
+class TestUpdateRegion:
+    async def test_update_region_polygon(self, regions_client):
+        """PUT /api/regions/{id} updates polygon and returns updated region."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        create_resp = client.post("/api/regions/", json={"name": "Zone", "polygon": polygon})
+        region_id = create_resp.json()["id"]
+
+        new_polygon = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+        response = client.put(f"/api/regions/{region_id}", json={"polygon": new_polygon})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["polygon"] == new_polygon
+
+    async def test_update_region_light_id(self, regions_client):
+        """PUT /api/regions/{id} updates light_id assignment."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        create_resp = client.post("/api/regions/", json={"name": "Zone", "polygon": polygon})
+        region_id = create_resp.json()["id"]
+
+        response = client.put(f"/api/regions/{region_id}", json={"light_id": "light-xyz"})
+        assert response.status_code == 200
+        assert response.json()["light_id"] == "light-xyz"
+
+    async def test_update_nonexistent_returns_404(self, regions_client):
+        """PUT /api/regions/{id} returns 404 when region not found."""
+        client, _ = regions_client
+        response = client.put(
+            "/api/regions/nonexistent-id",
+            json={"polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]},
+        )
+        assert response.status_code == 404
+
+
+class TestDeleteRegion:
+    async def test_delete_region_returns_204(self, regions_client):
+        """DELETE /api/regions/{id} returns 204 on success."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        create_resp = client.post("/api/regions/", json={"name": "Zone", "polygon": polygon})
+        region_id = create_resp.json()["id"]
+
+        response = client.delete(f"/api/regions/{region_id}")
+        assert response.status_code == 204
+
+    async def test_delete_nonexistent_returns_404(self, regions_client):
+        """DELETE /api/regions/{id} returns 404 when region not found."""
+        client, _ = regions_client
+        response = client.delete("/api/regions/nonexistent-id")
+        assert response.status_code == 404
+
+    async def test_delete_removes_from_list(self, regions_client):
+        """After DELETE, region no longer appears in GET /api/regions/."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        create_resp = client.post("/api/regions/", json={"name": "Zone", "polygon": polygon})
+        region_id = create_resp.json()["id"]
+
+        client.delete(f"/api/regions/{region_id}")
+        get_resp = client.get("/api/regions/")
+        ids = [r["id"] for r in get_resp.json()]
+        assert region_id not in ids
+
+
+class TestListRegionsIncludesLightId:
+    async def test_list_regions_includes_light_id(self, regions_client):
+        """GET /api/regions/ includes light_id field (null by default)."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        client.post("/api/regions/", json={"name": "Zone", "polygon": polygon})
+
+        response = client.get("/api/regions/")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+        assert "light_id" in data[0]
+        assert data[0]["light_id"] is None
+
+    async def test_list_regions_shows_assigned_light_id(self, regions_client):
+        """GET /api/regions/ shows non-null light_id when assigned."""
+        client, _ = regions_client
+        polygon = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]
+        create_resp = client.post(
+            "/api/regions/",
+            json={"name": "Zone", "polygon": polygon, "light_id": "light-abc"},
+        )
+        region_id = create_resp.json()["id"]
+
+        response = client.get("/api/regions/")
+        region = next(r for r in response.json() if r["id"] == region_id)
+        assert region["light_id"] == "light-abc"
