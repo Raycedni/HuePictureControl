@@ -9,6 +9,7 @@ from database import DATABASE_PATH, close_db, init_db
 from routers.capture import router as capture_router
 from routers.health import router as health_router
 from routers.hue import router as hue_router
+from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
 from services.capture_service import LatestFrameCapture
@@ -65,6 +66,7 @@ app.include_router(hue_router)
 app.include_router(capture_router)
 app.include_router(regions_router)
 app.include_router(streaming_ws_router)
+app.include_router(preview_ws_router)
 
 
 if __name__ == "__main__":
