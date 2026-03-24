@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { DrawingToolbar } from './DrawingToolbar'
 import { EditorCanvas, handleEditorDelete } from './EditorCanvas'
+import { LightPanel } from './LightPanel'
 
 export function EditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -40,10 +41,9 @@ export function EditorPage() {
         </div>
       </div>
 
-      {/* Right: light panel placeholder ~30% */}
-      <div className="flex flex-col flex-[3] border-l border-border p-4">
-        <h2 className="text-sm font-semibold mb-2 text-muted-foreground">Light Panel</h2>
-        <p className="text-xs text-muted-foreground">Light assignment will appear here (Plan 04).</p>
+      {/* Right: light panel ~30% */}
+      <div className="flex flex-[3] min-h-0 overflow-hidden">
+        <LightPanel />
       </div>
     </div>
   )

@@ -4,8 +4,9 @@ import useImage from 'use-image'
 import type Konva from 'konva'
 import { usePreviewWS } from '@/hooks/usePreviewWS'
 import { useRegionStore } from '@/store/useRegionStore'
-import { normalize } from '@/utils/geometry'
-import { createRegion, deleteRegion as deleteRegionAPI, fetchRegions } from '@/api/regions'
+import { normalize, denormalize, pointInPolygon } from '@/utils/geometry'
+import { createRegion, deleteRegion as deleteRegionAPI, fetchRegions, updateRegion as updateRegionAPI } from '@/api/regions'
+import { getLights, type Light } from '@/api/hue'
 import { RegionPolygon } from './RegionPolygon'
 
 export interface EditorCanvasProps {
@@ -30,15 +31,31 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
   const setSelectedId = useRegionStore((s) => s.setSelectedId)
   const appendPoint = useRegionStore((s) => s.appendPoint)
   const clearDrawing = useRegionStore((s) => s.clearDrawing)
+  const updateRegionInStore = useRegionStore((s) => s.updateRegion)
 
   // Rectangle drawing state
   const [rectStart, setRectStart] = useState<[number, number] | null>(null)
   const [rectPreview, setRectPreview] = useState<[number, number][] | null>(null)
 
-  // Load regions on mount
+  // Light map: light_id -> light name for label display
+  const [lightMap, setLightMap] = useState<Record<string, string>>({})
+
+  // Load regions and lights on mount
   useEffect(() => {
     fetchRegions().then(setRegions).catch(console.error)
   }, [setRegions])
+
+  useEffect(() => {
+    getLights()
+      .then((lights: Light[]) => {
+        const map: Record<string, string> = {}
+        for (const l of lights) {
+          map[l.id] = l.name
+        }
+        setLightMap(map)
+      })
+      .catch(console.error)
+  }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -147,12 +164,40 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
   const drawingLinePoints = drawingPoints.flatMap(([x, y]) => [x, y])
   const previewLinePoints = (rectPreview ?? []).flatMap(([x, y]) => [x, y])
 
+  async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const lightId = e.dataTransfer.getData('lightId')
+    if (!lightId) return
+
+    const stage = stageRef.current
+    if (!stage) return
+
+    // Update Konva pointer position from the DOM drag event
+    stage.setPointersPositions(e)
+    const pos = stage.getPointerPosition()
+    if (!pos) return
+
+    // Find which region contains the drop point (in pixel space)
+    const currentRegions = useRegionStore.getState().regions
+    const hit = currentRegions.find((region) => {
+      const pixelPolygon = denormalize(region.polygon as [number, number][], width, height)
+      return pointInPolygon([pos.x, pos.y], pixelPolygon)
+    })
+
+    if (!hit) return
+
+    try {
+      await updateRegionAPI(hit.id, { light_id: lightId })
+      updateRegionInStore(hit.id, { light_id: lightId })
+    } catch (err) {
+      console.error('Failed to assign light to region:', err)
+    }
+  }
+
   return (
     <div
       onDragOver={(e) => e.preventDefault()}
-      onDrop={() => {
-        /* Plan 04 wires this */
-      }}
+      onDrop={handleDrop}
     >
       <Stage
         ref={stageRef}
@@ -179,6 +224,7 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
               isSelected={region.id === selectedId}
               stageWidth={width}
               stageHeight={height}
+              lightName={region.light_id ? lightMap[region.light_id] : undefined}
             />
           ))}
 
