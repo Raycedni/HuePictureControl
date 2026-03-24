@@ -28,7 +28,7 @@
 - [ ] **REGN-03**: User can assign each region to a Hue light or gradient segment channel
 - [x] **REGN-04**: Region coordinates are stored as normalized [0..1] values (resolution-independent)
 - [x] **REGN-05**: Region-to-light mappings persist across restarts
-- [ ] **REGN-06**: Live camera preview is available in the web UI via WebSocket for verifying mappings
+- [x] **REGN-06**: Live camera preview is available in the web UI via WebSocket for verifying mappings
 
 ### Color Streaming
 
@@ -115,7 +115,7 @@
 | REGN-03 | Phase 4 | Pending |
 | REGN-04 | Phase 4 | Complete |
 | REGN-05 | Phase 4 | Complete |
-| REGN-06 | Phase 4 | Pending |
+| REGN-06 | Phase 4 | Complete |
 | STRM-01 | Phase 3 | Complete |
 | STRM-02 | Phase 3 | Complete |
 | STRM-03 | Phase 3 | Complete |

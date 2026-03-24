@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-24T20:53:04.742Z"
+stopped_at: Completed 04-frontend-canvas-editor 04-01-PLAN.md
+last_updated: "2026-03-24T21:28:19.574Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 15
+  completed_plans: 12
   percent: 25
 ---
 
@@ -63,6 +63,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 03.1-auto-mapping-from-entertainment-config P01 | 3min | 2 tasks | 6 files |
 | Phase 03.1-auto-mapping-from-entertainment-config P02 | 10min | 1 tasks | 3 files |
 | Phase 03.1-auto-mapping-from-entertainment-config P02 | 15min | 2 tasks | 3 files |
+| Phase 04-frontend-canvas-editor P01 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,10 @@ Recent decisions affecting current work:
 - [Phase 03.1-auto-mapping-from-entertainment-config]: Overlay positioning uses clientWidth/clientHeight so divs match the rendered (scaled) image size
 - [Phase 03.1-auto-mapping-from-entertainment-config]: Overlay positioning uses clientWidth/clientHeight so overlays match the rendered (scaled) image size
 - [Phase 03.1-auto-mapping-from-entertainment-config]: Hardware verification confirmed: auto-map generates correct regions, overlays display on camera preview, streaming works end-to-end (REGN-04, REGN-05 satisfied)
+- [Phase 04-frontend-canvas-editor]: ALTER TABLE migration wraps in try/except for portability across aiosqlite versions
+- [Phase 04-frontend-canvas-editor]: PUT /api/regions/{id} uses dynamic SET clause for partial updates (only non-None fields applied)
+- [Phase 04-frontend-canvas-editor]: DELETE /api/regions/{id} also cleans up light_assignments rows to prevent orphaned data
+- [Phase 04-frontend-canvas-editor]: /ws/preview uses JPEG quality 70 (vs 85 in capture snapshot) for streaming throughput
 
 ### Pending Todos
 
@@ -113,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T20:53:04.715Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-frontend-canvas-editor/04-CONTEXT.md
+Last session: 2026-03-24T21:28:19.554Z
+Stopped at: Completed 04-frontend-canvas-editor 04-01-PLAN.md
+Resume file: None
