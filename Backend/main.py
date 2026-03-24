@@ -9,6 +9,7 @@ from database import DATABASE_PATH, close_db, init_db
 from routers.capture import router as capture_router
 from routers.health import router as health_router
 from routers.hue import router as hue_router
+from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
 from services.capture_service import LatestFrameCapture
 from services.status_broadcaster import StatusBroadcaster
@@ -62,6 +63,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(hue_router)
 app.include_router(capture_router)
+app.include_router(regions_router)
 app.include_router(streaming_ws_router)
 
 
