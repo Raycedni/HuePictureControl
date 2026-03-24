@@ -168,11 +168,11 @@ async def test_heartbeat_loop_removes_dead_connection():
     sb = StatusBroadcaster()
     dead_ws = _make_ws()
     alive_ws = _make_ws()
-    dead_ws.send_text = AsyncMock(side_effect=Exception("connection closed"))
 
+    # Connect both while send_text works, then make dead_ws fail afterwards
     await sb.connect(dead_ws)
     await sb.connect(alive_ws)
-    dead_ws.send_text.reset_mock()
+    dead_ws.send_text = AsyncMock(side_effect=Exception("connection closed"))
     alive_ws.send_text.reset_mock()
 
     await sb._send_to_all()
