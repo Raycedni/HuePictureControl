@@ -1,7 +1,10 @@
 """Hue Bridge client functions for pairing, metadata fetch, and device discovery."""
+import logging
 import urllib3
 import requests
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Suppress InsecureRequestWarning for self-signed bridge certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -120,3 +123,41 @@ async def list_lights(bridge_ip: str, username: str) -> list[dict]:
             "type": item.get("type", "light"),
         })
     return lights
+
+
+async def activate_entertainment_config(bridge_ip: str, username: str, config_id: str) -> None:
+    """Activate an entertainment configuration on the bridge (action=start).
+
+    Args:
+        bridge_ip: IP address of the Hue Bridge.
+        username: Application key obtained during pairing.
+        config_id: UUID of the entertainment configuration to activate.
+
+    Raises:
+        httpx.HTTPStatusError: If the bridge returns a non-2xx response.
+    """
+    url = f"https://{bridge_ip}/clip/v2/resource/entertainment_configuration/{config_id}"
+    headers = {"hue-application-key": username}
+    async with httpx.AsyncClient(verify=False, timeout=10) as client:
+        resp = await client.put(url, json={"action": "start"}, headers=headers)
+        resp.raise_for_status()
+
+
+async def deactivate_entertainment_config(bridge_ip: str, username: str, config_id: str) -> None:
+    """Deactivate an entertainment configuration on the bridge (action=stop).
+
+    Best-effort: logs a warning on failure but does not raise, so shutdown
+    sequences are never interrupted by a bridge communication error.
+
+    Args:
+        bridge_ip: IP address of the Hue Bridge.
+        username: Application key obtained during pairing.
+        config_id: UUID of the entertainment configuration to deactivate.
+    """
+    url = f"https://{bridge_ip}/clip/v2/resource/entertainment_configuration/{config_id}"
+    headers = {"hue-application-key": username}
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=10) as client:
+            await client.put(url, json={"action": "stop"}, headers=headers)
+    except Exception:
+        logger.warning("Failed to deactivate entertainment config %s (best-effort)", config_id)
