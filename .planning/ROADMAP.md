@@ -148,7 +148,11 @@ Plans:
 **Risks:**
 - Entertainment config channel positions may not map intuitively to screen regions for all physical layouts — the mapping algorithm needs to handle edge lights vs surround configurations
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 03.1-01-PLAN.md — Auto-mapping service + hue_client extension + regions router with TDD tests
+- [ ] 03.1-02-PLAN.md — Frontend preview page with region overlays + hardware verification
 
 ---
 
@@ -331,7 +335,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | 1. Infrastructure and DTLS Spike | 3/4 | In Progress|  |
 | 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
 | 3. Entertainment API Streaming Integration | 3/3 | Complete   | 2026-03-24 |
-| 3.1 Auto-Mapping from Entertainment Config | 0/TBD | Not started | - |
+| 3.1 Auto-Mapping from Entertainment Config | 0/2 | Planned | - |
 | 4. Frontend Canvas Editor | 0/TBD | Not started | - |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
