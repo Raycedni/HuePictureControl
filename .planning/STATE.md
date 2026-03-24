@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 03-03-PLAN.md — Phase 3 complete
-last_updated: "2026-03-24T19:58:04.383Z"
+stopped_at: Completed 03.1-01-PLAN.md
+last_updated: "2026-03-24T20:28:28.540Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 11
+  completed_plans: 10
   percent: 25
 ---
 
@@ -60,6 +60,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 03-entertainment-api-streaming-integration P02 | 6min | 1 tasks | 2 files |
 | Phase 03-entertainment-api-streaming-integration P03 | 10min | 1 tasks | 6 files |
 | Phase 03-entertainment-api-streaming-integration P03 | 15min | 2 tasks | 6 files |
+| Phase 03.1-auto-mapping-from-entertainment-config P01 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,7 @@ Recent decisions affecting current work:
 - [Phase 03-entertainment-api-streaming-integration]: Start/stop endpoints stay on capture router (/api/capture prefix) rather than new router for cohesive streaming control
 - [Phase 03-entertainment-api-streaming-integration]: WebSocket receive loop uses receive_text() so browser ping/pong frames keep connections alive
 - [Phase 03-entertainment-api-streaming-integration]: Hardware verification confirmed: lights sync from capture card feed, latency under 100ms (STRM-05 satisfied)
+- [Phase 03.1-auto-mapping-from-entertainment-config]: channel_pos_to_screen maps Hue x->screen_x, z->screen_y via (val+1.0)/2.0; region IDs use deterministic auto:{config_id}:{channel_id} pattern for idempotency
 
 ### Pending Todos
 
@@ -106,6 +108,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T19:48:56.136Z
-Stopped at: Completed 03-03-PLAN.md — Phase 3 complete
+Last session: 2026-03-24T20:28:28.523Z
+Stopped at: Completed 03.1-01-PLAN.md
 Resume file: None

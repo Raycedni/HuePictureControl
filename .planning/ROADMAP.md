@@ -148,7 +148,7 @@ Plans:
 **Risks:**
 - Entertainment config channel positions may not map intuitively to screen regions for all physical layouts — the mapping algorithm needs to handle edge lights vs surround configurations
 
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 03.1-01-PLAN.md — Auto-mapping service + hue_client extension + regions router with TDD tests
