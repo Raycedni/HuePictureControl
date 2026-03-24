@@ -9,7 +9,10 @@ from database import DATABASE_PATH, close_db, init_db
 from routers.capture import router as capture_router
 from routers.health import router as health_router
 from routers.hue import router as hue_router
+from routers.streaming_ws import router as streaming_ws_router
 from services.capture_service import LatestFrameCapture
+from services.status_broadcaster import StatusBroadcaster
+from services.streaming_service import StreamingService
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,18 @@ async def lifespan(app: FastAPI):
         )
     app.state.capture = capture
 
+    # Startup: create StatusBroadcaster and StreamingService
+    broadcaster = StatusBroadcaster()
+    app.state.broadcaster = broadcaster
+
+    streaming = StreamingService(db=db, capture=capture, broadcaster=broadcaster)
+    app.state.streaming = streaming
+
     yield
+
+    # Shutdown: stop streaming if active (before releasing capture)
+    if streaming.state not in ("idle",):
+        await streaming.stop()
 
     # Shutdown: release capture device
     capture.release()
@@ -48,6 +62,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(hue_router)
 app.include_router(capture_router)
+app.include_router(streaming_ws_router)
 
 
 if __name__ == "__main__":

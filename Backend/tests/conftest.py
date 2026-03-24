@@ -141,3 +141,76 @@ def capture_app_client_broken_open():
     )
     with _make_capture_app_client(mock_capture) as client:
         yield client
+
+
+# ---------------------------------------------------------------------------
+# StreamingService mock helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_streaming_service_mock():
+    """Return a MagicMock StreamingService with async start/stop and idle state."""
+    mock_streaming = MagicMock()
+    mock_streaming.start = AsyncMock()
+    mock_streaming.stop = AsyncMock()
+    type(mock_streaming).state = property(lambda self: "idle")
+    return mock_streaming
+
+
+def _make_capture_app_client_with_streaming(mock_capture, mock_streaming):
+    """Create a TestClient with both mock capture and mock streaming on app.state."""
+    from fastapi import FastAPI
+    from routers.capture import router as capture_router
+
+    @asynccontextmanager
+    async def capture_lifespan(app):
+        app.state.capture = mock_capture
+        app.state.streaming = mock_streaming
+        yield
+
+    test_app = FastAPI(lifespan=capture_lifespan)
+    test_app.include_router(capture_router)
+    return TestClient(test_app)
+
+
+@pytest.fixture
+def capture_app_client_with_streaming():
+    """TestClient with working mock capture and mock streaming service."""
+    mock_capture = _make_capture_mock()
+    mock_streaming = _make_streaming_service_mock()
+    with _make_capture_app_client_with_streaming(mock_capture, mock_streaming) as client:
+        yield client, mock_streaming
+
+
+# ---------------------------------------------------------------------------
+# StatusBroadcaster / streaming_ws fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_broadcaster_mock():
+    """Return a MagicMock StatusBroadcaster with async connect/push_state/heartbeat."""
+    from services.status_broadcaster import StatusBroadcaster
+    return StatusBroadcaster()
+
+
+def _make_streaming_ws_client(broadcaster):
+    """Create a TestClient with mock broadcaster on app.state for /ws/status tests."""
+    from fastapi import FastAPI
+    from routers.streaming_ws import router as streaming_ws_router
+
+    @asynccontextmanager
+    async def ws_lifespan(app):
+        app.state.broadcaster = broadcaster
+        yield
+
+    test_app = FastAPI(lifespan=ws_lifespan)
+    test_app.include_router(streaming_ws_router)
+    return TestClient(test_app)
+
+
+@pytest.fixture
+def streaming_ws_client():
+    """TestClient wired with a real StatusBroadcaster for /ws/status tests."""
+    broadcaster = _make_broadcaster_mock()
+    with _make_streaming_ws_client(broadcaster) as client:
+        yield client

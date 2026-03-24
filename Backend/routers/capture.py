@@ -29,6 +29,37 @@ class SetDeviceRequest(BaseModel):
     device_path: str
 
 
+class StartCaptureRequest(BaseModel):
+    config_id: str
+
+
+@router.post("/start")
+async def start_capture(body: StartCaptureRequest, request: Request):
+    """Start the streaming loop for the given entertainment config.
+
+    Args:
+        body: JSON body with ``config_id`` field (UUID of the entertainment config)
+
+    Returns:
+        200 JSON {"status": "starting"}
+    """
+    streaming = request.app.state.streaming
+    await streaming.start(body.config_id)
+    return {"status": "starting"}
+
+
+@router.post("/stop")
+async def stop_capture(request: Request):
+    """Stop the streaming loop cleanly.
+
+    Returns:
+        200 JSON {"status": "stopping"}
+    """
+    streaming = request.app.state.streaming
+    await streaming.stop()
+    return {"status": "stopping"}
+
+
 @router.get("/snapshot")
 async def get_snapshot(request: Request) -> Response:
     """Return a JPEG-encoded snapshot from the capture device.
