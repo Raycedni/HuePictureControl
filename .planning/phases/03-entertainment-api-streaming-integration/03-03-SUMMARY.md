@@ -42,6 +42,7 @@ key-decisions:
   - "Start/stop endpoints on capture router (not new router) to keep /api/capture prefix cohesive"
   - "Lifespan shutdown checks streaming.state before calling stop() to avoid no-op awaits on already-idle service"
   - "ws_status receives text to keep connection alive (browser ping support); WebSocketDisconnect triggers clean removal"
+  - "Hardware verification confirmed: lights sync from capture card feed, latency under 100ms (STRM-05 satisfied)"
 
 patterns-established:
   - "WebSocket endpoint: broadcaster.connect() -> receive loop -> disconnect on WebSocketDisconnect"
@@ -57,14 +58,14 @@ completed: 2026-03-24
 
 # Phase 03 Plan 03: API Integration Summary
 
-**FastAPI wired with start/stop REST endpoints and /ws/status WebSocket using app.state dependency injection, plus lifespan lifecycle for StreamingService and StatusBroadcaster**
+**FastAPI wired with start/stop REST endpoints and /ws/status WebSocket using app.state dependency injection — hardware-verified end-to-end color sync from capture card to Hue lights under 100ms**
 
 ## Performance
 
-- **Duration:** ~10 min
+- **Duration:** ~15 min (Task 1 automated + Task 2 hardware verify)
 - **Started:** 2026-03-24T19:45:00Z
-- **Completed:** 2026-03-24T19:55:00Z
-- **Tasks:** 1 of 2 (Task 2 is hardware checkpoint awaiting human verify)
+- **Completed:** 2026-03-24T20:00:00Z
+- **Tasks:** 2 of 2
 - **Files modified:** 6
 
 ## Accomplishments
@@ -72,15 +73,17 @@ completed: 2026-03-24
 - Added `POST /api/capture/start` and `POST /api/capture/stop` endpoints to the capture router
 - Updated lifespan to create StatusBroadcaster and StreamingService on `app.state`, with graceful shutdown ordering
 - Added 16 new tests (9 capture router + 4 WebSocket) with conftest fixtures for mock streaming service and broadcaster
-- All 111 tests pass
+- All tests pass
+- Hardware verification confirmed: lights update from capture card feed, latency under 100ms (STRM-05 satisfied)
 
 ## Task Commits
 
 Each task was committed atomically:
 
 1. **Task 1: WebSocket endpoint + start/stop REST endpoints + lifespan wiring** - `7975b54` (feat)
+2. **Task 2: Hardware verification** - Approved (checkpoint, no code changes)
 
-**Plan metadata:** (pending — hardware checkpoint blocks final commit)
+**Plan metadata:** `dba1a88` (docs: complete plan - awaiting checkpoint)
 
 _Note: TDD task had single commit (tests + implementation together after RED/GREEN cycle)_
 
@@ -111,8 +114,9 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 - Complete backend streaming API is ready for frontend (Phase 4) to call
-- Hardware checkpoint (Task 2) must be verified before considering Phase 3 fully complete
-- Frontend can now call POST /api/capture/start with config_id and connect to /ws/status for real-time metrics
+- Hardware verification is complete — Phase 3 is fully done
+- Frontend can call POST /api/capture/start with config_id and connect to /ws/status for real-time metrics
+- Concerns: Festavia/gradient light channel counts still require hardware validation before Phase 5 segment UI is finalized
 
 ---
 *Phase: 03-entertainment-api-streaming-integration*
