@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 03.1-02-PLAN.md
-last_updated: "2026-03-24T20:31:43.140Z"
+stopped_at: Completed 03.1-02-PLAN.md (hardware verified)
+last_updated: "2026-03-24T20:33:07.954Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
@@ -62,6 +62,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 03-entertainment-api-streaming-integration P03 | 15min | 2 tasks | 6 files |
 | Phase 03.1-auto-mapping-from-entertainment-config P01 | 3min | 2 tasks | 6 files |
 | Phase 03.1-auto-mapping-from-entertainment-config P02 | 10min | 1 tasks | 3 files |
+| Phase 03.1-auto-mapping-from-entertainment-config P02 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 03-entertainment-api-streaming-integration]: Hardware verification confirmed: lights sync from capture card feed, latency under 100ms (STRM-05 satisfied)
 - [Phase 03.1-auto-mapping-from-entertainment-config]: channel_pos_to_screen maps Hue x->screen_x, z->screen_y via (val+1.0)/2.0; region IDs use deterministic auto:{config_id}:{channel_id} pattern for idempotency
 - [Phase 03.1-auto-mapping-from-entertainment-config]: Overlay positioning uses clientWidth/clientHeight so divs match the rendered (scaled) image size
+- [Phase 03.1-auto-mapping-from-entertainment-config]: Overlay positioning uses clientWidth/clientHeight so overlays match the rendered (scaled) image size
+- [Phase 03.1-auto-mapping-from-entertainment-config]: Hardware verification confirmed: auto-map generates correct regions, overlays display on camera preview, streaming works end-to-end (REGN-04, REGN-05 satisfied)
 
 ### Pending Todos
 
@@ -110,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T20:31:43.124Z
-Stopped at: Completed 03.1-02-PLAN.md
+Last session: 2026-03-24T20:33:07.937Z
+Stopped at: Completed 03.1-02-PLAN.md (hardware verified)
 Resume file: None

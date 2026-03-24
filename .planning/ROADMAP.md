@@ -15,7 +15,7 @@ Six phases take the project from zero to a fully operational ambient lighting sy
 - [ ] **Phase 1: Infrastructure and DTLS Spike** - Prove DTLS transport works; establish Docker environment and bridge pairing
 - [ ] **Phase 2: Capture Pipeline and Color Extraction** - Capture frames from USB capture card and extract per-region colors
 - [x] **Phase 3: Entertainment API Streaming Integration** - Wire capture output into DTLS stream; deliver first end-to-end color sync (completed 2026-03-24)
-- [ ] **Phase 3.1: Auto-Mapping from Entertainment Config** - Auto-generate screen regions from channel positions (INSERTED)
+- [x] **Phase 3.1: Auto-Mapping from Entertainment Config** - Auto-generate screen regions from channel positions (INSERTED) (completed 2026-03-24)
 - [ ] **Phase 4: Frontend Canvas Editor** - Interactive polygon region editor with live preview and light assignment
 - [ ] **Phase 5: Gradient Device Support and Polish** - Per-segment control of Festavia, Flux, and Play Gradient devices
 - [ ] **Phase 6: Hardening and Deployment** - Production-quality Docker deployment with nginx, health checks, and error recovery
@@ -335,7 +335,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | 1. Infrastructure and DTLS Spike | 3/4 | In Progress|  |
 | 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
 | 3. Entertainment API Streaming Integration | 3/3 | Complete   | 2026-03-24 |
-| 3.1 Auto-Mapping from Entertainment Config | 0/2 | Planned | - |
+| 3.1 Auto-Mapping from Entertainment Config | 2/2 | Complete   | 2026-03-24 |
 | 4. Frontend Canvas Editor | 0/TBD | Not started | - |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
