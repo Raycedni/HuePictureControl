@@ -95,6 +95,10 @@ Recent decisions affecting current work:
 
 None yet.
 
+### Roadmap Evolution
+
+- Phase 3.1 inserted after Phase 3: Auto-Mapping from Entertainment Config — auto-generate screen regions from channel positions before building manual canvas editor (user decision 2026-03-24)
+
 ### Blockers/Concerns
 
 - [Phase 1]: DTLS spike must be verified with physical Hue Bridge before Phase 2/3 begin — this is the single project gate
