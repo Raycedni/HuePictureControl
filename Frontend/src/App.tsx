@@ -3,6 +3,7 @@ import './App.css'
 import PairingFlow from './components/PairingFlow'
 import PreviewPage from './components/PreviewPage'
 import { StatusBar } from './components/StatusBar'
+import { EditorPage } from './components/EditorPage'
 
 type Page = 'setup' | 'preview' | 'editor'
 
@@ -34,7 +35,7 @@ function App() {
 
       {page === 'setup' && <PairingFlow />}
       {page === 'preview' && <PreviewPage />}
-      {page === 'editor' && <div className="p-4 text-muted-foreground">Editor placeholder</div>}
+      {page === 'editor' && <EditorPage />}
 
       <StatusBar />
     </div>
