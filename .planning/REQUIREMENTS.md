@@ -34,8 +34,8 @@
 
 - [ ] **STRM-01**: Dominant color is extracted from each mapped region using pre-computed polygon masks
 - [ ] **STRM-02**: RGB colors are converted to CIE xy with Gamut C clamping before sending to bridge
-- [ ] **STRM-03**: Colors are streamed to the bridge via Entertainment API (DTLS/UDP) at 25-50 Hz
-- [ ] **STRM-04**: All mapped channels are sent in a single HueStream v2 UDP packet per frame
+- [x] **STRM-03**: Colors are streamed to the bridge via Entertainment API (DTLS/UDP) at 25-50 Hz
+- [x] **STRM-04**: All mapped channels are sent in a single HueStream v2 UDP packet per frame
 - [ ] **STRM-05**: End-to-end latency from frame capture to light update is under 100ms
 - [ ] **STRM-06**: Streaming supports 16+ simultaneous light channels
 
@@ -118,8 +118,8 @@
 | REGN-06 | Phase 4 | Pending |
 | STRM-01 | Phase 3 | Pending |
 | STRM-02 | Phase 3 | Pending |
-| STRM-03 | Phase 3 | Pending |
-| STRM-04 | Phase 3 | Pending |
+| STRM-03 | Phase 3 | Complete |
+| STRM-04 | Phase 3 | Complete |
 | STRM-05 | Phase 3 | Pending |
 | STRM-06 | Phase 3 | Pending |
 | GRAD-01 | Phase 5 | Pending |

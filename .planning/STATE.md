@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-24T19:05:32.931Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-24T19:34:45.907Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 9
+  completed_plans: 7
   percent: 25
 ---
 
@@ -56,6 +56,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 02-capture-pipeline-color-extraction P01 | 3m 24s | 2 tasks | 5 files |
 | Phase 02-capture-pipeline-color-extraction P02 | 15min | 1 tasks | 4 files |
 | Phase 02-capture-pipeline-color-extraction P02 | 20min | 2 tasks | 4 files |
+| Phase 03-entertainment-api-streaming-integration P01 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,9 @@ Recent decisions affecting current work:
 - [Phase 02-capture-pipeline-color-extraction]: Debug color endpoint uses hard-coded center polygon to satisfy Phase 2 CIE xy success criterion
 - [Phase 02-capture-pipeline-color-extraction]: Lifespan catches RuntimeError from capture.open() and logs a warning instead of crashing — backend runnable without hardware; snapshot returns 503
 - [Phase 02-capture-pipeline-color-extraction]: Debug color endpoint uses hard-coded center polygon to satisfy Phase 2 CIE xy success criterion
+- [Phase 03-entertainment-api-streaming-integration]: update_metrics silently updates internal state (called at 50 Hz from frame loop) — heartbeat delivers to clients at 1 Hz to avoid flooding
+- [Phase 03-entertainment-api-streaming-integration]: push_state bypasses 1 Hz rate limit for immediate state transition delivery (streaming/error/idle)
+- [Phase 03-entertainment-api-streaming-integration]: deactivate_entertainment_config is best-effort: logs warning on failure, never raises
 
 ### Pending Todos
 
@@ -91,6 +95,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T19:05:32.905Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-entertainment-api-streaming-integration/03-CONTEXT.md
+Last session: 2026-03-24T19:34:45.892Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None

@@ -116,7 +116,7 @@ Plans:
 - Entertainment mode must be activated via REST before the DTLS socket opens — bridge silently rejects otherwise; add health-check logic to re-activate on reconnect
 - `hue-entertainment-pykit` session recovery after bridge reboot is underdocumented — build a manual test harness for drop/reconnect during this phase
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 03-01-PLAN.md — StatusBroadcaster service + hue_client activate/deactivate helpers
@@ -299,7 +299,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 |-------|----------------|--------|-----------|
 | 1. Infrastructure and DTLS Spike | 3/4 | In Progress|  |
 | 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
-| 3. Entertainment API Streaming Integration | 0/3 | Planned | - |
+| 3. Entertainment API Streaming Integration | 1/3 | In Progress|  |
 | 4. Frontend Canvas Editor | 0/TBD | Not started | - |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
