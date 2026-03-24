@@ -36,9 +36,17 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             id TEXT PRIMARY KEY,
             name TEXT,
             polygon TEXT NOT NULL,
-            order_index INTEGER DEFAULT 0
+            order_index INTEGER DEFAULT 0,
+            light_id TEXT
         )
     """)
+    # Migration: add light_id column to existing databases that predate this column
+    try:
+        await db.execute("ALTER TABLE regions ADD COLUMN light_id TEXT")
+        await db.commit()
+    except Exception:
+        # Column already exists — safe to ignore OperationalError
+        pass
     await db.execute("""
         CREATE TABLE IF NOT EXISTS light_assignments (
             region_id TEXT NOT NULL,
