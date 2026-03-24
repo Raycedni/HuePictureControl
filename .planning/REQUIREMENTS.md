@@ -17,8 +17,8 @@
 
 - [x] **CAPT-01**: Backend captures frames from a USB UVC device (HDMI capture card) at 640x480 MJPEG
 - [x] **CAPT-02**: Capture device path is configurable (e.g. `/dev/video0`)
-- [ ] **CAPT-03**: Capture loop runs only when explicitly enabled via the UI toggle
-- [ ] **CAPT-04**: Capture loop stops cleanly when disabled (releases device, closes connections)
+- [x] **CAPT-03**: Capture loop runs only when explicitly enabled via the UI toggle
+- [x] **CAPT-04**: Capture loop stops cleanly when disabled (releases device, closes connections)
 - [x] **CAPT-05**: A snapshot of the current camera frame is available via REST endpoint
 
 ### Region Mapping
@@ -32,12 +32,12 @@
 
 ### Color Streaming
 
-- [ ] **STRM-01**: Dominant color is extracted from each mapped region using pre-computed polygon masks
-- [ ] **STRM-02**: RGB colors are converted to CIE xy with Gamut C clamping before sending to bridge
+- [x] **STRM-01**: Dominant color is extracted from each mapped region using pre-computed polygon masks
+- [x] **STRM-02**: RGB colors are converted to CIE xy with Gamut C clamping before sending to bridge
 - [x] **STRM-03**: Colors are streamed to the bridge via Entertainment API (DTLS/UDP) at 25-50 Hz
 - [x] **STRM-04**: All mapped channels are sent in a single HueStream v2 UDP packet per frame
-- [ ] **STRM-05**: End-to-end latency from frame capture to light update is under 100ms
-- [ ] **STRM-06**: Streaming supports 16+ simultaneous light channels
+- [x] **STRM-05**: End-to-end latency from frame capture to light update is under 100ms
+- [x] **STRM-06**: Streaming supports 16+ simultaneous light channels
 
 ### Gradient Devices
 
@@ -45,7 +45,7 @@
 - [ ] **GRAD-02**: Flux lightstrip segments are individually assignable to regions
 - [ ] **GRAD-03**: Other gradient devices (Play Gradient Lightstrip) are supported with per-segment control
 - [ ] **GRAD-04**: 20-channel Entertainment API limit is enforced with a warning in the UI
-- [ ] **GRAD-05**: Non-gradient Hue lights are supported as single-color targets
+- [x] **GRAD-05**: Non-gradient Hue lights are supported as single-color targets
 
 ### Web UI
 
@@ -107,8 +107,8 @@
 | BRDG-05 | Phase 1 | Complete |
 | CAPT-01 | Phase 2 | Complete |
 | CAPT-02 | Phase 2 | Complete |
-| CAPT-03 | Phase 3 | Pending |
-| CAPT-04 | Phase 3 | Pending |
+| CAPT-03 | Phase 3 | Complete |
+| CAPT-04 | Phase 3 | Complete |
 | CAPT-05 | Phase 2 | Complete |
 | REGN-01 | Phase 4 | Pending |
 | REGN-02 | Phase 4 | Pending |
@@ -116,17 +116,17 @@
 | REGN-04 | Phase 4 | Pending |
 | REGN-05 | Phase 4 | Pending |
 | REGN-06 | Phase 4 | Pending |
-| STRM-01 | Phase 3 | Pending |
-| STRM-02 | Phase 3 | Pending |
+| STRM-01 | Phase 3 | Complete |
+| STRM-02 | Phase 3 | Complete |
 | STRM-03 | Phase 3 | Complete |
 | STRM-04 | Phase 3 | Complete |
-| STRM-05 | Phase 3 | Pending |
-| STRM-06 | Phase 3 | Pending |
+| STRM-05 | Phase 3 | Complete |
+| STRM-06 | Phase 3 | Complete |
 | GRAD-01 | Phase 5 | Pending |
 | GRAD-02 | Phase 5 | Pending |
 | GRAD-03 | Phase 5 | Pending |
 | GRAD-04 | Phase 5 | Pending |
-| GRAD-05 | Phase 3 | Pending |
+| GRAD-05 | Phase 3 | Complete |
 | UI-01 | Phase 4 | Pending |
 | UI-02 | Phase 1 | Complete |
 | UI-03 | Phase 4 | Pending |

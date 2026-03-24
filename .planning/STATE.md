@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-24T19:34:45.907Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-24T19:42:34.724Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
   percent: 25
 ---
 
@@ -57,6 +57,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 02-capture-pipeline-color-extraction P02 | 15min | 1 tasks | 4 files |
 | Phase 02-capture-pipeline-color-extraction P02 | 20min | 2 tasks | 4 files |
 | Phase 03-entertainment-api-streaming-integration P01 | 3min | 2 tasks | 4 files |
+| Phase 03-entertainment-api-streaming-integration P02 | 6min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,7 @@ Recent decisions affecting current work:
 - [Phase 03-entertainment-api-streaming-integration]: update_metrics silently updates internal state (called at 50 Hz from frame loop) — heartbeat delivers to clients at 1 Hz to avoid flooding
 - [Phase 03-entertainment-api-streaming-integration]: push_state bypasses 1 Hz rate limit for immediate state transition delivery (streaming/error/idle)
 - [Phase 03-entertainment-api-streaming-integration]: deactivate_entertainment_config is best-effort: logs warning on failure, never raises
+- [Phase 03-entertainment-api-streaming-integration]: module-scoped service_imports fixture avoids cv2 reimport AttributeError in test suite
 
 ### Pending Todos
 
@@ -95,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T19:34:45.892Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-03-24T19:42:34.710Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
