@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 03.1-01-PLAN.md
-last_updated: "2026-03-24T20:28:28.540Z"
+stopped_at: Completed 03.1-02-PLAN.md
+last_updated: "2026-03-24T20:31:43.140Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 25
 ---
 
@@ -61,6 +61,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 03-entertainment-api-streaming-integration P03 | 10min | 1 tasks | 6 files |
 | Phase 03-entertainment-api-streaming-integration P03 | 15min | 2 tasks | 6 files |
 | Phase 03.1-auto-mapping-from-entertainment-config P01 | 3min | 2 tasks | 6 files |
+| Phase 03.1-auto-mapping-from-entertainment-config P02 | 10min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,7 @@ Recent decisions affecting current work:
 - [Phase 03-entertainment-api-streaming-integration]: WebSocket receive loop uses receive_text() so browser ping/pong frames keep connections alive
 - [Phase 03-entertainment-api-streaming-integration]: Hardware verification confirmed: lights sync from capture card feed, latency under 100ms (STRM-05 satisfied)
 - [Phase 03.1-auto-mapping-from-entertainment-config]: channel_pos_to_screen maps Hue x->screen_x, z->screen_y via (val+1.0)/2.0; region IDs use deterministic auto:{config_id}:{channel_id} pattern for idempotency
+- [Phase 03.1-auto-mapping-from-entertainment-config]: Overlay positioning uses clientWidth/clientHeight so divs match the rendered (scaled) image size
 
 ### Pending Todos
 
@@ -108,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T20:28:28.523Z
-Stopped at: Completed 03.1-01-PLAN.md
+Last session: 2026-03-24T20:31:43.124Z
+Stopped at: Completed 03.1-02-PLAN.md
 Resume file: None
