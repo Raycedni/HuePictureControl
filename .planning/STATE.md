@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-03-24T21:38:13.793Z"
+stopped_at: Completed 04-04-PLAN.md
+last_updated: "2026-03-24T21:44:00.603Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
   percent: 25
 ---
 
@@ -66,6 +66,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 04-frontend-canvas-editor P01 | 3min | 2 tasks | 5 files |
 | Phase 04-frontend-canvas-editor P02 | 7min | 2 tasks | 22 files |
 | Phase 04-frontend-canvas-editor P03 | 10min | 2 tasks | 5 files |
+| Phase 04-frontend-canvas-editor P04 | 15min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,9 @@ Recent decisions affecting current work:
 - [Phase 04-frontend-canvas-editor]: useStatusWS uses reconnect-on-close with 2s delay; destroyed flag prevents reconnect after unmount
 - [Phase 04-frontend-canvas-editor]: handleEditorDelete exported as standalone function from EditorCanvas so toolbar and keyboard shortcut share logic without circular refs
 - [Phase 04-frontend-canvas-editor]: Canvas aspect ratio 4:3 (height = width * 3/4) matches 640x480 capture resolution for accurate region mapping
+- [Phase 04-frontend-canvas-editor]: onDrop handler in EditorCanvas (not EditorPage) because stageRef.current.setPointersPositions(e) requires local stageRef access
+- [Phase 04-frontend-canvas-editor]: HTML5 dataTransfer drag-and-drop used for light assignment (no library): lightId/lightName passed via setData/getData
+- [Phase 04-frontend-canvas-editor]: lightMap built from getLights() on mount in EditorCanvas to resolve light IDs to names for polygon labels without modifying region model
 
 ### Pending Todos
 
@@ -125,6 +129,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T21:38:13.773Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-03-24T21:44:00.584Z
+Stopped at: Completed 04-04-PLAN.md
 Resume file: None
