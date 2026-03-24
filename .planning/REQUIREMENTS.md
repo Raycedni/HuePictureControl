@@ -49,10 +49,10 @@
 
 ### Web UI
 
-- [ ] **UI-01**: Web UI is accessible without authentication on the local network
+- [x] **UI-01**: Web UI is accessible without authentication on the local network
 - [x] **UI-02**: Bridge pairing flow is guided in the UI (instructions + status feedback)
-- [ ] **UI-03**: Global start/stop toggle controls the capture and streaming loop
-- [ ] **UI-04**: Real-time status display shows FPS, latency, bridge connection state, and errors
+- [x] **UI-03**: Global start/stop toggle controls the capture and streaming loop
+- [x] **UI-04**: Real-time status display shows FPS, latency, bridge connection state, and errors
 - [ ] **UI-05**: Light discovery panel shows all available lights with their type and segment count
 - [ ] **UI-06**: Region canvas shows semi-transparent color overlay indicating what each region is "seeing"
 
@@ -127,10 +127,10 @@
 | GRAD-03 | Phase 5 | Pending |
 | GRAD-04 | Phase 5 | Pending |
 | GRAD-05 | Phase 3 | Complete |
-| UI-01 | Phase 4 | Pending |
+| UI-01 | Phase 4 | Complete |
 | UI-02 | Phase 1 | Complete |
-| UI-03 | Phase 4 | Pending |
-| UI-04 | Phase 4 | Pending |
+| UI-03 | Phase 4 | Complete |
+| UI-04 | Phase 4 | Complete |
 | UI-05 | Phase 4 | Pending |
 | UI-06 | Phase 4 | Pending |
 | INFR-01 | Phase 1 | Complete |

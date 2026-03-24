@@ -184,7 +184,7 @@ Plans:
 **Risks:**
 - react-konva polygon editing (vertex drag + region drag simultaneously) requires careful hit-area management — prototype the interaction model early in the phase
 
-**Plans:** 4 plans
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 04-01-PLAN.md — Backend region CRUD + /ws/preview WebSocket endpoint
@@ -342,7 +342,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
 | 3. Entertainment API Streaming Integration | 3/3 | Complete   | 2026-03-24 |
 | 3.1 Auto-Mapping from Entertainment Config | 2/2 | Complete   | 2026-03-24 |
-| 4. Frontend Canvas Editor | 0/4 | Planned | - |
+| 4. Frontend Canvas Editor | 2/4 | In Progress|  |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
 
