@@ -3,6 +3,7 @@ export interface Region {
   name: string
   polygon: number[][]
   order_index: number
+  light_id: string | null
 }
 
 export interface Config {
@@ -67,6 +68,52 @@ export async function startStreaming(configId: string): Promise<void> {
 export async function stopStreaming(): Promise<void> {
   const response = await fetch('/api/capture/stop', {
     method: 'POST',
+  })
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
+    error.status = response.status
+    throw error
+  }
+}
+
+export async function createRegion(data: {
+  name: string
+  polygon: number[][]
+  light_id?: string
+}): Promise<Region> {
+  const response = await fetch('/api/regions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
+    error.status = response.status
+    throw error
+  }
+  return response.json()
+}
+
+export async function updateRegion(
+  id: string,
+  data: { polygon?: number[][]; light_id?: string | null; name?: string },
+): Promise<Region> {
+  const response = await fetch(`/api/regions/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
+    error.status = response.status
+    throw error
+  }
+  return response.json()
+}
+
+export async function deleteRegion(id: string): Promise<void> {
+  const response = await fetch(`/api/regions/${id}`, {
+    method: 'DELETE',
   })
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
