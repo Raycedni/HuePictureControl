@@ -23,8 +23,8 @@
 
 ### Region Mapping
 
-- [ ] **REGN-01**: User can draw freeform polygon regions on a camera snapshot in the web UI
-- [ ] **REGN-02**: User can edit existing regions (move vertices, drag region, delete)
+- [x] **REGN-01**: User can draw freeform polygon regions on a camera snapshot in the web UI
+- [x] **REGN-02**: User can edit existing regions (move vertices, drag region, delete)
 - [ ] **REGN-03**: User can assign each region to a Hue light or gradient segment channel
 - [x] **REGN-04**: Region coordinates are stored as normalized [0..1] values (resolution-independent)
 - [x] **REGN-05**: Region-to-light mappings persist across restarts
@@ -54,7 +54,7 @@
 - [x] **UI-03**: Global start/stop toggle controls the capture and streaming loop
 - [x] **UI-04**: Real-time status display shows FPS, latency, bridge connection state, and errors
 - [ ] **UI-05**: Light discovery panel shows all available lights with their type and segment count
-- [ ] **UI-06**: Region canvas shows semi-transparent color overlay indicating what each region is "seeing"
+- [x] **UI-06**: Region canvas shows semi-transparent color overlay indicating what each region is "seeing"
 
 ### Infrastructure
 
@@ -110,8 +110,8 @@
 | CAPT-03 | Phase 3 | Complete |
 | CAPT-04 | Phase 3 | Complete |
 | CAPT-05 | Phase 2 | Complete |
-| REGN-01 | Phase 4 | Pending |
-| REGN-02 | Phase 4 | Pending |
+| REGN-01 | Phase 4 | Complete |
+| REGN-02 | Phase 4 | Complete |
 | REGN-03 | Phase 4 | Pending |
 | REGN-04 | Phase 4 | Complete |
 | REGN-05 | Phase 4 | Complete |
@@ -132,7 +132,7 @@
 | UI-03 | Phase 4 | Complete |
 | UI-04 | Phase 4 | Complete |
 | UI-05 | Phase 4 | Pending |
-| UI-06 | Phase 4 | Pending |
+| UI-06 | Phase 4 | Complete |
 | INFR-01 | Phase 1 | Complete |
 | INFR-02 | Phase 1 | Complete |
 | INFR-03 | Phase 1 | Complete |

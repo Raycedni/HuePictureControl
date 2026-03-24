@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-24T21:33:13.780Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-03-24T21:38:13.793Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
   percent: 25
 ---
 
@@ -65,6 +65,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 03.1-auto-mapping-from-entertainment-config P02 | 15min | 2 tasks | 3 files |
 | Phase 04-frontend-canvas-editor P01 | 3min | 2 tasks | 5 files |
 | Phase 04-frontend-canvas-editor P02 | 7min | 2 tasks | 22 files |
+| Phase 04-frontend-canvas-editor P03 | 10min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,8 @@ Recent decisions affecting current work:
 - [Phase 04-frontend-canvas-editor]: Tailwind v4 uses @tailwindcss/vite plugin (not postcss); shadcn init auto-detected v4 and configured accordingly
 - [Phase 04-frontend-canvas-editor]: usePreviewWS stores previous ObjectURL in ref and revokes on each new frame to prevent memory leaks
 - [Phase 04-frontend-canvas-editor]: useStatusWS uses reconnect-on-close with 2s delay; destroyed flag prevents reconnect after unmount
+- [Phase 04-frontend-canvas-editor]: handleEditorDelete exported as standalone function from EditorCanvas so toolbar and keyboard shortcut share logic without circular refs
+- [Phase 04-frontend-canvas-editor]: Canvas aspect ratio 4:3 (height = width * 3/4) matches 640x480 capture resolution for accurate region mapping
 
 ### Pending Todos
 
@@ -122,6 +125,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T21:33:13.760Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-03-24T21:38:13.773Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
