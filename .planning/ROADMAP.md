@@ -168,7 +168,7 @@ Plans:
 - Polygon draw tool: click to place vertices, click first vertex to close, drag anchors to edit, drag region to move, delete button to remove
 - Region coordinates stored and transmitted as normalized [0..1] values
 - Light discovery panel populated from `GET /api/hue/lights` showing light name, type, and segment count
-- Region-to-channel assignment via click-to-assign interaction in the panel
+- Region-to-channel assignment via drag-to-assign from light panel to canvas region
 - Global start/stop toggle wired to `POST /api/capture/start` / `POST /api/capture/stop`
 - Real-time status bar consuming `/ws/status`: FPS, latency, bridge state, error messages
 - Config auto-saved to backend on every region/assignment change (persists across restarts)
@@ -176,7 +176,7 @@ Plans:
 
 **Success Criteria** (what must be TRUE):
   1. User can draw a freeform polygon on the canvas, assign it to a light, and see the light's color update in real time without any page reload
-  2. The camera preview updates live at ≥10 fps in the browser while streaming is active
+  2. The camera preview updates live at >=10 fps in the browser while streaming is active
   3. Region shapes and light assignments survive a full `docker compose restart`
   4. The status bar shows current FPS, latency, and bridge connection state updated at least once per second
   5. The light panel lists all lights discovered from the bridge with correct names, types, and segment counts
@@ -184,7 +184,13 @@ Plans:
 **Risks:**
 - react-konva polygon editing (vertex drag + region drag simultaneously) requires careful hit-area management — prototype the interaction model early in the phase
 
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Backend region CRUD + /ws/preview WebSocket endpoint
+- [ ] 04-02-PLAN.md — Frontend deps (Konva, Zustand, Tailwind, shadcn) + stores + hooks + StatusBar + 3-tab layout
+- [ ] 04-03-PLAN.md — EditorPage + Konva canvas + drawing tools + vertex editing + live preview
+- [ ] 04-04-PLAN.md — LightPanel + drag-to-assign + streaming control + hardware verification
 
 ---
 
@@ -336,7 +342,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | 2. Capture Pipeline and Color Extraction | 0/2 | Planned | - |
 | 3. Entertainment API Streaming Integration | 3/3 | Complete   | 2026-03-24 |
 | 3.1 Auto-Mapping from Entertainment Config | 2/2 | Complete   | 2026-03-24 |
-| 4. Frontend Canvas Editor | 0/TBD | Not started | - |
+| 4. Frontend Canvas Editor | 0/4 | Planned | - |
 | 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
 
