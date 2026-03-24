@@ -169,7 +169,7 @@ class StreamingService:
             await self._broadcaster.start_heartbeat()
 
             # 8. Run the frame loop
-            await self._frame_loop(streaming, channel_map)
+            await self._frame_loop(streaming, channel_map, bridge_ip, username)
 
         except RuntimeError as exc:
             # Capture card disconnect — stop entirely
@@ -240,7 +240,7 @@ class StreamingService:
     # Internal: frame loop
     # ------------------------------------------------------------------
 
-    async def _frame_loop(self, streaming, channel_map: dict) -> None:
+    async def _frame_loop(self, streaming, channel_map: dict, bridge_ip: str, username: str) -> None:
         """50 Hz frame loop: extract colors from screen regions and send to Hue lights.
 
         For each frame:
@@ -286,7 +286,7 @@ class StreamingService:
                 except Exception as exc:
                     logger.warning("Bridge socket error: %s, starting reconnect", exc)
                     success = await self._reconnect_loop(
-                        self._config_id or "", "192.168.1.100", "testuser"
+                        self._config_id or "", bridge_ip, username
                     )
                     if not success:
                         return

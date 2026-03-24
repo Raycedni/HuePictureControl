@@ -319,7 +319,7 @@ async def test_frame_loop_calls_get_frame_each_iteration(service_imports):
     service._run_event.set()
     with patch("asyncio.to_thread", side_effect=fake_to_thread):
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await service._frame_loop(mock_streaming, channel_map)
+            await service._frame_loop(mock_streaming, channel_map, "192.168.1.1", "testuser")
 
     assert call_count >= 3
 
@@ -361,7 +361,7 @@ async def test_frame_loop_calls_extract_region_color_per_channel(service_imports
     with patch("services.streaming_service.extract_region_color", side_effect=fake_extract):
         with patch("asyncio.to_thread", side_effect=fake_to_thread):
             with patch("asyncio.sleep", new_callable=AsyncMock):
-                await service._frame_loop(mocks["streaming"], channel_map)
+                await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     # 2 channels, at least 1 frame = at least 2 calls
     assert len(extract_calls) >= 2
@@ -399,7 +399,7 @@ async def test_frame_loop_calls_rgb_to_xy_and_set_input(service_imports):
         with patch("services.streaming_service.rgb_to_xy", return_value=(0.153, 0.048)):
             with patch("asyncio.to_thread", side_effect=fake_to_thread):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service._frame_loop(mocks["streaming"], channel_map)
+                    await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     assert len(set_input_calls) >= 1
     tup = set_input_calls[0]
@@ -445,7 +445,7 @@ async def test_frame_loop_brightness_clamped_to_min_001(service_imports):
         with patch("services.streaming_service.rgb_to_xy", return_value=(0.3127, 0.3290)):
             with patch("asyncio.to_thread", side_effect=fake_to_thread):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service._frame_loop(mocks["streaming"], channel_map)
+                    await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     assert len(set_input_calls) >= 1
     _, _, bri, _ = set_input_calls[0]
@@ -480,7 +480,7 @@ async def test_frame_loop_16_channels(service_imports):
         with patch("services.streaming_service.rgb_to_xy", return_value=(0.2, 0.3)):
             with patch("asyncio.to_thread", side_effect=fake_to_thread):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service._frame_loop(mocks["streaming"], channel_map)
+                    await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     # 16 channels should each get set_input called (exactly one frame processed)
     assert len(set_input_calls) == 16
@@ -514,7 +514,7 @@ async def test_frame_loop_1_channel_non_gradient(service_imports):
         with patch("services.streaming_service.rgb_to_xy", return_value=(0.2, 0.3)):
             with patch("asyncio.to_thread", side_effect=fake_to_thread):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service._frame_loop(mocks["streaming"], channel_map)
+                    await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     assert len(set_input_calls) == 1
 
@@ -548,7 +548,7 @@ async def test_frame_loop_calls_update_metrics_not_broadcast(service_imports):
         with patch("services.streaming_service.rgb_to_xy", return_value=(0.153, 0.048)):
             with patch("asyncio.to_thread", side_effect=fake_to_thread):
                 with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service._frame_loop(mocks["streaming"], channel_map)
+                    await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     mocks["broadcaster"].update_metrics.assert_called()
     # Verify update_metrics was called with the expected keys
@@ -573,7 +573,7 @@ async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
 
     service._run_event.set()
     with patch("asyncio.sleep", new_callable=AsyncMock):
-        await service._frame_loop(mocks["streaming"], channel_map)
+        await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
 
     # Error pushed to broadcaster
     mocks["broadcaster"].push_state.assert_called()
