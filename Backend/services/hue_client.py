@@ -143,6 +143,40 @@ async def activate_entertainment_config(bridge_ip: str, username: str, config_id
         resp.raise_for_status()
 
 
+async def fetch_entertainment_config_channels(
+    bridge_ip: str, username: str, config_id: str
+) -> list[dict]:
+    """Fetch channel position data for a specific entertainment configuration.
+
+    Args:
+        bridge_ip: IP address of the Hue Bridge.
+        username: Application key obtained during pairing.
+        config_id: UUID of the entertainment configuration.
+
+    Returns:
+        List of dicts with channel_id (int) and position ({x, y, z}).
+
+    Raises:
+        httpx.HTTPStatusError: If the bridge returns a non-2xx response.
+    """
+    url = f"https://{bridge_ip}/clip/v2/resource/entertainment_configuration/{config_id}"
+    headers = {"hue-application-key": username}
+
+    async with httpx.AsyncClient(verify=False, timeout=10) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    channels = []
+    config_data = data.get("data", [{}])[0]
+    for ch in config_data.get("channels", []):
+        channels.append({
+            "channel_id": ch["channel_id"],
+            "position": ch.get("position", {"x": 0.0, "y": 0.0, "z": 0.0}),
+        })
+    return channels
+
+
 async def deactivate_entertainment_config(bridge_ip: str, username: str, config_id: str) -> None:
     """Deactivate an entertainment configuration on the bridge (action=stop).
 
