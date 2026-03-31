@@ -561,13 +561,19 @@ async def test_frame_loop_calls_update_metrics_not_broadcast(service_imports):
 
 @pytest.mark.asyncio
 async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
-    """RuntimeError from capture.get_frame() should stop streaming and push error."""
+    """RuntimeError from capture.get_frame() with failed reconnect pushes error and stops."""
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
     service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
 
     mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device disconnected"))
+
+    # Reconnect fails (returns False) — loop should exit with error
+    async def fake_reconnect_false():
+        return False
+
+    service._capture_reconnect_loop = fake_reconnect_false
 
     channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
 
@@ -580,8 +586,6 @@ async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
     push_call_kwargs = mocks["broadcaster"].push_state.call_args
     # push_state should be called with an error state
     assert push_call_kwargs is not None
-    # run_event should be cleared
-    assert not service._run_event.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +721,206 @@ async def test_reconnect_loop_does_not_touch_capture(service_imports):
 # ---------------------------------------------------------------------------
 # Stop sequence order test
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Capture reconnect tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_loop_returns_true_on_success(service_imports):
+    """_capture_reconnect_loop returns True after capture.open() succeeds on second attempt."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service._run_event.set()
+
+    attempt = 0
+
+    def open_fails_once(device_path=None):
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            raise RuntimeError("Device disconnected")
+        # second call succeeds
+
+    mocks["capture"].open = MagicMock(side_effect=open_fails_once)
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await service._capture_reconnect_loop()
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_loop_returns_false_when_run_event_cleared(service_imports):
+    """_capture_reconnect_loop returns False when run_event is cleared during retry."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service._run_event.set()
+
+    call_count = 0
+
+    async def open_always_fails_then_stop(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        service._run_event.clear()  # clear event during retry
+        raise RuntimeError("Still disconnected")
+
+    with patch("asyncio.to_thread", side_effect=open_always_fails_then_stop):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await service._capture_reconnect_loop()
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_loop_pushes_reconnecting_state(service_imports):
+    """_capture_reconnect_loop pushes 'reconnecting' state to broadcaster on entry."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service._run_event.set()
+
+    mocks["capture"].open = MagicMock()  # succeeds immediately
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await service._capture_reconnect_loop()
+
+    # First push_state call should be "reconnecting"
+    push_calls = mocks["broadcaster"].push_state.call_args_list
+    states_pushed = [c[0][0] for c in push_calls if c[0]]
+    assert "reconnecting" in states_pushed
+
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_loop_pushes_streaming_state_on_success(service_imports):
+    """_capture_reconnect_loop pushes 'streaming' state to broadcaster on success."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service._run_event.set()
+
+    mocks["capture"].open = MagicMock()  # succeeds immediately
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await service._capture_reconnect_loop()
+
+    assert result is True
+    push_calls = mocks["broadcaster"].push_state.call_args_list
+    states_pushed = [c[0][0] for c in push_calls if c[0]]
+    assert "streaming" in states_pushed
+
+
+@pytest.mark.asyncio
+async def test_frame_loop_calls_capture_reconnect_on_runtime_error(service_imports):
+    """_frame_loop calls _capture_reconnect_loop on RuntimeError from get_frame and continues if reconnect succeeds."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+
+    call_count = 0
+
+    async def frame_raises_then_ok():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("Device disconnected")
+        service._run_event.clear()  # exit after successful reconnect
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=frame_raises_then_ok)
+
+    reconnect_called = False
+
+    async def fake_reconnect():
+        nonlocal reconnect_called
+        reconnect_called = True
+        return True
+
+    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+
+    service._run_event.set()
+    service._capture_reconnect_loop = fake_reconnect
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
+
+    assert reconnect_called is True
+
+
+@pytest.mark.asyncio
+async def test_frame_loop_exits_when_capture_reconnect_returns_false(service_imports):
+    """_frame_loop exits cleanly if _capture_reconnect_loop returns False."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device gone"))
+
+    async def fake_reconnect_false():
+        return False
+
+    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+
+    service._run_event.set()
+    service._capture_reconnect_loop = fake_reconnect_false
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await service._frame_loop(mocks["streaming"], channel_map, "192.168.1.1", "testuser")
+
+    # Loop should have exited (no infinite loop / no exception)
+    # Verify run_event may still be set (frame loop returns cleanly without clearing it)
+    # The run_event is managed by _capture_reconnect_loop and the caller
+    assert True  # If we reach here, it exited without hanging
+
+
+@pytest.mark.asyncio
+async def test_capture_open_called_via_to_thread(service_imports):
+    """capture.open() is wrapped in asyncio.to_thread to avoid blocking event loop."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service._run_event.set()
+
+    to_thread_calls = []
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        to_thread_calls.append(fn)
+        return fn(*args, **kwargs)
+
+    mocks["capture"].open = MagicMock()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await service._capture_reconnect_loop()
+
+    # capture.open should have been called via asyncio.to_thread
+    assert mocks["capture"].open in to_thread_calls
+
 
 @pytest.mark.asyncio
 async def test_stop_sequence_order(service_imports):

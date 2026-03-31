@@ -35,8 +35,9 @@ class StreamingService:
     Bridge disconnect triggers exponential backoff reconnect; during reconnect
     the capture pipeline continues independently (not paused/released).
 
-    Capture card disconnect stops streaming entirely and pushes an error state
-    to the broadcaster.
+    Capture card disconnect also triggers exponential backoff reconnect via
+    _capture_reconnect_loop. Streaming resumes automatically on reconnect.
+    If run_event is cleared during reconnect, streaming transitions to error.
     """
 
     TARGET_HZ = 50
@@ -265,11 +266,14 @@ class StreamingService:
             try:
                 frame = await self._capture.get_frame()
             except RuntimeError as exc:
-                logger.error("Capture device error: %s", exc)
-                self._run_event.clear()
-                self._state = "error"
-                await self._broadcaster.push_state("error", error=str(exc))
-                return
+                logger.warning("Capture device error: %s, starting reconnect", exc)
+                success = await self._capture_reconnect_loop()
+                if success:
+                    continue
+                else:
+                    self._state = "error"
+                    await self._broadcaster.push_state("error", error=str(exc))
+                    return
 
             # Process each channel in the map
             for channel_id, mask in channel_map.items():
@@ -311,6 +315,42 @@ class StreamingService:
     # ------------------------------------------------------------------
     # Internal: reconnect
     # ------------------------------------------------------------------
+
+    async def _capture_reconnect_loop(self) -> bool:
+        """Reconnect the capture device with exponential backoff.
+
+        Called when get_frame() raises RuntimeError (device disconnected).
+        Retries indefinitely while run_event is set.
+        Delays: 1s, 2s, 4s, 8s, 16s, 30s (capped).
+
+        capture.open() is called via asyncio.to_thread because cv2.VideoCapture
+        is a blocking operation (Pitfall 3 from research).
+
+        Returns:
+            True if reconnection succeeded, False if run_event was cleared.
+        """
+        self._state = "reconnecting"
+        await self._broadcaster.push_state(self._state)
+
+        delay = 1
+        max_delay = 30
+
+        while self._run_event.is_set():
+            try:
+                self._capture.release()
+                await asyncio.to_thread(self._capture.open)
+                logger.info("Capture device reconnection succeeded")
+                self._state = "streaming"
+                await self._broadcaster.push_state(self._state)
+                return True
+            except RuntimeError as exc:
+                logger.warning(
+                    "Capture reconnect failed: %s, retrying in %ds", exc, delay
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+
+        return False
 
     async def _reconnect_loop(
         self, config_id: str, bridge_ip: str, username: str
