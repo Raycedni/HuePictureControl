@@ -219,7 +219,11 @@ Plans:
 - Festavia actual channel count is underdocumented (~5-7 inferred, not official) — must validate with physical device before finalizing the segment mapping UI; do not ship this phase without hardware confirmation
 - Flux Lightstrip released Sept 2025 with limited developer docs — treat as Play Gradient Lightstrip until confirmed otherwise
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Backend gradient detection, channel-to-light mapping endpoint, capture reconnect
+- [ ] 05-02-PLAN.md — Frontend per-segment LightPanel, channel counter, warning banner, hardware verification
 
 ---
 
@@ -343,7 +347,7 @@ Note: REQUIREMENTS.md header states "36 total" — the actual count of listed re
 | 3. Entertainment API Streaming Integration | 3/3 | Complete   | 2026-03-24 |
 | 3.1 Auto-Mapping from Entertainment Config | 2/2 | Complete   | 2026-03-24 |
 | 4. Frontend Canvas Editor | 3/4 | In Progress|  |
-| 5. Gradient Device Support and Polish | 0/TBD | Not started | - |
+| 5. Gradient Device Support and Polish | 0/2 | Planned | - |
 | 6. Hardening and Deployment | 0/TBD | Not started | - |
 
 ---
