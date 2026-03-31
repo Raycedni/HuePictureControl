@@ -33,6 +33,8 @@ class LightResponse(BaseModel):
     id: str
     name: str
     type: str
+    is_gradient: bool = False
+    points_capable: int = 0
 
 
 class BridgeStatusResponse(BaseModel):

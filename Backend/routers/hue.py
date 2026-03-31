@@ -1,4 +1,5 @@
 """Hue Bridge REST endpoints: pairing, status, config/light discovery."""
+import logging
 import requests
 from fastapi import APIRouter, HTTPException, Request
 
@@ -10,11 +11,15 @@ from models.hue import (
     PairResponse,
 )
 from services.hue_client import (
+    build_light_segment_map,
     fetch_bridge_metadata,
+    fetch_entertainment_config_channels,
     list_entertainment_configs,
     list_lights,
     pair_with_bridge,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hue", tags=["hue"])
 
@@ -98,6 +103,91 @@ async def configs(request: Request) -> list[EntertainmentConfigResponse]:
 
     raw = await list_entertainment_configs(row["ip_address"], row["username"])
     return [EntertainmentConfigResponse(**item) for item in raw]
+
+
+@router.get("/config/{config_id}/channels")
+async def config_channels(config_id: str, request: Request) -> list[dict]:
+    """Return full channel-to-light mapping for a given entertainment configuration.
+
+    For each channel, returns:
+      - channel_id, segment_index
+      - light_id, light_name, light_type
+      - is_gradient, segment_count (how many channels share this light's entertainment service)
+
+    The mapping resolves: channel.service_rid (entertainment service)
+    -> device.services -> light service ID.
+    """
+    import httpx as _httpx
+
+    db = request.app.state.db
+
+    async with db.execute(
+        "SELECT ip_address, username FROM bridge_config WHERE id=1"
+    ) as cursor:
+        row = await cursor.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=400, detail="Bridge not paired")
+
+    bridge_ip = row["ip_address"]
+    username = row["username"]
+
+    # Fetch channels (with service_rid and segment_index)
+    channels = await fetch_entertainment_config_channels(bridge_ip, username, config_id)
+
+    # Fetch lights (with is_gradient and points_capable)
+    lights_list = await list_lights(bridge_ip, username)
+    lights_by_id = {light["id"]: light for light in lights_list}
+
+    # Build segment map: entertainment service_rid -> segment count
+    segment_map = build_light_segment_map(channels)
+
+    # Build entertainment_rid -> light_id mapping via device data
+    # Each device has a "services" array with {rid, rtype} entries
+    # We match rtype="entertainment" entries to rtype="light" entries on the same device
+    headers = {"hue-application-key": username}
+    async with _httpx.AsyncClient(verify=False, timeout=10) as client:
+        device_resp = await client.get(
+            f"https://{bridge_ip}/clip/v2/resource/device", headers=headers
+        )
+    device_data = device_resp.json()
+
+    # For each device, collect all service RIDs by type
+    ent_rid_to_light_id: dict[str, str] = {}
+    for device in device_data.get("data", []):
+        services = device.get("services", [])
+        light_rids = [s["rid"] for s in services if s.get("rtype") == "light"]
+        ent_rids = [s["rid"] for s in services if s.get("rtype") == "entertainment"]
+        # Each device should have at most one light service and one entertainment service
+        if light_rids and ent_rids:
+            for ent_rid in ent_rids:
+                ent_rid_to_light_id[ent_rid] = light_rids[0]
+                logger.info(
+                    "Mapped entertainment_rid=%s -> light_id=%s (device %s)",
+                    ent_rid,
+                    light_rids[0],
+                    device.get("id", "?"),
+                )
+
+    # Assemble response
+    result = []
+    for ch in channels:
+        service_rid = ch.get("service_rid")
+        light_id = ent_rid_to_light_id.get(service_rid) if service_rid else None
+        light = lights_by_id.get(light_id) if light_id else None
+        segment_count = segment_map.get(service_rid, 1) if service_rid else 1
+
+        result.append({
+            "channel_id": ch["channel_id"],
+            "segment_index": ch["segment_index"],
+            "light_id": light_id,
+            "light_name": light["name"] if light else None,
+            "light_type": light["type"] if light else None,
+            "is_gradient": light["is_gradient"] if light else False,
+            "segment_count": segment_count,
+        })
+
+    return result
 
 
 @router.get("/lights", response_model=list[LightResponse])

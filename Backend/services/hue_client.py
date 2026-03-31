@@ -1,4 +1,6 @@
 """Hue Bridge client functions for pairing, metadata fetch, and device discovery."""
+import asyncio
+import collections
 import logging
 import urllib3
 import requests
@@ -101,6 +103,11 @@ async def list_entertainment_configs(bridge_ip: str, username: str) -> list[dict
 async def list_lights(bridge_ip: str, username: str) -> list[dict]:
     """List lights from the paired bridge.
 
+    Fetches both /resource/light and /resource/device so we can resolve
+    each light's product archetype (e.g. "hue play", "lightstrip plus").
+    The light resource's metadata.archetype is often missing; the device
+    resource's product_data.product_archetype is reliable.
+
     Args:
         bridge_ip: IP address of the Hue Bridge.
         username: Application key obtained during pairing.
@@ -108,19 +115,41 @@ async def list_lights(bridge_ip: str, username: str) -> list[dict]:
     Returns:
         List of dicts with id, name, type.
     """
-    url = f"https://{bridge_ip}/clip/v2/resource/light"
     headers = {"hue-application-key": username}
 
     async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        response = await client.get(url, headers=headers)
-        data = response.json()
+        light_resp, device_resp = await asyncio.gather(
+            client.get(f"https://{bridge_ip}/clip/v2/resource/light", headers=headers),
+            client.get(f"https://{bridge_ip}/clip/v2/resource/device", headers=headers),
+        )
+
+    light_data = light_resp.json()
+    device_data = device_resp.json()
+
+    # Build lookup: service RID -> device product archetype
+    rid_to_archetype: dict[str, str] = {}
+    for device in device_data.get("data", []):
+        archetype = (
+            device.get("product_data", {})
+            .get("product_archetype", "unknown")
+            .replace("_", " ")
+        )
+        for service in device.get("services", []):
+            rid_to_archetype[service.get("rid", "")] = archetype
 
     lights = []
-    for item in data.get("data", []):
+    for item in light_data.get("data", []):
+        light_id = item["id"]
+        light_type = rid_to_archetype.get(light_id, "light")
+        gradient = item.get("gradient")
+        is_gradient = gradient is not None and gradient.get("points_capable", 0) > 0
+        points_capable = gradient.get("points_capable", 0) if gradient else 0
         lights.append({
-            "id": item["id"],
+            "id": light_id,
             "name": item["metadata"]["name"],
-            "type": item.get("type", "light"),
+            "type": light_type,
+            "is_gradient": is_gradient,
+            "points_capable": points_capable,
         })
     return lights
 
@@ -170,11 +199,40 @@ async def fetch_entertainment_config_channels(
     channels = []
     config_data = data.get("data", [{}])[0]
     for ch in config_data.get("channels", []):
+        members = ch.get("members", [])
+        if members:
+            first_member = members[0]
+            service_rid = first_member.get("service", {}).get("rid", None)
+            segment_index = first_member.get("index", 0)
+        else:
+            service_rid = None
+            segment_index = 0
         channels.append({
             "channel_id": ch["channel_id"],
             "position": ch.get("position", {"x": 0.0, "y": 0.0, "z": 0.0}),
+            "service_rid": service_rid,
+            "segment_index": segment_index,
         })
     return channels
+
+
+def build_light_segment_map(channels: list[dict]) -> dict[str, int]:
+    """Map entertainment service_rid -> segment count from extended channel list.
+
+    Args:
+        channels: List of channel dicts with service_rid field (from
+            fetch_entertainment_config_channels).
+
+    Returns:
+        dict mapping service_rid (str) to segment count (int).
+        Channels with service_rid=None are skipped.
+    """
+    counts: dict[str, int] = collections.defaultdict(int)
+    for ch in channels:
+        rid = ch.get("service_rid")
+        if rid is not None:
+            counts[rid] += 1
+    return dict(counts)
 
 
 async def deactivate_entertainment_config(bridge_ip: str, username: str, config_id: str) -> None:
