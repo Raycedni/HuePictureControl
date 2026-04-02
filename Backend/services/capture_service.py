@@ -97,6 +97,7 @@ _VIDIOC_QBUF = _iowr(ord("V"), 15, _v4l2_buf_size)
 _VIDIOC_DQBUF = _iowr(ord("V"), 17, _v4l2_buf_size)
 _VIDIOC_STREAMON = 0x40045612
 _VIDIOC_STREAMOFF = 0x40045613
+_VIDIOC_S_PARM = 0xC0CC5616
 
 
 class LatestFrameCapture:
@@ -188,6 +189,20 @@ class LatestFrameCapture:
             qbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
             qbuf.memory = _V4L2_MEMORY_MMAP
             fcntl.ioctl(fd, _VIDIOC_QBUF, qbuf)
+
+        # Request highest framerate (60fps) — device will clamp to its max
+        parm = bytearray(204)
+        struct.pack_into("<I", parm, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        # timeperframe: numerator=1, denominator=60 → 60 fps
+        struct.pack_into("<II", parm, 8, 1, 60)
+        try:
+            fcntl.ioctl(fd, _VIDIOC_S_PARM, parm)
+            actual_num = struct.unpack_from("<I", parm, 8)[0]
+            actual_den = struct.unpack_from("<I", parm, 12)[0]
+            if actual_num > 0:
+                logger.info("Capture framerate set to %d/%d fps", actual_den, actual_num)
+        except OSError:
+            logger.debug("VIDIOC_S_PARM not supported, using device default framerate")
 
         # Start V4L2 streaming
         buf_type = struct.pack("<I", _V4L2_BUF_TYPE_VIDEO_CAPTURE)

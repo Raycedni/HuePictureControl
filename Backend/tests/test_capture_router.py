@@ -84,7 +84,7 @@ class TestStartCaptureEndpoint:
         """POST /api/capture/start calls streaming_service.start(config_id)."""
         client, mock_streaming = capture_app_client_with_streaming
         client.post("/api/capture/start", json={"config_id": "test-uuid-123"})
-        mock_streaming.start.assert_called_once_with("test-uuid-123")
+        mock_streaming.start.assert_called_once_with("test-uuid-123", target_hz=50)
 
     def test_start_missing_config_id_returns_422(self, capture_app_client_with_streaming):
         """POST /api/capture/start without config_id returns 422 validation error."""

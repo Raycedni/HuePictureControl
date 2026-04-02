@@ -31,6 +31,7 @@ class SetDeviceRequest(BaseModel):
 
 class StartCaptureRequest(BaseModel):
     config_id: str
+    target_hz: int = 50
 
 
 @router.post("/start")
@@ -44,7 +45,7 @@ async def start_capture(body: StartCaptureRequest, request: Request):
         200 JSON {"status": "starting"}
     """
     streaming = request.app.state.streaming
-    await streaming.start(body.config_id)
+    await streaming.start(body.config_id, target_hz=body.target_hz)
     return {"status": "starting"}
 
 

@@ -44,8 +44,7 @@ class StreamingService:
     If run_event is cleared during reconnect, streaming transitions to error.
     """
 
-    TARGET_HZ = 50
-    PERIOD = 1.0 / TARGET_HZ
+    DEFAULT_HZ = 50
 
     def __init__(self, db, capture, broadcaster) -> None:
         self._db = db
@@ -55,6 +54,8 @@ class StreamingService:
         self._task: asyncio.Task | None = None
         self._state: str = "idle"
         self._config_id: str | None = None
+        self._target_hz: int = self.DEFAULT_HZ
+        self._period: float = 1.0 / self.DEFAULT_HZ
 
     # ------------------------------------------------------------------
     # Public API
@@ -65,7 +66,7 @@ class StreamingService:
         """Current streaming state: idle | starting | streaming | stopping | error."""
         return self._state
 
-    async def start(self, config_id: str) -> None:
+    async def start(self, config_id: str, target_hz: int = DEFAULT_HZ) -> None:
         """Start the streaming loop for the given entertainment config ID.
 
         No-op if already streaming (state not idle or error).
@@ -74,9 +75,12 @@ class StreamingService:
 
         Args:
             config_id: UUID of the Hue entertainment configuration to stream to.
+            target_hz: Target update rate in Hz (1-100, default 50).
         """
         if self._state not in ("idle", "error"):
             return
+        self._target_hz = max(1, min(100, target_hz))
+        self._period = 1.0 / self._target_hz
         self._config_id = config_id
         self._state = "starting"
         await self._broadcaster.push_state(self._state)
@@ -334,14 +338,14 @@ class StreamingService:
 
             # Silent metrics update — StatusBroadcaster 1 Hz heartbeat handles delivery
             self._broadcaster.update_metrics({
-                "fps": round(1.0 / max(cycle_time, 1e-6), 1) if seq > 1 else self.TARGET_HZ,
+                "fps": round(1.0 / max(cycle_time, 1e-6), 1) if seq > 1 else self._target_hz,
                 "latency_ms": round(latency_ms, 1),
                 "packets_sent": packets_sent,
                 "seq": seq,
             })
 
             # Sleep to maintain target Hz
-            sleep_time = self.PERIOD - elapsed
+            sleep_time = self._period - elapsed
             if sleep_time > 0:
                 await asyncio.sleep(sleep_time)
 
