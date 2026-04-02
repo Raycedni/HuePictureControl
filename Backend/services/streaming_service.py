@@ -225,10 +225,9 @@ class StreamingService:
     ) -> dict:
         """Load channel map: {channel_id: polygon_mask}.
 
-        Resolves regions.light_id → channel_ids by querying the bridge's
-        entertainment config channel-to-device mapping. Each region with a
-        light_id gets mapped to all channels belonging to that light (handles
-        gradient lights with multiple segments).
+        Uses the light_assignments table for precise per-channel mapping when
+        available (auto-mapped regions). Falls back to resolving
+        regions.light_id → all channel_ids for manually assigned regions.
 
         Args:
             config_id: Entertainment configuration UUID.
@@ -238,18 +237,37 @@ class StreamingService:
         Returns:
             dict mapping channel_id (int) to uint8 mask ndarray (480x640).
         """
-        # Resolve light_id -> channel_ids from the bridge
+        # Load explicit channel assignments from light_assignments table
+        assign_query = """
+            SELECT la.region_id, la.channel_id, r.polygon
+            FROM light_assignments la
+            JOIN regions r ON r.id = la.region_id
+            WHERE la.entertainment_config_id = ?
+        """
+        async with await self._db.execute(assign_query, (config_id,)) as cursor:
+            assignment_rows = await cursor.fetchall()
+
+        channel_map = {}
+        assigned_region_ids = set()
+
+        for row in assignment_rows:
+            polygon_points = json.loads(row["polygon"])
+            mask = build_polygon_mask(polygon_points)
+            channel_map[row["channel_id"]] = mask
+            assigned_region_ids.add(row["region_id"])
+
+        # Fallback: regions with light_id but no light_assignments entry
         light_to_channels = await resolve_light_to_channel_map(
             bridge_ip, username, config_id
         )
 
-        # Load regions that have a light_id assigned
         query = "SELECT id, polygon, light_id FROM regions WHERE light_id IS NOT NULL"
         async with await self._db.execute(query) as cursor:
             rows = await cursor.fetchall()
 
-        channel_map = {}
         for row in rows:
+            if row["id"] in assigned_region_ids:
+                continue
             light_id = row["light_id"]
             channel_ids = light_to_channels.get(light_id, [])
             if not channel_ids:
@@ -262,10 +280,12 @@ class StreamingService:
             polygon_points = json.loads(row["polygon"])
             mask = build_polygon_mask(polygon_points)
             for channel_id in channel_ids:
-                channel_map[channel_id] = mask
+                if channel_id not in channel_map:
+                    channel_map[channel_id] = mask
 
         logger.info(
-            "Loaded channel map: %d channels from %d regions", len(channel_map), len(rows)
+            "Loaded channel map: %d channels (%d from assignments, %d fallback)",
+            len(channel_map), len(assignment_rows), len(channel_map) - len(assignment_rows),
         )
         return channel_map
 

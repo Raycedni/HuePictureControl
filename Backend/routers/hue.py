@@ -169,7 +169,7 @@ async def config_channels(config_id: str, request: Request) -> list[dict]:
                     device.get("id", "?"),
                 )
 
-    # Assemble response
+    # Assemble response: one entry per channel from the bridge config
     result = []
     for ch in channels:
         service_rid = ch.get("service_rid")
@@ -186,6 +186,16 @@ async def config_channels(config_id: str, request: Request) -> list[dict]:
             "is_gradient": light["is_gradient"] if light else False,
             "segment_count": segment_count,
         })
+
+    # Re-number segment_index per light to be contiguous (0, 1, 2...)
+    by_light: dict[str, list[dict]] = {}
+    for item in result:
+        key = item["light_id"] or f"_ch{item['channel_id']}"
+        by_light.setdefault(key, []).append(item)
+    for group in by_light.values():
+        group.sort(key=lambda x: x["segment_index"])
+        for i, item in enumerate(group):
+            item["segment_index"] = i
 
     return result
 

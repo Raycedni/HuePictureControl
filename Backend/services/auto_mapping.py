@@ -7,6 +7,7 @@ Exports:
     persist_channel_regions -- Write regions + light_assignments to DB
     auto_map_entertainment_config -- Fetch channels from bridge then persist regions
 """
+import collections
 import json
 import logging
 
@@ -14,6 +15,7 @@ import aiosqlite
 
 from services.hue_client import (
     fetch_entertainment_config_channels,
+    list_lights,
     resolve_entertainment_rid_to_light_id,
 )
 
@@ -78,6 +80,7 @@ async def persist_channel_regions(
     config_id: str,
     channels: list[dict],
     ent_rid_to_light_id: dict[str, str] | None = None,
+    lights_by_id: dict[str, dict] | None = None,
     half: float = 0.10,
 ) -> int:
     """Write normalized polygon regions and light assignments to SQLite.
@@ -92,9 +95,11 @@ async def persist_channel_regions(
         db: Open aiosqlite connection with regions and light_assignments tables.
         config_id: Entertainment configuration UUID from the Hue Bridge.
         channels: List of dicts with channel_id (int), position ({x, y, z}),
-            and service_rid (str|None).
+            service_rid (str|None), and segment_index (int).
         ent_rid_to_light_id: Mapping from entertainment service_rid to light
             resource id, used to populate regions.light_id for streaming.
+        lights_by_id: Mapping from light_id to light dict (with "name" key),
+            used to build descriptive region names.
         half: Half-width of the generated square polygon (default 0.10).
 
     Returns:
@@ -102,6 +107,27 @@ async def persist_channel_regions(
     """
     if ent_rid_to_light_id is None:
         ent_rid_to_light_id = {}
+    if lights_by_id is None:
+        lights_by_id = {}
+
+    # Group channels by light_id, use points_capable for total segment count
+    light_channels: dict[str, list[dict]] = collections.defaultdict(list)
+    for ch in channels:
+        rid = ch.get("service_rid")
+        lid = ent_rid_to_light_id.get(rid) if rid else None
+        key = lid or f"_ch{ch['channel_id']}"
+        light_channels[key].append(ch)
+    # Sort each group by bridge segment_index so contiguous numbering is stable
+    for group in light_channels.values():
+        group.sort(key=lambda c: c.get("segment_index", 0))
+    # Map channel_id -> (contiguous_index, total using points_capable)
+    ch_seg_info: dict[int, tuple[int, int]] = {}
+    for key, group in light_channels.items():
+        light = lights_by_id.get(key)
+        points = light.get("points_capable", 0) if light else 0
+        total = max(points, len(group)) if points > 0 else len(group)
+        for i, ch in enumerate(group):
+            ch_seg_info[ch["channel_id"]] = (ch.get("segment_index", i), total)
 
     count = 0
     for ch in channels:
@@ -110,10 +136,16 @@ async def persist_channel_regions(
         sx, sy = channel_pos_to_screen(pos.get("x", 0.0), pos.get("z", 0.0))
         polygon = make_square_polygon(sx, sy, half)
         region_id = f"auto:{config_id}:{channel_id}"
-        region_name = f"Channel {channel_id}"
 
         service_rid = ch.get("service_rid")
         light_id = ent_rid_to_light_id.get(service_rid) if service_rid else None
+        light = lights_by_id.get(light_id) if light_id else None
+        seg_idx, seg_total = ch_seg_info.get(channel_id, (0, 1))
+
+        if light:
+            region_name = f"{light['name']} [{seg_idx + 1}/{seg_total}]"
+        else:
+            region_name = f"Channel {channel_id}"
 
         await db.execute(
             """
@@ -175,6 +207,10 @@ async def auto_map_entertainment_config(
         bridge_ip, username
     )
 
+    # Fetch lights so region names can include light name + segment info
+    lights_list = await list_lights(bridge_ip, username)
+    lights_by_id = {light["id"]: light for light in lights_list}
+
     return await persist_channel_regions(
-        db, config_id, channels, ent_rid_to_light_id, polygon_half
+        db, config_id, channels, ent_rid_to_light_id, lights_by_id, polygon_half
     )

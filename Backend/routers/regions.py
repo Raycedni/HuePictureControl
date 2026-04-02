@@ -57,6 +57,8 @@ class UpdateRegionRequest(BaseModel):
     name: str | None = None
     polygon: list[list[float]] | None = None
     light_id: str | None = None
+    channel_id: int | None = None
+    entertainment_config_id: str | None = None
 
 
 @router.post("/auto-map")
@@ -200,6 +202,21 @@ async def update_region(region_id: str, body: UpdateRegionRequest, request: Requ
         await db.execute(
             f"UPDATE regions SET {set_clause} WHERE id=?", values
         )
+
+    # Write light_assignments entry for specific channel mapping
+    if body.channel_id is not None and body.entertainment_config_id is not None:
+        # Clear any previous assignment for this region
+        await db.execute(
+            "DELETE FROM light_assignments WHERE region_id=?", (region_id,)
+        )
+        await db.execute(
+            """INSERT OR REPLACE INTO light_assignments
+                (region_id, channel_id, entertainment_config_id)
+            VALUES (?, ?, ?)""",
+            (region_id, body.channel_id, body.entertainment_config_id),
+        )
+
+    if updates or body.channel_id is not None:
         await db.commit()
 
     # Fetch the updated record
@@ -247,6 +264,16 @@ async def delete_region(region_id: str, request: Request):
     await db.commit()
 
     return Response(status_code=204)
+
+
+@router.post("/clear-assignments")
+async def clear_all_assignments(request: Request):
+    """Clear all light assignments from regions (set light_id to NULL)."""
+    db = request.app.state.db
+    await db.execute("UPDATE regions SET light_id = NULL")
+    await db.execute("DELETE FROM light_assignments")
+    await db.commit()
+    return {"status": "ok"}
 
 
 @router.delete("/")

@@ -57,12 +57,13 @@ def _make_streaming_db_cursor(rows):
     return cursor
 
 
-def _make_db_with_rows(region_rows, bridge_row=None):
+def _make_db_with_rows(region_rows, bridge_row=None, assignment_rows=None):
     """Mock aiosqlite db with execute returning given rows.
 
     The db.execute mock returns:
       1st call: bridge_config cursor (fetchone)
-      2nd call: regions cursor (fetchall)
+      2nd call: light_assignments cursor (fetchall) — empty by default
+      3rd call: regions cursor (fetchall)
     """
     if bridge_row is None:
         bridge_row = {
@@ -81,6 +82,10 @@ def _make_db_with_rows(region_rows, bridge_row=None):
     else:
         bridge_row_mock = bridge_row
 
+    if assignment_rows is None:
+        assignment_rows = []
+
+    assignment_cursor = _make_streaming_db_cursor(assignment_rows)
     region_cursor = _make_streaming_db_cursor(region_rows)
 
     bridge_cursor = MagicMock()
@@ -89,8 +94,8 @@ def _make_db_with_rows(region_rows, bridge_row=None):
     bridge_cursor.__aexit__ = AsyncMock(return_value=False)
 
     db = MagicMock()
-    # First call returns bridge cursor, second returns regions cursor
-    db.execute = AsyncMock(side_effect=[bridge_cursor, region_cursor])
+    # 1st: bridge_config, 2nd: light_assignments, 3rd: regions
+    db.execute = AsyncMock(side_effect=[bridge_cursor, assignment_cursor, region_cursor])
     return db, bridge_row_mock
 
 
@@ -262,6 +267,18 @@ async def test_stop_clears_run_event_and_waits_for_task(service_imports):
 # Channel map tests
 # ---------------------------------------------------------------------------
 
+def _make_channel_map_db(assignment_rows, region_rows):
+    """Mock DB for _load_channel_map which executes two queries:
+    1st: light_assignments JOIN regions (assignment_rows)
+    2nd: regions WHERE light_id IS NOT NULL (region_rows)
+    """
+    assign_cursor = _make_streaming_db_cursor(assignment_rows)
+    region_cursor = _make_streaming_db_cursor(region_rows)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[assign_cursor, region_cursor])
+    return db
+
+
 @pytest.mark.asyncio
 async def test_load_channel_map_returns_dict_with_masks(service_imports):
     """_load_channel_map should return {channel_id: mask_array} from regions + bridge."""
@@ -273,9 +290,7 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
         _make_region_row("light-B", [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5]], region_id="r2"),
     ]
 
-    cursor = _make_streaming_db_cursor(rows)
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=cursor)
+    db = _make_channel_map_db([], rows)
 
     service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
@@ -298,9 +313,7 @@ async def test_load_channel_map_empty_returns_empty_dict(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    cursor = _make_streaming_db_cursor([])
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=cursor)
+    db = _make_channel_map_db([], [])
 
     service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
@@ -312,15 +325,13 @@ async def test_load_channel_map_empty_returns_empty_dict(service_imports):
 
 @pytest.mark.asyncio
 async def test_load_channel_map_gradient_light_maps_multiple_channels(service_imports):
-    """A region assigned to a gradient light should map to all its channels."""
+    """A region assigned to a gradient light should map to all its channels via fallback."""
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
     rows = [_make_region_row("gradient-light", region_id="r1")]
 
-    cursor = _make_streaming_db_cursor(rows)
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=cursor)
+    db = _make_channel_map_db([], rows)
 
     service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
@@ -329,6 +340,37 @@ async def test_load_channel_map_gradient_light_maps_multiple_channels(service_im
 
     assert len(channel_map) == 3
     assert 1 in channel_map and 2 in channel_map and 3 in channel_map
+
+
+@pytest.mark.asyncio
+async def test_load_channel_map_uses_assignments_over_fallback(service_imports):
+    """light_assignments entries should take precedence over light_id fallback."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    # Assignment row: region r1 maps to channel 0
+    assign_row = _make_channel_row(0, [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
+    # Also add region_id to the assignment row
+    orig_side_effect = assign_row.__getitem__.side_effect
+    assign_row.__getitem__ = MagicMock(side_effect=lambda k: {
+        "region_id": "r1", "channel_id": 0,
+        "polygon": json.dumps([[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]),
+    }[k])
+
+    # Region r1 has light_id that resolves to channels [0, 1]
+    region_row = _make_region_row("light-A", region_id="r1")
+
+    db = _make_channel_map_db([assign_row], [region_row])
+
+    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
+               return_value={"light-A": [0, 1]}):
+        channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
+
+    # Channel 0 comes from assignment, channel 1 from fallback — but r1 is in assigned_region_ids
+    # so fallback skips r1. Only channel 0 should be present.
+    assert 0 in channel_map
+    assert 1 not in channel_map
 
 
 # ---------------------------------------------------------------------------
