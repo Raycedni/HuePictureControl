@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 04-04-PLAN.md
-last_updated: "2026-03-24T21:49:28.759Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-04-02T15:22:23.310Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
-  completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  completed_phases: 6
+  total_plans: 17
+  completed_plans: 17
   percent: 25
 ---
 
@@ -67,6 +67,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 04-frontend-canvas-editor P02 | 7min | 2 tasks | 22 files |
 | Phase 04-frontend-canvas-editor P03 | 10min | 2 tasks | 5 files |
 | Phase 04-frontend-canvas-editor P04 | 15min | 2 tasks | 4 files |
+| Phase 05-gradient-device-support-and-polish P02 | 2min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,8 @@ Recent decisions affecting current work:
 - [Phase 04-frontend-canvas-editor]: onDrop handler in EditorCanvas (not EditorPage) because stageRef.current.setPointersPositions(e) requires local stageRef access
 - [Phase 04-frontend-canvas-editor]: HTML5 dataTransfer drag-and-drop used for light assignment (no library): lightId/lightName passed via setData/getData
 - [Phase 04-frontend-canvas-editor]: lightMap built from getLights() on mount in EditorCanvas to resolve light IDs to names for polygon labels without modifying region model
+- [Phase 05-gradient-device-support-and-polish]: Gradient segment drag sets channelId + lightId in dataTransfer; drop handler uses lightId for region update (forward-compatible with future light_assignments writes)
+- [Phase 05-gradient-device-support-and-polish]: Warning banner is soft-only: count message only, no identification of excess channels, does not block operations
 
 ### Pending Todos
 
@@ -129,6 +132,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T21:44:00.584Z
-Stopped at: Completed 04-04-PLAN.md
+Last session: 2026-04-02T15:22:23.290Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

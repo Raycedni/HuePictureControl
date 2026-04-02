@@ -41,10 +41,10 @@
 
 ### Gradient Devices
 
-- [ ] **GRAD-01**: Festavia string light segments are individually assignable to regions
-- [ ] **GRAD-02**: Flux lightstrip segments are individually assignable to regions
-- [ ] **GRAD-03**: Other gradient devices (Play Gradient Lightstrip) are supported with per-segment control
-- [ ] **GRAD-04**: 20-channel Entertainment API limit is enforced with a warning in the UI
+- [x] **GRAD-01**: Festavia string light segments are individually assignable to regions
+- [x] **GRAD-02**: Flux lightstrip segments are individually assignable to regions
+- [x] **GRAD-03**: Other gradient devices (Play Gradient Lightstrip) are supported with per-segment control
+- [x] **GRAD-04**: 20-channel Entertainment API limit is enforced with a warning in the UI
 - [x] **GRAD-05**: Non-gradient Hue lights are supported as single-color targets
 
 ### Web UI
@@ -122,10 +122,10 @@
 | STRM-04 | Phase 3 | Complete |
 | STRM-05 | Phase 3 | Complete |
 | STRM-06 | Phase 3 | Complete |
-| GRAD-01 | Phase 5 | Pending |
-| GRAD-02 | Phase 5 | Pending |
-| GRAD-03 | Phase 5 | Pending |
-| GRAD-04 | Phase 5 | Pending |
+| GRAD-01 | Phase 5 | Complete |
+| GRAD-02 | Phase 5 | Complete |
+| GRAD-03 | Phase 5 | Complete |
+| GRAD-04 | Phase 5 | Complete |
 | GRAD-05 | Phase 3 | Complete |
 | UI-01 | Phase 4 | Complete |
 | UI-02 | Phase 1 | Complete |
