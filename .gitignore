@@ -1,2 +1,5 @@
 /.playwright-mcp/
 /Backend/venv/*
+/Backend/data/
+/Backend/.venv/*
+/Frontend/node_modules.bak/*

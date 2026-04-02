@@ -1,11 +1,13 @@
 import os
 import aiosqlite
 
-DATABASE_PATH = os.getenv("DATABASE_PATH", "/app/data/config.db")
+_DEFAULT_DB = os.path.join(os.path.dirname(__file__), "data", "config.db")
+DATABASE_PATH = os.getenv("DATABASE_PATH", _DEFAULT_DB)
 
 
 async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
     """Open a database connection, create schema, return the connection."""
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
 

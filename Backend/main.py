@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from database import DATABASE_PATH, close_db, init_db
 from routers.capture import router as capture_router
@@ -13,7 +14,7 @@ from routers.hue import router as hue_router
 from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
-from services.capture_service import LatestFrameCapture
+from services.capture_service import create_capture
 from services.status_broadcaster import StatusBroadcaster
 from services.streaming_service import StreamingService
 
@@ -44,7 +45,7 @@ async def lifespan(app: FastAPI):
         logger.info("Purged %d undersized regions (area < %s)", purged, MIN_REGION_AREA)
 
     # Startup: initialize capture service (non-fatal if device absent)
-    capture = LatestFrameCapture(CAPTURE_DEVICE)
+    capture = create_capture(CAPTURE_DEVICE)
     try:
         capture.open()
     except RuntimeError as exc:
@@ -76,6 +77,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(health_router)
 app.include_router(hue_router)

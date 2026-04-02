@@ -249,6 +249,16 @@ async def delete_region(region_id: str, request: Request):
     return Response(status_code=204)
 
 
+@router.delete("/")
+async def delete_all_regions(request: Request):
+    """Delete all regions and their light assignments."""
+    db = request.app.state.db
+    await db.execute("DELETE FROM light_assignments")
+    await db.execute("DELETE FROM regions")
+    await db.commit()
+    return Response(status_code=204)
+
+
 @router.get("/settings")
 async def region_settings():
     """Return region configuration values (e.g. minimum area threshold)."""

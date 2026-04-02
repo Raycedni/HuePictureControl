@@ -171,7 +171,7 @@ class StreamingService:
             await asyncio.to_thread(streaming.set_color_space, "xyb")
 
             # Ensure capture device is open before entering frame loop
-            if self._capture._fd is None:
+            if not self._capture.is_open:
                 logger.info("Capture device not open, opening before frame loop")
                 await asyncio.to_thread(self._capture.open)
 
@@ -282,6 +282,7 @@ class StreamingService:
             - extract_region_color -> (r, g, b)
             - rgb_to_xy -> (x, y)
             - compute brightness, clamp to 0.01 minimum
+            - smooth toward target using exponential moving average
             - asyncio.to_thread(streaming.set_input, (x, y, bri, channel_id))
         - update_metrics (silent, NOT broadcast -- 1 Hz heartbeat handles delivery)
         - Sleep to maintain ~50 Hz
@@ -292,6 +293,12 @@ class StreamingService:
         seq = 0
         packets_sent = 0
         prev_t0 = time.monotonic()
+
+        # EMA smoothing state: {channel_id: (x, y, bri)}
+        smooth_state: dict[int, tuple[float, float, float]] = {}
+        # Smoothing factor: 0.0 = no change, 1.0 = no smoothing (instant).
+        # 0.3 at 50 Hz ≈ 63% toward target in ~3 frames (~60ms)
+        alpha = 0.3
 
         while self._run_event.is_set():
             t0 = time.monotonic()
@@ -308,25 +315,38 @@ class StreamingService:
                     await self._broadcaster.push_state("error", error=str(exc))
                     return
 
-            # Process each channel in the map
+            # Compute colors for all channels (pure CPU, no I/O)
+            inputs = []
             for channel_id, mask in channel_map.items():
                 r, g, b = extract_region_color(frame, mask)
                 x, y = rgb_to_xy(r, g, b)
-
-                # Perceived luminance (BT.601 coefficients), normalized to [0, 1]
                 bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
                 bri = max(bri, 0.01)  # dark scene protection
 
-                try:
-                    await asyncio.to_thread(streaming.set_input, (x, y, bri, channel_id))
-                    packets_sent += 1
-                except Exception as exc:
-                    logger.warning("Bridge socket error: %s, starting reconnect", exc)
-                    success = await self._reconnect_loop(
-                        self._config_id or "", bridge_ip, username
-                    )
-                    if not success:
-                        return
+                # Smooth color transitions via EMA
+                if channel_id in smooth_state:
+                    px, py, pbri = smooth_state[channel_id]
+                    x = px + alpha * (x - px)
+                    y = py + alpha * (y - py)
+                    bri = pbri + alpha * (bri - pbri)
+                smooth_state[channel_id] = (x, y, bri)
+
+                inputs.append((x, y, bri, channel_id))
+
+            # Send all channels to bridge in parallel
+            try:
+                await asyncio.gather(*(
+                    asyncio.to_thread(streaming.set_input, inp)
+                    for inp in inputs
+                ))
+                packets_sent += len(inputs)
+            except Exception as exc:
+                logger.warning("Bridge socket error: %s, starting reconnect", exc)
+                success = await self._reconnect_loop(
+                    self._config_id or "", bridge_ip, username
+                )
+                if not success:
+                    return
 
             seq += 1
             elapsed = time.monotonic() - t0

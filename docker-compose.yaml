@@ -6,10 +6,10 @@ services:
     # NOTE: host networking doesn't work on WSL2 Docker Desktop — using bridge + ports instead
     # For DTLS/UDP to Hue Bridge, we rely on Docker's default bridge which has LAN access on WSL2
     ports:
-      - "8000:8000"   # REST API
+      - "8001:8000"   # REST API
       - "2100:2100/udp"  # DTLS Entertainment API
-    devices:
-       - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough
+#    devices:
+#       - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough
     group_add:
        - video  # Required for /dev/video0 device access (host GID 44)
 #    usbipd list

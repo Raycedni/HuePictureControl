@@ -6,7 +6,6 @@ Exports:
 import asyncio
 import logging
 
-import cv2
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
@@ -18,11 +17,9 @@ router = APIRouter(tags=["preview"])
 async def ws_preview(websocket: WebSocket):
     """Stream live JPEG frames from the capture device as binary WebSocket messages.
 
-    Sends frames as fast as the capture device produces them (no artificial limit).
-    If the capture device is unavailable, the connection is kept open and retried
-    every second rather than closing abruptly.
-
-    On client disconnect, the loop exits cleanly.
+    Sends raw MJPEG bytes directly from the capture card, avoiding the
+    decode-then-re-encode overhead. If the capture device is unavailable,
+    the connection is kept open and retried every second.
 
     Access pattern: reads ``websocket.app.state.capture`` for frame acquisition.
     """
@@ -32,10 +29,8 @@ async def ws_preview(websocket: WebSocket):
     try:
         while True:
             try:
-                frame = await capture.get_frame()
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if ok:
-                    await websocket.send_bytes(buf.tobytes())
+                jpeg_bytes = await capture.get_jpeg()
+                await websocket.send_bytes(jpeg_bytes)
                 # Cap at ~60 fps to avoid flooding the client
                 await asyncio.sleep(0.016)
             except RuntimeError:
