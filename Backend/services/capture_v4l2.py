@@ -10,6 +10,7 @@ import logging
 import mmap
 import os
 import struct
+import time
 from typing import Optional
 
 import cv2
@@ -246,6 +247,7 @@ class V4L2Capture(CaptureBackend):
                     with self._frame_lock:
                         self._latest_frame = frame
                         self._latest_jpeg = jpeg_data
+                        self._last_frame_time = time.monotonic()
 
             except OSError:
                 if not self._stop_event.is_set():

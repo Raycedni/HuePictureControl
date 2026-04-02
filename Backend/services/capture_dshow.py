@@ -5,6 +5,7 @@ low-latency MJPEG capture on Windows. Falls back to default backend
 if DirectShow is unavailable.
 """
 import logging
+import time
 from typing import Optional
 
 import cv2
@@ -100,5 +101,6 @@ class DirectShowCapture(CaptureBackend):
 
             with self._frame_lock:
                 self._latest_frame = frame
+                self._last_frame_time = time.monotonic()
                 if jpeg_data is not None:
                     self._latest_jpeg = jpeg_data

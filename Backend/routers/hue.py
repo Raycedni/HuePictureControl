@@ -88,6 +88,14 @@ async def status(request: Request) -> BridgeStatusResponse:
     )
 
 
+@router.delete("/bridge", status_code=204)
+async def delete_bridge(request: Request):
+    """Delete stored bridge credentials, effectively unpairing."""
+    db = request.app.state.db
+    await db.execute("DELETE FROM bridge_config WHERE id=1")
+    await db.commit()
+
+
 @router.get("/configs", response_model=list[EntertainmentConfigResponse])
 async def configs(request: Request) -> list[EntertainmentConfigResponse]:
     """Return entertainment configurations from the paired bridge."""

@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from typing import Optional
 
 import numpy as np
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DEVICE = "0" if sys.platform == "win32" else "/dev/video0"
 CAPTURE_DEVICE: str = os.getenv("CAPTURE_DEVICE", _DEFAULT_DEVICE)
+
+# If no new frame arrives within this many seconds, consider the device dead.
+_STALE_FRAME_TIMEOUT = 3.0
 
 
 class CaptureBackend(abc.ABC):
@@ -38,8 +42,10 @@ class CaptureBackend(abc.ABC):
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
+        self._last_frame_time: float = 0.0
         self._reader_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._reader_error = threading.Event()
 
     @property
     def device_path(self) -> str:
@@ -60,8 +66,7 @@ class CaptureBackend(abc.ABC):
 
     async def get_frame(self) -> np.ndarray:
         """Return the most recent decoded BGR frame. Non-blocking."""
-        if not self.is_open:
-            raise RuntimeError("Capture device is not open")
+        self._check_health()
         with self._frame_lock:
             if self._latest_frame is None:
                 raise RuntimeError("No frame available from capture device")
@@ -69,20 +74,44 @@ class CaptureBackend(abc.ABC):
 
     async def get_jpeg(self) -> bytes:
         """Return the most recent JPEG bytes. Non-blocking."""
-        if not self.is_open:
-            raise RuntimeError("Capture device is not open")
+        self._check_health()
         with self._frame_lock:
             if self._latest_jpeg is None:
                 raise RuntimeError("No frame available from capture device")
             return self._latest_jpeg
 
+    def _check_health(self) -> None:
+        """Raise RuntimeError if capture is unhealthy (reader dead or frames stale)."""
+        if not self.is_open:
+            raise RuntimeError("Capture device is not open")
+        if self._reader_error.is_set():
+            raise RuntimeError("Capture reader thread died — device disconnected")
+        if (
+            self._last_frame_time > 0
+            and (time.monotonic() - self._last_frame_time) > _STALE_FRAME_TIMEOUT
+        ):
+            raise RuntimeError(
+                "No new frame for %.1fs — device may be disconnected"
+                % (time.monotonic() - self._last_frame_time)
+            )
+
     def _start_reader(self) -> None:
         """Start the background reader thread."""
         self._stop_event.clear()
+        self._reader_error.clear()
         self._reader_thread = threading.Thread(
-            target=self._reader_loop, daemon=True, name="capture-reader"
+            target=self._reader_wrapper, daemon=True, name="capture-reader"
         )
         self._reader_thread.start()
+
+    def _reader_wrapper(self) -> None:
+        """Wrapper that sets _reader_error if the loop exits unexpectedly."""
+        try:
+            self._reader_loop()
+        finally:
+            if not self._stop_event.is_set():
+                logger.warning("Capture reader exited unexpectedly — flagging error")
+                self._reader_error.set()
 
     def _stop_reader(self) -> None:
         """Signal and join the background reader thread."""

@@ -417,8 +417,8 @@ class StreamingService:
                 self._capture.release()
                 await asyncio.to_thread(self._capture.open)
                 # Wait for the reader thread to produce a first frame
-                for _ in range(10):
-                    await asyncio.sleep(0.1)
+                for _ in range(20):
+                    await asyncio.sleep(0.2)
                     try:
                         await self._capture.get_frame()
                         break
@@ -430,10 +430,15 @@ class StreamingService:
                 self._state = "streaming"
                 await self._broadcaster.push_state(self._state)
                 return True
-            except RuntimeError as exc:
+            except Exception as exc:
                 logger.warning(
                     "Capture reconnect failed: %s, retrying in %ds", exc, delay
                 )
+                # Ensure clean state before next attempt
+                try:
+                    self._capture.release()
+                except Exception:
+                    pass
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
 
