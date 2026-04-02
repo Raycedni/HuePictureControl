@@ -21,6 +21,18 @@ export interface Light {
   id: string
   name: string
   type: string
+  is_gradient: boolean
+  points_capable: number
+}
+
+export interface ConfigChannel {
+  channel_id: number
+  segment_index: number
+  light_id: string
+  light_name: string
+  light_type: string
+  is_gradient: boolean
+  segment_count: number
 }
 
 export async function pairBridge(bridgeIp: string): Promise<PairResponse> {
@@ -59,6 +71,16 @@ export async function getEntertainmentConfigs(): Promise<EntertainmentConfig[]> 
 
 export async function getLights(): Promise<Light[]> {
   const response = await fetch('/api/hue/lights')
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
+    error.status = response.status
+    throw error
+  }
+  return response.json()
+}
+
+export async function fetchConfigChannels(configId: string): Promise<ConfigChannel[]> {
+  const response = await fetch(`/api/hue/config/${configId}/channels`)
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`) as Error & { status: number }
     error.status = response.status
