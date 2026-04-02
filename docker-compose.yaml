@@ -22,6 +22,7 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_PATH=/app/data/config.db
+      - MIN_REGION_AREA=0.010  # Minimum polygon area in normalized [0..1] space (0.001 = 0.1% of canvas)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

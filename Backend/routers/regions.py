@@ -5,6 +5,7 @@ Exports:
 """
 import json
 import logging
+import os
 import uuid
 
 import httpx
@@ -16,6 +17,29 @@ from services.auto_mapping import auto_map_entertainment_config
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/regions", tags=["regions"])
+
+# Minimum polygon area in normalized [0..1] space. Default 0.001 = 0.1% of canvas.
+MIN_REGION_AREA = float(os.getenv("MIN_REGION_AREA", "0.001"))
+
+
+def polygon_area(polygon: list[list[float]]) -> float:
+    """Compute the area of a polygon using the shoelace formula.
+
+    Args:
+        polygon: List of [x, y] points in normalized [0..1] coordinates.
+
+    Returns:
+        Absolute area of the polygon.
+    """
+    n = len(polygon)
+    if n < 3:
+        return 0.0
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += polygon[i][0] * polygon[j][1]
+        area -= polygon[j][0] * polygon[i][1]
+    return abs(area) / 2.0
 
 
 class AutoMapRequest(BaseModel):
@@ -102,6 +126,12 @@ async def create_region(body: CreateRegionRequest, request: Request):
     """
     db = request.app.state.db
 
+    if polygon_area(body.polygon) < MIN_REGION_AREA:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Region too small — minimum area is {MIN_REGION_AREA} (normalized)",
+        )
+
     region_id = str(uuid.uuid4())
 
     # Determine next order_index
@@ -148,6 +178,12 @@ async def update_region(region_id: str, body: UpdateRegionRequest, request: Requ
 
     if existing is None:
         raise HTTPException(status_code=404, detail="Region not found")
+
+    if body.polygon is not None and polygon_area(body.polygon) < MIN_REGION_AREA:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Region too small — minimum area is {MIN_REGION_AREA} (normalized)",
+        )
 
     # Build update fields dynamically from non-None request fields
     updates: dict = {}
@@ -211,6 +247,12 @@ async def delete_region(region_id: str, request: Request):
     await db.commit()
 
     return Response(status_code=204)
+
+
+@router.get("/settings")
+async def region_settings():
+    """Return region configuration values (e.g. minimum area threshold)."""
+    return {"min_region_area": MIN_REGION_AREA}
 
 
 @router.get("/")

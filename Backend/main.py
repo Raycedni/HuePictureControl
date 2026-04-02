@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -26,6 +27,21 @@ async def lifespan(app: FastAPI):
     # Startup: open DB connection and initialize schema
     db = await init_db(DATABASE_PATH)
     app.state.db = db
+
+    # Startup: purge regions smaller than MIN_REGION_AREA
+    from routers.regions import MIN_REGION_AREA, polygon_area
+    async with db.execute("SELECT id, polygon FROM regions") as cursor:
+        rows = await cursor.fetchall()
+    purged = 0
+    for row in rows:
+        poly = json.loads(row["polygon"])
+        if polygon_area(poly) < MIN_REGION_AREA:
+            await db.execute("DELETE FROM regions WHERE id=?", (row["id"],))
+            await db.execute("DELETE FROM light_assignments WHERE region_id=?", (row["id"],))
+            purged += 1
+    if purged:
+        await db.commit()
+        logger.info("Purged %d undersized regions (area < %s)", purged, MIN_REGION_AREA)
 
     # Startup: initialize capture service (non-fatal if device absent)
     capture = LatestFrameCapture(CAPTURE_DEVICE)
