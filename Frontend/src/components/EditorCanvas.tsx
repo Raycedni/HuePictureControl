@@ -166,8 +166,10 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
 
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
+    const channelId = e.dataTransfer.getData('channelId')
     const lightId = e.dataTransfer.getData('lightId')
-    if (!lightId) return
+
+    if (!channelId && !lightId) return
 
     const stage = stageRef.current
     if (!stage) return
@@ -186,9 +188,14 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
 
     if (!hit) return
 
+    // Use lightId for the region assignment (both gradient segments and non-gradient lights)
+    // channelId is available for future light_assignments writes
+    const assignLightId = lightId || null
+    if (!assignLightId) return
+
     try {
-      await updateRegionAPI(hit.id, { light_id: lightId })
-      updateRegionInStore(hit.id, { light_id: lightId })
+      await updateRegionAPI(hit.id, { light_id: assignLightId })
+      updateRegionInStore(hit.id, { light_id: assignLightId })
     } catch (err) {
       console.error('Failed to assign light to region:', err)
     }
