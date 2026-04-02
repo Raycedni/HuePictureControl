@@ -31,8 +31,12 @@ class StatusBroadcaster:
     async def connect(self, ws: WebSocket) -> None:
         """Accept a WebSocket connection and send the current metrics snapshot."""
         await ws.accept()
+        try:
+            await ws.send_text(json.dumps(self._metrics))
+        except Exception:
+            logger.debug("WebSocket disconnected during initial send, not adding to pool")
+            return
         self._connections.append(ws)
-        await ws.send_text(json.dumps(self._metrics))
 
     def disconnect(self, ws: WebSocket) -> None:
         """Remove a WebSocket connection. Safe to call with unknown connections."""

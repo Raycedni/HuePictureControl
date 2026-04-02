@@ -25,5 +25,5 @@ async def ws_status(websocket: WebSocket):
     try:
         while True:
             await websocket.receive_text()  # keep alive; client may send pings
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
         broadcaster.disconnect(websocket)

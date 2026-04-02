@@ -36,10 +36,12 @@ async def ws_preview(websocket: WebSocket):
                 ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if ok:
                     await websocket.send_bytes(buf.tobytes())
+                # Cap at ~30 fps to avoid flooding the client
+                await asyncio.sleep(0.033)
             except RuntimeError:
                 # Capture device unavailable — keep connection alive, retry in 1s
                 logger.debug("ws_preview: capture device unavailable, retrying in 1s")
                 await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        # Client disconnected — clean exit, no error
+    except (WebSocketDisconnect, Exception):
+        # Client disconnected or unexpected error — clean exit
         logger.debug("ws_preview: client disconnected")
