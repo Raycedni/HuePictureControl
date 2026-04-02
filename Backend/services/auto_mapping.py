@@ -12,7 +12,10 @@ import logging
 
 import aiosqlite
 
-from services.hue_client import fetch_entertainment_config_channels
+from services.hue_client import (
+    fetch_entertainment_config_channels,
+    resolve_entertainment_rid_to_light_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,7 @@ async def persist_channel_regions(
     db: aiosqlite.Connection,
     config_id: str,
     channels: list[dict],
+    ent_rid_to_light_id: dict[str, str] | None = None,
     half: float = 0.10,
 ) -> int:
     """Write normalized polygon regions and light assignments to SQLite.
@@ -87,12 +91,18 @@ async def persist_channel_regions(
     Args:
         db: Open aiosqlite connection with regions and light_assignments tables.
         config_id: Entertainment configuration UUID from the Hue Bridge.
-        channels: List of dicts with channel_id (int) and position ({x, y, z}).
+        channels: List of dicts with channel_id (int), position ({x, y, z}),
+            and service_rid (str|None).
+        ent_rid_to_light_id: Mapping from entertainment service_rid to light
+            resource id, used to populate regions.light_id for streaming.
         half: Half-width of the generated square polygon (default 0.10).
 
     Returns:
         Number of regions written.
     """
+    if ent_rid_to_light_id is None:
+        ent_rid_to_light_id = {}
+
     count = 0
     for ch in channels:
         channel_id = ch["channel_id"]
@@ -102,12 +112,15 @@ async def persist_channel_regions(
         region_id = f"auto:{config_id}:{channel_id}"
         region_name = f"Channel {channel_id}"
 
+        service_rid = ch.get("service_rid")
+        light_id = ent_rid_to_light_id.get(service_rid) if service_rid else None
+
         await db.execute(
             """
-            INSERT OR REPLACE INTO regions (id, name, polygon, order_index)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO regions (id, name, polygon, order_index, light_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (region_id, region_name, json.dumps(polygon), channel_id),
+            (region_id, region_name, json.dumps(polygon), channel_id, light_id),
         )
 
         await db.execute(
@@ -158,4 +171,10 @@ async def auto_map_entertainment_config(
             f"Entertainment config '{config_id}' has empty channels list — cannot auto-map"
         )
 
-    return await persist_channel_regions(db, config_id, channels, polygon_half)
+    ent_rid_to_light_id = await resolve_entertainment_rid_to_light_id(
+        bridge_ip, username
+    )
+
+    return await persist_channel_regions(
+        db, config_id, channels, ent_rid_to_light_id, polygon_half
+    )

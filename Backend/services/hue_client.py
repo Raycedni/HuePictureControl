@@ -235,6 +235,41 @@ def build_light_segment_map(channels: list[dict]) -> dict[str, int]:
     return dict(counts)
 
 
+async def resolve_entertainment_rid_to_light_id(
+    bridge_ip: str, username: str
+) -> dict[str, str]:
+    """Resolve entertainment service RIDs to light resource IDs via the device API.
+
+    Each Hue device exposes multiple service types. This maps the entertainment
+    service RID to the light service RID on the same device, which is the ID
+    used by regions.light_id for streaming.
+
+    Args:
+        bridge_ip: IP address of the Hue Bridge.
+        username: Application key obtained during pairing.
+
+    Returns:
+        dict mapping entertainment service_rid (str) to light_id (str).
+    """
+    headers = {"hue-application-key": username}
+    async with httpx.AsyncClient(verify=False, timeout=10) as client:
+        device_resp = await client.get(
+            f"https://{bridge_ip}/clip/v2/resource/device", headers=headers
+        )
+    device_data = device_resp.json()
+
+    ent_rid_to_light_id: dict[str, str] = {}
+    for device in device_data.get("data", []):
+        services = device.get("services", [])
+        light_rids = [s["rid"] for s in services if s.get("rtype") == "light"]
+        ent_rids = [s["rid"] for s in services if s.get("rtype") == "entertainment"]
+        if light_rids and ent_rids:
+            for ent_rid in ent_rids:
+                ent_rid_to_light_id[ent_rid] = light_rids[0]
+
+    return ent_rid_to_light_id
+
+
 async def resolve_light_to_channel_map(
     bridge_ip: str, username: str, config_id: str
 ) -> dict[str, list[int]]:
@@ -252,22 +287,7 @@ async def resolve_light_to_channel_map(
         dict mapping light_id (str) to list of channel_ids (int).
     """
     channels = await fetch_entertainment_config_channels(bridge_ip, username, config_id)
-
-    headers = {"hue-application-key": username}
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        device_resp = await client.get(
-            f"https://{bridge_ip}/clip/v2/resource/device", headers=headers
-        )
-    device_data = device_resp.json()
-
-    ent_rid_to_light_id: dict[str, str] = {}
-    for device in device_data.get("data", []):
-        services = device.get("services", [])
-        light_rids = [s["rid"] for s in services if s.get("rtype") == "light"]
-        ent_rids = [s["rid"] for s in services if s.get("rtype") == "entertainment"]
-        if light_rids and ent_rids:
-            for ent_rid in ent_rids:
-                ent_rid_to_light_id[ent_rid] = light_rids[0]
+    ent_rid_to_light_id = await resolve_entertainment_rid_to_light_id(bridge_ip, username)
 
     light_to_channels: dict[str, list[int]] = {}
     for ch in channels:

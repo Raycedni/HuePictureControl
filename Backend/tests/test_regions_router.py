@@ -189,6 +189,9 @@ class TestAutoMapEndpoint:
         with patch(
             "services.auto_mapping.fetch_entertainment_config_channels",
             new=AsyncMock(return_value=mock_channels),
+        ), patch(
+            "services.auto_mapping.resolve_entertainment_rid_to_light_id",
+            new=AsyncMock(return_value={}),
         ):
             response = client.post(
                 "/api/regions/auto-map", json={"config_id": "cfg-001"}
@@ -211,6 +214,9 @@ class TestAutoMapEndpoint:
         with patch(
             "services.auto_mapping.fetch_entertainment_config_channels",
             new=AsyncMock(return_value=mock_channels),
+        ), patch(
+            "services.auto_mapping.resolve_entertainment_rid_to_light_id",
+            new=AsyncMock(return_value={}),
         ):
             response = client.post(
                 "/api/regions/auto-map", json={"config_id": "cfg-001"}
@@ -232,6 +238,9 @@ class TestAutoMapEndpoint:
         with patch(
             "services.auto_mapping.fetch_entertainment_config_channels",
             new=AsyncMock(return_value=mock_channels),
+        ), patch(
+            "services.auto_mapping.resolve_entertainment_rid_to_light_id",
+            new=AsyncMock(return_value={}),
         ):
             response = client.post(
                 "/api/regions/auto-map", json={"config_id": "cfg-001"}
@@ -252,6 +261,9 @@ class TestAutoMapEndpoint:
         with patch(
             "services.auto_mapping.fetch_entertainment_config_channels",
             new=AsyncMock(return_value=mock_channels),
+        ), patch(
+            "services.auto_mapping.resolve_entertainment_rid_to_light_id",
+            new=AsyncMock(return_value={}),
         ):
             post_response = client.post(
                 "/api/regions/auto-map", json={"config_id": "cfg-001"}

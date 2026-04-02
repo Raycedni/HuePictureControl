@@ -243,6 +243,9 @@ class TestAutoMapEntertainmentConfig:
         with patch(
             "services.auto_mapping.fetch_entertainment_config_channels",
             new=AsyncMock(return_value=MOCK_CHANNELS),
+        ), patch(
+            "services.auto_mapping.resolve_entertainment_rid_to_light_id",
+            new=AsyncMock(return_value={}),
         ):
             count = await auto_map_entertainment_config(
                 db, "192.168.1.1", "test-user", "cfg-001"

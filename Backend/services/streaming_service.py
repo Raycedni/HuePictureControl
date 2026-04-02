@@ -372,6 +372,16 @@ class StreamingService:
             try:
                 self._capture.release()
                 await asyncio.to_thread(self._capture.open)
+                # Wait for the reader thread to produce a first frame
+                for _ in range(10):
+                    await asyncio.sleep(0.1)
+                    try:
+                        await self._capture.get_frame()
+                        break
+                    except RuntimeError:
+                        pass
+                else:
+                    raise RuntimeError("Device opened but no frames produced")
                 logger.info("Capture device reconnection succeeded")
                 self._state = "streaming"
                 await self._broadcaster.push_state(self._state)
