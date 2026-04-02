@@ -162,6 +162,11 @@ class StreamingService:
             # 6. Set color space to xyb
             await asyncio.to_thread(streaming.set_color_space, "xyb")
 
+            # Ensure capture device is open before entering frame loop
+            if self._capture._fd is None:
+                logger.info("Capture device not open, opening before frame loop")
+                await asyncio.to_thread(self._capture.open)
+
             # Transition to streaming state
             self._state = "streaming"
             await self._broadcaster.push_state(self._state)

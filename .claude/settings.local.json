@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.amazon.de)",
+      "Read(//home/lukas/**)"
+    ]
+  }
+}

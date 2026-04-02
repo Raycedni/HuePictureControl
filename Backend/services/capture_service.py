@@ -1,13 +1,21 @@
-"""Asyncio-compatible frame capture service backed by OpenCV/V4L2.
+"""Asyncio-compatible frame capture service using direct V4L2 ioctls.
+
+Reads MJPEG frames directly from the V4L2 device via mmap, bypassing
+OpenCV's broken V4L2 backend in pip-installed opencv-python-headless.
+Decodes MJPEG to BGR with cv2.imdecode.
 
 Exports:
     CAPTURE_DEVICE     -- Module-level device path from env (or /dev/video0)
     LatestFrameCapture -- Pull-based capture class; use open()/release()/get_frame()
 """
 import asyncio
+import ctypes
+import fcntl
 import logging
+import mmap
 import os
 import struct
+import threading
 from typing import Optional
 
 import cv2
@@ -15,122 +23,250 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Module-level constant — read once at import time
 CAPTURE_DEVICE: str = os.getenv("CAPTURE_DEVICE", "/dev/video0")
+
+_WIDTH = 640
+_HEIGHT = 480
+_NUM_BUFFERS = 4
+
+# ---- V4L2 ctypes structs (64-bit safe) ----
+
+_V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
+_V4L2_MEMORY_MMAP = 1
+_V4L2_PIX_FMT_MJPEG = 0x47504A4D  # 'MJPG'
+
+
+class _timeval(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+
+
+class _v4l2_timecode(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("frames", ctypes.c_uint8),
+        ("seconds", ctypes.c_uint8),
+        ("minutes", ctypes.c_uint8),
+        ("hours", ctypes.c_uint8),
+        ("userbits", ctypes.c_uint8 * 4),
+    ]
+
+
+class _v4l2_buffer_m(ctypes.Union):
+    _fields_ = [
+        ("offset", ctypes.c_uint32),
+        ("userptr", ctypes.c_ulong),
+        ("planes", ctypes.c_void_p),
+        ("fd", ctypes.c_int32),
+    ]
+
+
+class _v4l2_buffer(ctypes.Structure):
+    _fields_ = [
+        ("index", ctypes.c_uint32),
+        ("type", ctypes.c_uint32),
+        ("bytesused", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("field", ctypes.c_uint32),
+        ("timestamp", _timeval),
+        ("timecode", _v4l2_timecode),
+        ("sequence", ctypes.c_uint32),
+        ("memory", ctypes.c_uint32),
+        ("m", _v4l2_buffer_m),
+        ("length", ctypes.c_uint32),
+        ("reserved2", ctypes.c_uint32),
+        ("request_fd", ctypes.c_int32),
+    ]
+
+
+# Compute ioctl numbers from struct size (architecture-safe)
+_IOC_W = 1
+_IOC_R = 2
+_v4l2_buf_size = ctypes.sizeof(_v4l2_buffer)
+
+
+def _iowr(magic: int, nr: int, size: int) -> int:
+    return ((_IOC_R | _IOC_W) << 30) | (size << 16) | (magic << 8) | nr
+
+
+_VIDIOC_QUERYCAP = 0x80685600
+_VIDIOC_S_FMT = 0xC0D05605
+_VIDIOC_REQBUFS = 0xC0145608
+_VIDIOC_QUERYBUF = _iowr(ord("V"), 9, _v4l2_buf_size)
+_VIDIOC_QBUF = _iowr(ord("V"), 15, _v4l2_buf_size)
+_VIDIOC_DQBUF = _iowr(ord("V"), 17, _v4l2_buf_size)
+_VIDIOC_STREAMON = 0x40045612
+_VIDIOC_STREAMOFF = 0x40045613
 
 
 class LatestFrameCapture:
-    """Pull-based, asyncio-compatible wrapper around cv2.VideoCapture.
+    """Pull-based capture using direct V4L2 ioctls + mmap.
 
-    Usage::
-
-        capture = LatestFrameCapture("/dev/video0")
-        capture.open()
-        frame = await capture.get_frame()   # non-blocking; delegates to thread pool
-        capture.release()
-
-    ``open()`` can be called again with a new path to switch devices at runtime
-    without restarting.  ``get_frame()`` acquires an asyncio.Lock so that
-    concurrent callers serialize reads without racing.
+    A background thread dequeues MJPEG frames from the kernel and keeps
+    the latest decoded BGR frame available.  ``get_frame()`` returns
+    immediately with zero pipe overhead.
     """
 
     def __init__(self, device_path: str = "/dev/video0") -> None:
-        self._device_path: str = device_path
-        self._cap: Optional[cv2.VideoCapture] = None
-        self._lock: asyncio.Lock = asyncio.Lock()
-
-    # ------------------------------------------------------------------
-    # Public methods
-    # ------------------------------------------------------------------
+        self._device_path = device_path
+        self._fd: Optional[int] = None
+        self._buffers: list[mmap.mmap] = []
+        self._frame_lock = threading.Lock()
+        self._latest_frame: Optional[np.ndarray] = None
+        self._reader_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
 
     def open(self, device_path: Optional[str] = None) -> None:
-        """Open (or reopen) the V4L2 capture device.
-
-        Closes any currently open device first.  Configures MJPEG format at
-        640x480.  Discards the first 3 frames to avoid black/garbage warmup
-        frames (Pitfall 5 in research).
-
-        Args:
-            device_path: Override device path. When None, uses the path stored
-                         at construction time (or the most recent open() call).
-
-        Raises:
-            RuntimeError: If the device cannot be opened.
-        """
-        # Close existing device before reopening
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        """Open the V4L2 device, configure MJPEG, mmap buffers, start streaming."""
+        self.release()
 
         path = device_path if device_path is not None else self._device_path
         self._device_path = path
 
-        self._cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
-        if not self._cap.isOpened():
-            raise RuntimeError(f"Could not open capture device: {path}")
+        if not os.path.exists(path):
+            raise RuntimeError(f"Capture device not found: {path}")
 
-        # Request MJPEG at 640x480 — device may silently refuse; log actual fourcc
-        fourcc_mjpg = cv2.VideoWriter_fourcc(*"MJPG")
-        self._cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        actual_fourcc = int(self._cap.get(cv2.CAP_PROP_FOURCC))
         try:
-            fourcc_str = struct.pack("<I", actual_fourcc).decode("ascii", errors="replace")
-        except Exception:
-            fourcc_str = str(actual_fourcc)
-        logger.info("Opened %s — actual fourcc: %s", path, fourcc_str)
+            self._fd = os.open(path, os.O_RDWR)
+        except OSError as exc:
+            raise RuntimeError(f"Cannot open {path}: {exc}") from exc
 
-        # Discard first 3 frames to let AGC/AEC stabilize (Pitfall 5)
-        for _ in range(3):
-            self._cap.read()
+        try:
+            self._setup_device()
+        except Exception:
+            os.close(self._fd)
+            self._fd = None
+            raise
+
+        # Start background reader
+        self._stop_event.clear()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True, name="capture-reader"
+        )
+        self._reader_thread.start()
+
+        logger.info("Opened %s — MJPEG %dx%d, %d buffers", path, _WIDTH, _HEIGHT, _NUM_BUFFERS)
+
+    def _setup_device(self) -> None:
+        fd = self._fd
+
+        # Verify VIDEO_CAPTURE capability
+        cap_buf = bytearray(104)
+        fcntl.ioctl(fd, _VIDIOC_QUERYCAP, cap_buf)
+        device_caps = struct.unpack_from("<I", cap_buf, 88)[0]
+        if not (device_caps & 0x01):
+            raise RuntimeError("Device does not support VIDEO_CAPTURE")
+
+        # Set format: MJPEG 640x480
+        fmt = bytearray(208)
+        struct.pack_into("<I", fmt, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        struct.pack_into("<II", fmt, 4, _WIDTH, _HEIGHT)
+        struct.pack_into("<I", fmt, 12, _V4L2_PIX_FMT_MJPEG)
+        fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
+
+        # Request mmap buffers
+        reqbufs = bytearray(20)
+        struct.pack_into("<III", reqbufs, 0, _NUM_BUFFERS, _V4L2_BUF_TYPE_VIDEO_CAPTURE, _V4L2_MEMORY_MMAP)
+        fcntl.ioctl(fd, _VIDIOC_REQBUFS, reqbufs)
+        count = struct.unpack_from("<I", reqbufs, 0)[0]
+
+        # Query, mmap, and queue each buffer
+        self._buffers = []
+        for i in range(count):
+            vbuf = _v4l2_buffer()
+            vbuf.index = i
+            vbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
+            vbuf.memory = _V4L2_MEMORY_MMAP
+            fcntl.ioctl(fd, _VIDIOC_QUERYBUF, vbuf)
+
+            buf = mmap.mmap(fd, vbuf.length, flags=mmap.MAP_SHARED, prot=mmap.PROT_READ | mmap.PROT_WRITE, offset=vbuf.m.offset)
+            self._buffers.append(buf)
+
+            # Queue buffer
+            qbuf = _v4l2_buffer()
+            qbuf.index = i
+            qbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
+            qbuf.memory = _V4L2_MEMORY_MMAP
+            fcntl.ioctl(fd, _VIDIOC_QBUF, qbuf)
+
+        # Start V4L2 streaming
+        buf_type = struct.pack("<I", _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        fcntl.ioctl(fd, _VIDIOC_STREAMON, buf_type)
 
     def release(self) -> None:
-        """Release the capture device.  Safe to call when already released."""
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        """Stop streaming and release all resources."""
+        self._stop_event.set()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=3)
+            self._reader_thread = None
 
-    def _read_frame(self) -> np.ndarray:
-        """Synchronous blocking read — must only be called via asyncio.to_thread.
+        if self._fd is not None:
+            try:
+                buf_type = struct.pack("<I", _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+                fcntl.ioctl(self._fd, _VIDIOC_STREAMOFF, buf_type)
+            except OSError:
+                pass
+            for buf in self._buffers:
+                buf.close()
+            self._buffers = []
+            os.close(self._fd)
+            self._fd = None
 
-        Returns:
-            BGR uint8 numpy array of shape (height, width, 3).
-
-        Raises:
-            RuntimeError: If the device is not open or cap.read() fails.
-        """
-        if self._cap is None or not self._cap.isOpened():
-            raise RuntimeError("Capture device is not open")
-        ret, frame = self._cap.read()
-        if not ret:
-            raise RuntimeError(
-                "cap.read() returned False — device may be disconnected"
-            )
-        return frame
+        with self._frame_lock:
+            self._latest_frame = None
 
     async def get_frame(self) -> np.ndarray:
-        """Non-blocking async frame read; delegates blocking cap.read() to thread pool.
-
-        Acquires an asyncio.Lock to prevent concurrent reads from racing.
-
-        Returns:
-            BGR uint8 numpy array of shape (height, width, 3).
-
-        Raises:
-            RuntimeError: If the device is not open.
-        """
-        if self._cap is None:
+        """Return the most recent decoded BGR frame. Non-blocking."""
+        if self._fd is None:
             raise RuntimeError("Capture device is not open")
-        async with self._lock:
-            return await asyncio.to_thread(self._read_frame)
+        with self._frame_lock:
+            if self._latest_frame is None:
+                raise RuntimeError("No frame available from capture device")
+            return self._latest_frame
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
+    def _reader_loop(self) -> None:
+        """Background thread: DQBUF → decode MJPEG → store latest → QBUF."""
+        while not self._stop_event.is_set():
+            try:
+                # Dequeue filled buffer
+                dqbuf = _v4l2_buffer()
+                dqbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
+                dqbuf.memory = _V4L2_MEMORY_MMAP
+                fcntl.ioctl(self._fd, _VIDIOC_DQBUF, dqbuf)
+
+                idx = dqbuf.index
+                used = dqbuf.bytesused
+
+                # Read MJPEG data
+                mmapped = self._buffers[idx]
+                mmapped.seek(0)
+                jpeg_data = mmapped.read(used)
+
+                # Re-queue immediately
+                qbuf = _v4l2_buffer()
+                qbuf.index = idx
+                qbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
+                qbuf.memory = _V4L2_MEMORY_MMAP
+                fcntl.ioctl(self._fd, _VIDIOC_QBUF, qbuf)
+
+                # Decode MJPEG → BGR
+                frame = cv2.imdecode(
+                    np.frombuffer(jpeg_data, dtype=np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+                if frame is not None:
+                    with self._frame_lock:
+                        self._latest_frame = frame
+
+            except OSError:
+                if not self._stop_event.is_set():
+                    logger.warning("V4L2 DQBUF failed — device may be disconnected")
+                break
+            except Exception as exc:
+                if not self._stop_event.is_set():
+                    logger.warning("Capture reader error: %s", exc)
+                break
 
     @property
     def device_path(self) -> str:
-        """The current (or most recently configured) device path."""
         return self._device_path

@@ -8,10 +8,15 @@ services:
     ports:
       - "8000:8000"   # REST API
       - "2100:2100/udp"  # DTLS Entertainment API
-    # devices:
-    #   - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough — uncomment when capture card is connected
-    # group_add:
-    #   - video  # Required for /dev/video0 device access (host GID 44)
+    devices:
+       - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough
+    group_add:
+       - video  # Required for /dev/video0 device access (host GID 44)
+#    usbipd list
+#    usbipd bind --busid <busid>
+#    usbipd attach --wsl --busid <busid>
+
+#    /gsd:discuss-phase 5 --auto
     volumes:
       - hue_data:/app/data  # INFR-05: SQLite persistence
     environment:
@@ -29,7 +34,7 @@ services:
     build:
       context: ./Frontend
     ports:
-      - "80:80"
+      - "8091:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Makes host.docker.internal resolve to host on Linux
     depends_on:

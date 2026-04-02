@@ -1,26 +1,13 @@
 """Unit tests for Backend/services/capture_service.py."""
 import asyncio
 import os
-from unittest.mock import MagicMock, patch, call
+import threading
+from unittest.mock import MagicMock, patch, PropertyMock
 
 import numpy as np
 import pytest
 
 from services.capture_service import LatestFrameCapture, CAPTURE_DEVICE
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def mock_cap():
-    """A pre-configured MagicMock for cv2.VideoCapture."""
-    cap = MagicMock()
-    cap.isOpened.return_value = True
-    cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
-    return cap
 
 
 # ---------------------------------------------------------------------------
@@ -39,10 +26,20 @@ class TestInit:
         svc = LatestFrameCapture()
         assert svc._device_path == "/dev/video0"
 
-    def test_cap_is_none(self):
-        """__init__ leaves _cap as None (device not opened yet)."""
+    def test_fd_is_none(self):
+        """__init__ leaves _fd as None (device not opened yet)."""
         svc = LatestFrameCapture()
-        assert svc._cap is None
+        assert svc._fd is None
+
+    def test_latest_frame_is_none(self):
+        """__init__ leaves _latest_frame as None."""
+        svc = LatestFrameCapture()
+        assert svc._latest_frame is None
+
+    def test_buffers_empty(self):
+        """__init__ starts with empty buffer list."""
+        svc = LatestFrameCapture()
+        assert svc._buffers == []
 
 
 # ---------------------------------------------------------------------------
@@ -51,81 +48,51 @@ class TestInit:
 
 
 class TestOpen:
-    def test_open_creates_video_capture_with_v4l2(self, mock_cap):
-        """open() creates cv2.VideoCapture with CAP_V4L2 backend."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200  # Realistic constant value
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237  # MJPG
-            svc = LatestFrameCapture("/dev/video0")
+    def test_open_raises_when_device_not_found(self):
+        """open() raises RuntimeError when device path does not exist."""
+        svc = LatestFrameCapture("/dev/nonexistent")
+        with pytest.raises(RuntimeError, match="Capture device not found"):
             svc.open()
-            mock_cv2.VideoCapture.assert_called_once_with("/dev/video0", mock_cv2.CAP_V4L2)
 
-    def test_open_sets_mjpg_fourcc_and_resolution(self, mock_cap):
-        """open() sets MJPG fourcc, 640 width, 480 height on the capture."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237  # MJPG
-            svc = LatestFrameCapture("/dev/video0")
-            svc.open()
-            # Verify fourcc, width, height were set
-            set_calls = mock_cap.set.call_args_list
-            prop_values = {c.args[0]: c.args[1] for c in set_calls}
-            assert prop_values[mock_cv2.CAP_PROP_FRAME_WIDTH] == 640
-            assert prop_values[mock_cv2.CAP_PROP_FRAME_HEIGHT] == 480
-            assert prop_values[mock_cv2.CAP_PROP_FOURCC] == mock_cv2.VideoWriter_fourcc.return_value
-
-    def test_open_discards_first_3_frames(self, mock_cap):
-        """open() discards first 3 frames to avoid black frame issue."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237
-            svc = LatestFrameCapture("/dev/video0")
-            svc.open()
-            # cap.read() should have been called exactly 3 times (discard warmup frames)
-            assert mock_cap.read.call_count == 3
-
-    def test_open_raises_runtime_error_when_device_not_opened(self):
-        """open() raises RuntimeError when device cannot be opened."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            bad_cap = MagicMock()
-            bad_cap.isOpened.return_value = False
-            mock_cv2.VideoCapture.return_value = bad_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237
-            svc = LatestFrameCapture("/dev/nonexistent")
-            with pytest.raises(RuntimeError, match="Could not open capture device"):
+    def test_open_raises_when_os_open_fails(self, tmp_path):
+        """open() raises RuntimeError when os.open fails."""
+        # Create a file so path exists, but patch os.open to fail
+        fake_dev = tmp_path / "video99"
+        fake_dev.touch()
+        svc = LatestFrameCapture(str(fake_dev))
+        with patch("services.capture_service.os.open", side_effect=OSError("Permission denied")):
+            with pytest.raises(RuntimeError, match="Cannot open"):
                 svc.open()
 
-    def test_open_with_new_path_closes_existing(self, mock_cap):
-        """open(new_path) releases existing cap before reopening."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237
-            svc = LatestFrameCapture("/dev/video0")
+    def test_open_stores_device_path_override(self):
+        """open(new_path) updates stored _device_path."""
+        svc = LatestFrameCapture("/dev/video0")
+        svc.open = lambda path=None: setattr(svc, '_device_path', path or svc._device_path)
+        svc.open("/dev/video1")
+        assert svc._device_path == "/dev/video1"
+
+    def test_open_calls_release_first(self):
+        """open() calls release() before opening to clean up prior state."""
+        svc = LatestFrameCapture("/dev/nonexistent")
+        svc.release = MagicMock()
+        # Will fail because device doesn't exist, but release should be called first
+        with pytest.raises(RuntimeError):
             svc.open()
-            mock_cap.reset_mock()
-            # Open again with a new path — should release first
-            svc.open("/dev/video1")
-            mock_cap.release.assert_called_once()
-            # VideoCapture should be called again for the new path
-            assert mock_cv2.VideoCapture.call_count == 2
-            mock_cv2.VideoCapture.assert_called_with("/dev/video1", mock_cv2.CAP_V4L2)
+        svc.release.assert_called_once()
+
+    def test_open_closes_fd_on_setup_failure(self, tmp_path):
+        """open() closes the fd if _setup_device raises."""
+        fake_dev = tmp_path / "video99"
+        fake_dev.touch()
+        svc = LatestFrameCapture(str(fake_dev))
+        mock_fd = 42
+        with patch("services.capture_service.os.open", return_value=mock_fd), \
+             patch.object(svc, "_setup_device", side_effect=RuntimeError("setup failed")), \
+             patch("services.capture_service.os.close") as mock_close:
+            with pytest.raises(RuntimeError, match="setup failed"):
+                svc.open()
+            mock_close.assert_called_once_with(mock_fd)
+            assert svc._fd is None
 
 
 # ---------------------------------------------------------------------------
@@ -134,27 +101,60 @@ class TestOpen:
 
 
 class TestRelease:
-    def test_release_releases_capture_and_sets_none(self, mock_cap):
-        """release() calls cap.release() and sets _cap to None."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237
-            svc = LatestFrameCapture()
-            svc.open()
-            svc.release()
-            mock_cap.release.assert_called()
-            assert svc._cap is None
-
-    def test_release_safe_when_cap_is_none(self):
-        """release() does not raise when _cap is already None."""
+    def test_release_safe_when_not_opened(self):
+        """release() does not raise when device was never opened."""
         svc = LatestFrameCapture()
-        # Should not raise
         svc.release()
-        assert svc._cap is None
+        assert svc._fd is None
+
+    def test_release_closes_fd(self):
+        """release() closes the file descriptor."""
+        svc = LatestFrameCapture()
+        svc._fd = 42
+        svc._buffers = []
+        svc._reader_thread = None
+        with patch("services.capture_service.fcntl.ioctl"), \
+             patch("services.capture_service.os.close") as mock_close:
+            svc.release()
+        mock_close.assert_called_once_with(42)
+        assert svc._fd is None
+
+    def test_release_closes_mmap_buffers(self):
+        """release() closes all mmap buffers."""
+        svc = LatestFrameCapture()
+        svc._fd = 42
+        buf1 = MagicMock()
+        buf2 = MagicMock()
+        svc._buffers = [buf1, buf2]
+        svc._reader_thread = None
+        with patch("services.capture_service.fcntl.ioctl"), \
+             patch("services.capture_service.os.close"):
+            svc.release()
+        buf1.close.assert_called_once()
+        buf2.close.assert_called_once()
+        assert svc._buffers == []
+
+    def test_release_sets_stop_event(self):
+        """release() signals the reader thread to stop."""
+        svc = LatestFrameCapture()
+        svc.release()
+        assert svc._stop_event.is_set()
+
+    def test_release_clears_latest_frame(self):
+        """release() sets _latest_frame to None."""
+        svc = LatestFrameCapture()
+        svc._latest_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        svc.release()
+        assert svc._latest_frame is None
+
+    def test_release_joins_reader_thread(self):
+        """release() joins the reader thread if it exists."""
+        svc = LatestFrameCapture()
+        mock_thread = MagicMock()
+        svc._reader_thread = mock_thread
+        svc.release()
+        mock_thread.join.assert_called_once_with(timeout=3)
+        assert svc._reader_thread is None
 
 
 # ---------------------------------------------------------------------------
@@ -164,56 +164,30 @@ class TestRelease:
 
 class TestGetFrame:
     @pytest.mark.asyncio
-    async def test_get_frame_calls_asyncio_to_thread(self, mock_cap):
-        """get_frame() delegates to asyncio.to_thread with _read_frame."""
-        with patch("services.capture_service.cv2") as mock_cv2:
-            mock_cv2.VideoCapture.return_value = mock_cap
-            mock_cv2.CAP_V4L2 = 200
-            mock_cv2.CAP_PROP_FOURCC = 6
-            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
-            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
-            mock_cv2.VideoWriter_fourcc.return_value = 1196444237
-            svc = LatestFrameCapture()
-            svc.open()
-            # After warmup reads, reset mock count
-            mock_cap.reset_mock()
-            mock_cap.isOpened.return_value = True
-            mock_cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
-
-            frame = await svc.get_frame()
-            assert frame is not None
-            assert frame.shape == (480, 640, 3)
-            # cap.read() should have been called exactly once for the frame
-            assert mock_cap.read.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_get_frame_raises_when_cap_is_none(self):
-        """get_frame() raises RuntimeError when _cap is None (device not open)."""
+    async def test_get_frame_raises_when_not_open(self):
+        """get_frame() raises RuntimeError when _fd is None (device not open)."""
         svc = LatestFrameCapture()
         with pytest.raises(RuntimeError, match="not open"):
             await svc.get_frame()
 
-
-# ---------------------------------------------------------------------------
-# _read_frame()
-# ---------------------------------------------------------------------------
-
-
-class TestReadFrame:
-    def test_read_frame_raises_when_cap_read_fails(self, mock_cap):
-        """_read_frame raises RuntimeError when cap.read() returns False."""
-        mock_cap.read.return_value = (False, None)
-        mock_cap.isOpened.return_value = True
+    @pytest.mark.asyncio
+    async def test_get_frame_raises_when_no_frame_available(self):
+        """get_frame() raises RuntimeError when no frame has been captured yet."""
         svc = LatestFrameCapture()
-        svc._cap = mock_cap
-        with pytest.raises(RuntimeError, match="cap.read\\(\\) returned False"):
-            svc._read_frame()
+        svc._fd = 42  # pretend device is open
+        svc._latest_frame = None
+        with pytest.raises(RuntimeError, match="No frame available"):
+            await svc.get_frame()
 
-    def test_read_frame_raises_when_cap_is_none(self):
-        """_read_frame raises RuntimeError when _cap is None."""
+    @pytest.mark.asyncio
+    async def test_get_frame_returns_latest_frame(self):
+        """get_frame() returns the latest frame stored by the reader thread."""
         svc = LatestFrameCapture()
-        with pytest.raises(RuntimeError, match="not open"):
-            svc._read_frame()
+        svc._fd = 42
+        expected = np.zeros((480, 640, 3), dtype=np.uint8)
+        svc._latest_frame = expected
+        frame = await svc.get_frame()
+        assert frame is expected
 
 
 # ---------------------------------------------------------------------------
@@ -222,15 +196,12 @@ class TestReadFrame:
 
 
 class TestCaptureDeviceEnvVar:
-    def test_capture_device_readable_from_env(self, monkeypatch):
+    def test_capture_device_readable_from_env(self):
         """CAPTURE_DEVICE module constant uses CAPTURE_DEVICE env var when set."""
-        # Verify the constant exists and is a string
         assert isinstance(CAPTURE_DEVICE, str)
 
-    def test_capture_device_default_is_video0(self, monkeypatch):
+    def test_capture_device_default_is_video0(self):
         """CAPTURE_DEVICE defaults to /dev/video0 when env var is unset."""
-        # When env var is absent, CAPTURE_DEVICE should be /dev/video0
-        # We test the actual imported value — if env var wasn't set during import, default applies
         if os.getenv("CAPTURE_DEVICE") is None:
             assert CAPTURE_DEVICE == "/dev/video0"
 
