@@ -57,8 +57,13 @@ def _make_streaming_db_cursor(rows):
     return cursor
 
 
-def _make_db_with_rows(rows, bridge_row=None):
-    """Mock aiosqlite db with execute returning given rows."""
+def _make_db_with_rows(region_rows, bridge_row=None):
+    """Mock aiosqlite db with execute returning given rows.
+
+    The db.execute mock returns:
+      1st call: bridge_config cursor (fetchone)
+      2nd call: regions cursor (fetchall)
+    """
     if bridge_row is None:
         bridge_row = {
             "ip_address": "192.168.1.100",
@@ -76,7 +81,7 @@ def _make_db_with_rows(rows, bridge_row=None):
     else:
         bridge_row_mock = bridge_row
 
-    channel_cursor = _make_streaming_db_cursor(rows)
+    region_cursor = _make_streaming_db_cursor(region_rows)
 
     bridge_cursor = MagicMock()
     bridge_cursor.fetchone = AsyncMock(return_value=bridge_row_mock)
@@ -84,13 +89,26 @@ def _make_db_with_rows(rows, bridge_row=None):
     bridge_cursor.__aexit__ = AsyncMock(return_value=False)
 
     db = MagicMock()
-    # First call returns bridge cursor, second returns channel cursor
-    db.execute = AsyncMock(side_effect=[bridge_cursor, channel_cursor])
+    # First call returns bridge cursor, second returns regions cursor
+    db.execute = AsyncMock(side_effect=[bridge_cursor, region_cursor])
     return db, bridge_row_mock
 
 
+def _make_region_row(light_id, polygon_points=None, region_id="region-001"):
+    """Create a mock row for regions table with light_id."""
+    if polygon_points is None:
+        polygon_points = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    row = MagicMock()
+    row.__getitem__ = MagicMock(side_effect=lambda k: {
+        "id": region_id,
+        "polygon": json.dumps(polygon_points),
+        "light_id": light_id,
+    }[k])
+    return row
+
+
 def _make_channel_row(channel_id, polygon_points=None):
-    """Create a mock row for light_assignments JOIN regions."""
+    """Create a mock row for light_assignments JOIN regions (legacy compat)."""
     if polygon_points is None:
         polygon_points = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
     row = MagicMock()
@@ -146,7 +164,7 @@ async def test_start_transitions_to_streaming(service_imports):
     StreamingService, mock_create_bridge, mock_entertainment_cls, mock_streaming_cls = service_imports
 
     mocks = _make_mocks()
-    rows = [_make_channel_row(0)]
+    rows = [_make_region_row("light-001")]
     db, _ = _make_db_with_rows(rows)
 
     mock_streaming_instance = mocks["streaming"]
@@ -161,25 +179,26 @@ async def test_start_transitions_to_streaming(service_imports):
 
     with patch("asyncio.to_thread", side_effect=fake_to_thread):
         with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
-            # Make frame loop exit quickly
-            run_count = 0
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={"light-001": [0]}):
+                # Make frame loop exit quickly
+                run_count = 0
 
-            async def controlled_get_frame():
-                nonlocal run_count
-                run_count += 1
-                if run_count > 1:
-                    service._run_event.clear()
-                return _solid_blue_frame()
+                async def controlled_get_frame():
+                    nonlocal run_count
+                    run_count += 1
+                    if run_count > 1:
+                        service._run_event.clear()
+                    return _solid_blue_frame()
 
-            mocks["capture"].get_frame = AsyncMock(side_effect=controlled_get_frame)
+                mocks["capture"].get_frame = AsyncMock(side_effect=controlled_get_frame)
 
-            await service.start("cfg-001")
+                await service.start("cfg-001")
 
-            assert service.state in ("starting", "streaming")
+                assert service.state in ("starting", "streaming")
 
-            # Wait for the loop to finish
-            if service._task:
-                await service._task
+                # Wait for the loop to finish
+                if service._task:
+                    await service._task
 
     assert service.state == "idle"
 
@@ -245,13 +264,13 @@ async def test_stop_clears_run_event_and_waits_for_task(service_imports):
 
 @pytest.mark.asyncio
 async def test_load_channel_map_returns_dict_with_masks(service_imports):
-    """_load_channel_map should return {channel_id: mask_array} from db."""
+    """_load_channel_map should return {channel_id: mask_array} from regions + bridge."""
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
     rows = [
-        _make_channel_row(0),
-        _make_channel_row(1, [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5]]),
+        _make_region_row("light-A", region_id="r1"),
+        _make_region_row("light-B", [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5]], region_id="r2"),
     ]
 
     cursor = _make_streaming_db_cursor(rows)
@@ -259,7 +278,9 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
     db.execute = AsyncMock(return_value=cursor)
 
     service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
-    channel_map = await service._load_channel_map("cfg-001")
+    with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
+               return_value={"light-A": [0], "light-B": [1]}):
+        channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
 
     assert len(channel_map) == 2
     assert 0 in channel_map
@@ -273,7 +294,7 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
 
 @pytest.mark.asyncio
 async def test_load_channel_map_empty_returns_empty_dict(service_imports):
-    """_load_channel_map with no rows should return empty dict."""
+    """_load_channel_map with no regions should return empty dict."""
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
@@ -282,9 +303,32 @@ async def test_load_channel_map_empty_returns_empty_dict(service_imports):
     db.execute = AsyncMock(return_value=cursor)
 
     service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
-    channel_map = await service._load_channel_map("cfg-001")
+    with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
+               return_value={}):
+        channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
 
     assert channel_map == {}
+
+
+@pytest.mark.asyncio
+async def test_load_channel_map_gradient_light_maps_multiple_channels(service_imports):
+    """A region assigned to a gradient light should map to all its channels."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    rows = [_make_region_row("gradient-light", region_id="r1")]
+
+    cursor = _make_streaming_db_cursor(rows)
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=cursor)
+
+    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
+               return_value={"gradient-light": [1, 2, 3]}):
+        channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
+
+    assert len(channel_map) == 3
+    assert 1 in channel_map and 2 in channel_map and 3 in channel_map
 
 
 # ---------------------------------------------------------------------------
@@ -928,7 +972,7 @@ async def test_stop_sequence_order(service_imports):
     StreamingService, _, __, mock_streaming_cls = service_imports
 
     mocks = _make_mocks()
-    rows = [_make_channel_row(0)]
+    rows = [_make_region_row("light-001")]
     db, _ = _make_db_with_rows(rows)
 
     mock_streaming_instance = mocks["streaming"]
@@ -966,11 +1010,12 @@ async def test_stop_sequence_order(service_imports):
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", side_effect=track_deactivate):
-            with patch("asyncio.to_thread", side_effect=fake_to_thread):
-                with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await service.start("cfg-001")
-                    if service._task:
-                        await service._task
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={"light-001": [0]}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-001")
+                        if service._task:
+                            await service._task
 
     assert call_order == ["stop_stream", "deactivate", "release"], \
         f"Expected stop_stream -> deactivate -> release, got: {call_order}"

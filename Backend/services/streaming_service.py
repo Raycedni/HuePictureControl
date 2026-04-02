@@ -15,7 +15,11 @@ import time
 from hue_entertainment_pykit import create_bridge, Entertainment, Streaming
 
 from services.color_math import extract_region_color, rgb_to_xy, build_polygon_mask
-from services.hue_client import activate_entertainment_config, deactivate_entertainment_config
+from services.hue_client import (
+    activate_entertainment_config,
+    deactivate_entertainment_config,
+    resolve_light_to_channel_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +138,7 @@ class StreamingService:
             name = bridge_row["name"]
 
             # 2. Load channel map once (masks are constant for a given config)
-            channel_map = await self._load_channel_map(config_id)
+            channel_map = await self._load_channel_map(config_id, bridge_ip, username)
 
             # 3. Build pykit objects
             bridge = create_bridge(
@@ -212,34 +216,53 @@ class StreamingService:
     # Internal: channel map
     # ------------------------------------------------------------------
 
-    async def _load_channel_map(self, config_id: str) -> dict:
-        """Load channel map from SQLite: {channel_id: polygon_mask}.
+    async def _load_channel_map(
+        self, config_id: str, bridge_ip: str, username: str
+    ) -> dict:
+        """Load channel map: {channel_id: polygon_mask}.
 
-        Executes:
-            SELECT la.channel_id, r.polygon
-            FROM light_assignments la
-            JOIN regions r ON la.region_id = r.id
-            WHERE la.entertainment_config_id = ?
+        Resolves regions.light_id → channel_ids by querying the bridge's
+        entertainment config channel-to-device mapping. Each region with a
+        light_id gets mapped to all channels belonging to that light (handles
+        gradient lights with multiple segments).
+
+        Args:
+            config_id: Entertainment configuration UUID.
+            bridge_ip: Bridge IP for channel resolution.
+            username: Bridge application key.
 
         Returns:
             dict mapping channel_id (int) to uint8 mask ndarray (480x640).
         """
-        query = """
-            SELECT la.channel_id, r.polygon
-            FROM light_assignments la
-            JOIN regions r ON la.region_id = r.id
-            WHERE la.entertainment_config_id = ?
-        """
-        async with await self._db.execute(query, (config_id,)) as cursor:
+        # Resolve light_id -> channel_ids from the bridge
+        light_to_channels = await resolve_light_to_channel_map(
+            bridge_ip, username, config_id
+        )
+
+        # Load regions that have a light_id assigned
+        query = "SELECT id, polygon, light_id FROM regions WHERE light_id IS NOT NULL"
+        async with await self._db.execute(query) as cursor:
             rows = await cursor.fetchall()
 
         channel_map = {}
         for row in rows:
-            channel_id = row["channel_id"]
+            light_id = row["light_id"]
+            channel_ids = light_to_channels.get(light_id, [])
+            if not channel_ids:
+                logger.warning(
+                    "Region %s has light_id=%s but no matching channels in config %s",
+                    row["id"], light_id, config_id,
+                )
+                continue
+
             polygon_points = json.loads(row["polygon"])
             mask = build_polygon_mask(polygon_points)
-            channel_map[channel_id] = mask
+            for channel_id in channel_ids:
+                channel_map[channel_id] = mask
 
+        logger.info(
+            "Loaded channel map: %d channels from %d regions", len(channel_map), len(rows)
+        )
         return channel_map
 
     # ------------------------------------------------------------------
@@ -264,6 +287,7 @@ class StreamingService:
         """
         seq = 0
         packets_sent = 0
+        prev_t0 = time.monotonic()
 
         while self._run_event.is_set():
             t0 = time.monotonic()
@@ -304,9 +328,13 @@ class StreamingService:
             elapsed = time.monotonic() - t0
             latency_ms = elapsed * 1000.0
 
+            # FPS = actual loop rate (includes sleep), not just processing speed
+            cycle_time = t0 - prev_t0
+            prev_t0 = t0
+
             # Silent metrics update — StatusBroadcaster 1 Hz heartbeat handles delivery
             self._broadcaster.update_metrics({
-                "fps": round(1.0 / max(elapsed, 1e-6), 1),
+                "fps": round(1.0 / max(cycle_time, 1e-6), 1) if seq > 1 else self.TARGET_HZ,
                 "latency_ms": round(latency_ms, 1),
                 "packets_sent": packets_sent,
                 "seq": seq,
