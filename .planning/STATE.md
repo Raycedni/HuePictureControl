@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Multi-Camera Support
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-04-03T17:31:19.514Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-04-03T17:53:35.105Z"
 last_activity: 2026-04-03
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 20
 ---
 
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-03)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** v1.1 Phase 8 — Capture Registry
+**Current focus:** Phase 08 — capture-registry
 
 ## Current Position
 
-Phase: 8
-Plan: Not started
+Phase: 08 (capture-registry) — EXECUTING
+Plan: 2 of 2
 Status: Ready to execute
 Last activity: 2026-04-03
 
@@ -52,6 +52,7 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 
 *Updated after each plan completion*
 | Phase 07 P02 | 750 | 2 tasks | 4 files |
+| Phase 08 P01 | 8 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,8 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 - [Phase 07]: enumerate_capture_devices + get_stable_id wrapped in run_in_executor for async FastAPI context
 - [Phase 07]: GET /api/cameras always returns known_cameras rows to preserve disconnected device history per D-06
 - [Phase 07]: PUT /api/cameras/assignments validates camera_stable_id exists in known_cameras before upsert
+- [Phase 08-01]: Used threading.Lock (not asyncio.Lock) in CaptureRegistry — callers use asyncio.to_thread so methods run from thread-pool threads
+- [Phase 08-01]: CaptureRegistry.shutdown() catches per-backend exceptions to ensure all backends released even if one fails
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T17:31:19.498Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-capture-registry/08-CONTEXT.md
+Last session: 2026-04-03T17:53:35.090Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None

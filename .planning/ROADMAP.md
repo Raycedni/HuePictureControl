@@ -198,7 +198,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 08-01-PLAN.md - CaptureRegistry class with ref-counted acquire/release/shutdown
+- [x] 08-01-PLAN.md - CaptureRegistry class with ref-counted acquire/release/shutdown
 - [ ] 08-02-PLAN.md - StreamingService registry integration + lifespan wiring + router backward compat
 
 ---
@@ -322,7 +322,7 @@ Plans:
 | 5. Gradient Device Support and Polish | v1.0 | 2/2 | Complete | 2026-03-24 |
 | 6. Hardening and Deployment | v1.0 | TBD | Complete | 2026-03-24 |
 | 7. Device Enumeration and Camera Assignment Schema | v1.1 | 2/2 | Complete   | 2026-04-03 |
-| 8. Capture Registry | v1.1 | 0/2 | In Progress | - |
+| 8. Capture Registry | v1.1 | 1/2 | In Progress|  |
 | 9. Preview Routing and Region API | v1.1 | 0/TBD | Not started | - |
 | 10. Frontend Camera Selector | v1.1 | 0/TBD | Not started | - |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 0/TBD | Not started | - |

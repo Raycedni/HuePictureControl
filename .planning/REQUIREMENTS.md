@@ -77,7 +77,7 @@
 
 - [ ] **MCAP-01**: StreamingService uses the assigned camera for each entertainment config instead of a global singleton
 - [ ] **MCAP-02**: Preview WebSocket serves frames from the zone's assigned camera, not a global device
-- [ ] **MCAP-03**: Multiple entertainment zones can stream simultaneously from different cameras
+- [x] **MCAP-03**: Multiple entertainment zones can stream simultaneously from different cameras
 
 ### Camera UI
 
@@ -89,6 +89,51 @@
 
 - [ ] **DOCK-01**: Docker Compose supports multiple video device passthrough
 - [ ] **DOCK-02**: Documentation for adding/configuring multiple capture devices
+
+## v1.2 Requirements
+
+### Virtual Camera Infrastructure
+
+- [ ] **VCAM-01**: Backend manages v4l2loopback virtual camera devices — creates on demand when a wireless source starts, destroys on stop/shutdown
+- [ ] **VCAM-02**: Virtual cameras appear in `GET /api/cameras` alongside physical devices, tagged with `source_type: "wireless"` and the originating protocol
+- [ ] **VCAM-03**: All virtual devices and feeding pipelines are cleaned up on service shutdown or container stop
+
+### Miracast Receiver
+
+- [ ] **MIRA-01**: Backend runs a Miracast (WiFi Direct) receiver via MiracleCast that Windows and older Android devices can discover and connect to
+- [ ] **MIRA-02**: API endpoint reports WiFi adapter P2P/WiFi Direct capability before user attempts to start Miracast
+- [ ] **MIRA-03**: Miracast receiver advertises a configurable display name on the network (default: "HuePictureControl")
+- [ ] **MIRA-04**: Connected Miracast H.264 RTP stream is piped to a virtual V4L2 device via FFmpeg in real time
+
+### scrcpy Android Fallback
+
+- [ ] **SCPY-01**: Backend manages ADB wireless connections to Android devices given an IP address
+- [ ] **SCPY-02**: scrcpy mirrors an Android device's screen to a virtual V4L2 device via v4l2loopback
+- [ ] **SCPY-03**: Starting a scrcpy session requires only the Android device IP — backend handles `adb connect` and scrcpy launch
+
+### Wireless Pipeline
+
+- [ ] **WPIP-01**: FFmpeg subprocesses pipe wireless input streams (Miracast RTP, scrcpy output) to v4l2loopback virtual devices
+- [ ] **WPIP-02**: Pipeline health is monitored — stalled or crashed FFmpeg processes are detected and reported via status API
+- [ ] **WPIP-03**: Stopping a wireless source kills the FFmpeg pipeline and releases the virtual device within 5 seconds
+
+### Wireless API
+
+- [ ] **WAPI-01**: `GET /api/wireless/capabilities` reports available protocols, NIC status, and installed dependency versions
+- [ ] **WAPI-02**: `POST /api/wireless/miracast/start` and `POST /api/wireless/miracast/stop` control the Miracast receiver lifecycle
+- [ ] **WAPI-03**: `POST /api/wireless/scrcpy/start` (with `android_ip` body) and `POST /api/wireless/scrcpy/{id}/stop` control scrcpy sessions
+- [ ] **WAPI-04**: `GET /api/wireless/sources` lists active wireless input sessions with state, protocol, virtual device path, and connected client info
+
+### Wireless Docker
+
+- [ ] **WDCK-01**: Docker image includes v4l2loopback-dkms, MiracleCast, scrcpy, FFmpeg, ADB, and `iw` utilities
+- [ ] **WDCK-02**: Container runs with necessary Linux capabilities (`NET_ADMIN`, `SYS_MODULE`) for WiFi Direct and kernel module loading
+- [ ] **WDCK-03**: WiFi adapter is passed through to the container alongside video capture devices
+
+### Wireless Frontend (minimal)
+
+- [ ] **WFNT-01**: Wireless input sources appear in the camera selector alongside physical cameras
+- [ ] **WFNT-02**: UI provides controls to start/stop Miracast receiver and scrcpy sessions
 
 ## Out of Scope
 
@@ -145,19 +190,41 @@
 | CAMA-04 | Phase 9 | Pending |
 | MCAP-01 | Phase 8 | Pending |
 | MCAP-02 | Phase 9 | Pending |
-| MCAP-03 | Phase 8 | Pending |
+| MCAP-03 | Phase 8 | Complete |
 | CMUI-01 | Phase 10 | Pending |
 | CMUI-02 | Phase 10 | Pending |
 | CMUI-03 | Phase 10 | Pending |
 | DOCK-01 | Phase 11 | Pending |
 | DOCK-02 | Phase 11 | Pending |
 
+| VCAM-01 | Phase 12 | Pending |
+| VCAM-02 | Phase 12 | Pending |
+| VCAM-03 | Phase 12 | Pending |
+| MIRA-01 | Phase 13 | Pending |
+| MIRA-02 | Phase 13 | Pending |
+| MIRA-03 | Phase 13 | Pending |
+| MIRA-04 | Phase 13 | Pending |
+| SCPY-01 | Phase 14 | Pending |
+| SCPY-02 | Phase 14 | Pending |
+| SCPY-03 | Phase 14 | Pending |
+| WPIP-01 | Phase 12 | Pending |
+| WPIP-02 | Phase 12 | Pending |
+| WPIP-03 | Phase 12 | Pending |
+| WAPI-01 | Phase 12 | Pending |
+| WAPI-02 | Phase 13 | Pending |
+| WAPI-03 | Phase 14 | Pending |
+| WAPI-04 | Phase 12 | Pending |
+| WDCK-01 | Phase 15 | Pending |
+| WDCK-02 | Phase 15 | Pending |
+| WDCK-03 | Phase 15 | Pending |
+| WFNT-01 | Phase 14 | Pending |
+| WFNT-02 | Phase 14 | Pending |
+
 **Coverage:**
 - v1.0 requirements: 30 total — all validated
-- v1.1 requirements: 17 total
-- v1.1 mapped to phases: 17
-- v1.1 unmapped: 0 ✓
+- v1.1 requirements: 17 total, mapped: 17, unmapped: 0 ✓
+- v1.2 requirements: 22 total, mapped: 22, unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-04-03 after v1.1 roadmap creation*
+*Last updated: 2026-04-03 after v1.2 milestone creation*
