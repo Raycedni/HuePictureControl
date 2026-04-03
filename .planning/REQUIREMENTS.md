@@ -104,29 +104,60 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEVC-01 | — | Pending |
-| DEVC-02 | — | Pending |
-| DEVC-03 | — | Pending |
-| DEVC-04 | — | Pending |
-| DEVC-05 | — | Pending |
-| CAMA-01 | — | Pending |
-| CAMA-02 | — | Pending |
-| CAMA-03 | — | Pending |
-| CAMA-04 | — | Pending |
-| MCAP-01 | — | Pending |
-| MCAP-02 | — | Pending |
-| MCAP-03 | — | Pending |
-| CMUI-01 | — | Pending |
-| CMUI-02 | — | Pending |
-| CMUI-03 | — | Pending |
-| DOCK-01 | — | Pending |
-| DOCK-02 | — | Pending |
+| BRDG-01 | Phase 1 | Validated |
+| BRDG-02 | Phase 1 | Validated |
+| BRDG-03 | Phase 1 | Validated |
+| BRDG-04 | Phase 5 | Validated |
+| BRDG-05 | Phase 1 | Validated |
+| CAPT-01 | Phase 2 | Validated |
+| CAPT-02 | Phase 2 | Validated |
+| CAPT-03 | Phase 3 | Validated |
+| CAPT-04 | Phase 3 | Validated |
+| CAPT-05 | Phase 2 | Validated |
+| REGN-01 | Phase 4 | Validated |
+| REGN-02 | Phase 4 | Validated |
+| REGN-03 | Phase 4 | Validated |
+| REGN-04 | Phase 3.1 | Validated |
+| REGN-05 | Phase 3.1 | Validated |
+| COLR-01 | Phase 2 | Validated |
+| COLR-02 | Phase 2 | Validated |
+| COLR-03 | Phase 3 | Validated |
+| STRM-01 | Phase 3 | Validated |
+| STRM-02 | Phase 3 | Validated |
+| STRM-03 | Phase 3 | Validated |
+| STRM-04 | Phase 3 | Validated |
+| STRM-05 | Phase 3 | Validated |
+| FRNT-01 | Phase 4 | Validated |
+| FRNT-02 | Phase 4 | Validated |
+| FRNT-03 | Phase 3 | Validated |
+| FRNT-04 | Phase 4 | Validated |
+| INFR-01 | Phase 1 | Validated |
+| INFR-02 | Phase 1 | Validated |
+| INFR-03 | Phase 1 | Validated |
+| DEVC-01 | Phase 7 | Pending |
+| DEVC-02 | Phase 7 | Pending |
+| DEVC-03 | Phase 7 | Pending |
+| DEVC-04 | Phase 7 | Pending |
+| DEVC-05 | Phase 7 | Pending |
+| CAMA-01 | Phase 7 | Pending |
+| CAMA-02 | Phase 7 | Pending |
+| CAMA-03 | Phase 7 | Pending |
+| CAMA-04 | Phase 9 | Pending |
+| MCAP-01 | Phase 8 | Pending |
+| MCAP-02 | Phase 9 | Pending |
+| MCAP-03 | Phase 8 | Pending |
+| CMUI-01 | Phase 10 | Pending |
+| CMUI-02 | Phase 10 | Pending |
+| CMUI-03 | Phase 10 | Pending |
+| DOCK-01 | Phase 11 | Pending |
+| DOCK-02 | Phase 11 | Pending |
 
 **Coverage:**
+- v1.0 requirements: 30 total — all validated
 - v1.1 requirements: 17 total
-- Mapped to phases: 0
-- Unmapped: 17 ⚠️
+- v1.1 mapped to phases: 17
+- v1.1 unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-04-03 after milestone v1.1 definition*
+*Last updated: 2026-04-03 after v1.1 roadmap creation*
