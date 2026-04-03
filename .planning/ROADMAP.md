@@ -178,7 +178,11 @@ Plans:
   3. User can trigger a manual reconnect for a camera device that has become disconnected
   4. Camera selection persists to the database per entertainment zone and survives a `docker compose restart`
   5. Zones with no explicit camera assignment fall back to the default capture device without error
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Device enumeration service, stable identity module, DB schema + tests
+- [ ] 07-02-PLAN.md — Cameras REST router, main.py wiring, frontend sysfs alert banner
 
 ---
 
@@ -243,7 +247,7 @@ Plans:
 | 4. Frontend Canvas Editor | v1.0 | 4/4 | Complete | 2026-03-24 |
 | 5. Gradient Device Support and Polish | v1.0 | 2/2 | Complete | 2026-03-24 |
 | 6. Hardening and Deployment | v1.0 | TBD | Complete | 2026-03-24 |
-| 7. Device Enumeration and Camera Assignment Schema | v1.1 | 0/TBD | Not started | - |
+| 7. Device Enumeration and Camera Assignment Schema | v1.1 | 0/2 | In progress | - |
 | 8. Capture Registry | v1.1 | 0/TBD | Not started | - |
 | 9. Preview Routing and Region API | v1.1 | 0/TBD | Not started | - |
 | 10. Frontend Camera Selector | v1.1 | 0/TBD | Not started | - |
