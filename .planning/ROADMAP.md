@@ -160,7 +160,7 @@ Plans:
 
 **Milestone Goal:** Replace the single static camera with a per-entertainment-zone camera selector, enabling each zone to independently use a different video capture device.
 
-- [ ] **Phase 7: Device Enumeration and Camera Assignment Schema** - Enumerate all V4L2 capture devices and persist camera-to-zone assignments in the database
+- [x] **Phase 7: Device Enumeration and Camera Assignment Schema** - Enumerate all V4L2 capture devices and persist camera-to-zone assignments in the database (completed 2026-04-03)
 - [ ] **Phase 8: Capture Registry** - Replace the global CaptureBackend singleton with a per-device registry that supports concurrent multi-zone capture
 - [ ] **Phase 9: Preview Routing and Region API** - Route preview WebSocket to the zone's assigned camera; expose camera_device in region CRUD
 - [ ] **Phase 10: Frontend Camera Selector** - Per-zone camera dropdown in the editor UI with live preview switching
@@ -181,8 +181,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Device enumeration service, stable identity module, DB schema + tests
-- [ ] 07-02-PLAN.md — Cameras REST router, main.py wiring, frontend sysfs alert banner
+- [x] 07-01-PLAN.md — Device enumeration service, stable identity module, DB schema + tests
+- [x] 07-02-PLAN.md — Cameras REST router, main.py wiring, frontend sysfs alert banner
 
 ---
 
@@ -247,7 +247,7 @@ Plans:
 | 4. Frontend Canvas Editor | v1.0 | 4/4 | Complete | 2026-03-24 |
 | 5. Gradient Device Support and Polish | v1.0 | 2/2 | Complete | 2026-03-24 |
 | 6. Hardening and Deployment | v1.0 | TBD | Complete | 2026-03-24 |
-| 7. Device Enumeration and Camera Assignment Schema | v1.1 | 0/2 | In progress | - |
+| 7. Device Enumeration and Camera Assignment Schema | v1.1 | 2/2 | Complete   | 2026-04-03 |
 | 8. Capture Registry | v1.1 | 0/TBD | Not started | - |
 | 9. Preview Routing and Region API | v1.1 | 0/TBD | Not started | - |
 | 10. Frontend Camera Selector | v1.1 | 0/TBD | Not started | - |

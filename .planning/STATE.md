@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Multi-Camera Support
 status: executing
-stopped_at: Phase 7 UI-SPEC approved
-last_updated: "2026-04-03T16:50:39.096Z"
-last_activity: 2026-04-03 -- Phase 07 execution started
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-04-03T17:10:32.733Z"
+last_activity: 2026-04-03
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 0
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-03)
 ## Current Position
 
 Phase: 07 (device-enumeration-and-camera-assignment-schema) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 07
-Last activity: 2026-04-03 -- Phase 07 execution started
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-04-03
 
 Progress: [░░░░░░░░░░] 0% (v1.1)
 
@@ -51,6 +51,7 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 | 11. Docker Multi-Device | TBD | - | - |
 
 *Updated after each plan completion*
+| Phase 07 P02 | 750 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,9 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 - [v1.1 design]: Device identity stored as USB VID/PID/serial (not raw /dev/videoN path) — verify sysfs accessibility inside Docker/WSL2 before finalizing schema; fallback to VIDIOC_QUERYCAP card name
 - [v1.1 design]: linuxpy>=0.24 for V4L2 enumeration (pure Python, zero C-extension conflicts with Python 3.12 pin)
 - [v1.1 design]: Preview WebSocket gains optional ?device= query param for per-zone routing
+- [Phase 07]: enumerate_capture_devices + get_stable_id wrapped in run_in_executor for async FastAPI context
+- [Phase 07]: GET /api/cameras always returns known_cameras rows to preserve disconnected device history per D-06
+- [Phase 07]: PUT /api/cameras/assignments validates camera_stable_id exists in known_cameras before upsert
 
 ### Pending Todos
 
@@ -73,6 +77,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T16:31:04.722Z
-Stopped at: Phase 7 UI-SPEC approved
-Resume file: .planning/phases/07-device-enumeration-and-camera-assignment-schema/07-UI-SPEC.md
+Last session: 2026-04-03T17:10:32.711Z
+Stopped at: Completed 07-02-PLAN.md
+Resume file: None

@@ -61,16 +61,16 @@
 ### Device Enumeration
 
 - [ ] **DEVC-01**: Backend enumerates all V4L2 video capture devices, filtering out metadata nodes via VIDIOC_QUERYCAP capability check
-- [ ] **DEVC-02**: API endpoint (`GET /api/cameras`) returns list of available cameras with device path and human-readable name
-- [ ] **DEVC-03**: Device list refreshes on demand when user opens camera selector (re-scans /dev/video*)
+- [x] **DEVC-02**: API endpoint (`GET /api/cameras`) returns list of available cameras with device path and human-readable name
+- [x] **DEVC-03**: Device list refreshes on demand when user opens camera selector (re-scans /dev/video*)
 - [ ] **DEVC-04**: Devices are identified by stable identity (sysfs VID/PID/serial) to survive USB re-plug path changes
-- [ ] **DEVC-05**: User can trigger a manual reconnect for a disconnected camera device
+- [x] **DEVC-05**: User can trigger a manual reconnect for a disconnected camera device
 
 ### Camera Assignment
 
 - [ ] **CAMA-01**: Camera is assigned per entertainment config (zone), not per-region — all regions in a zone share one camera
 - [ ] **CAMA-02**: Camera-to-entertainment-config mapping is persisted in the database and survives restarts
-- [ ] **CAMA-03**: When no camera is explicitly assigned, the system falls back to the default capture device
+- [x] **CAMA-03**: When no camera is explicitly assigned, the system falls back to the default capture device
 - [ ] **CAMA-04**: UI shows camera health status (connected/disconnected) per entertainment zone
 
 ### Multi-Camera Capture
@@ -135,13 +135,13 @@
 | INFR-02 | Phase 1 | Validated |
 | INFR-03 | Phase 1 | Validated |
 | DEVC-01 | Phase 7 | Pending |
-| DEVC-02 | Phase 7 | Pending |
-| DEVC-03 | Phase 7 | Pending |
+| DEVC-02 | Phase 7 | Complete |
+| DEVC-03 | Phase 7 | Complete |
 | DEVC-04 | Phase 7 | Pending |
-| DEVC-05 | Phase 7 | Pending |
+| DEVC-05 | Phase 7 | Complete |
 | CAMA-01 | Phase 7 | Pending |
 | CAMA-02 | Phase 7 | Pending |
-| CAMA-03 | Phase 7 | Pending |
+| CAMA-03 | Phase 7 | Complete |
 | CAMA-04 | Phase 9 | Pending |
 | MCAP-01 | Phase 8 | Pending |
 | MCAP-02 | Phase 9 | Pending |
