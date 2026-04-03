@@ -6,52 +6,78 @@ import { useRegionStore } from '@/store/useRegionStore'
 
 export function EditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [canvasWidth, setCanvasWidth] = useState(640)
-  const canvasHeight = Math.round(canvasWidth * (9 / 16)) // 16:9
+  const [canvasDims, setCanvasDims] = useState({ width: 640, height: 360 })
+  const [identityMode, setIdentityMode] = useState<string | null>(null)
 
   const regions = useRegionStore((s) => s.regions)
   const assignedCount = regions.filter((r) => r.light_id !== null).length
 
   useEffect(() => {
+    fetch('/api/cameras')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data) setIdentityMode(data.identity_mode) })
+      .catch(() => {}) // Silently ignore — alert simply won't show
+  }, [])
+
+  useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
+    function fitCanvas(containerW: number, containerH: number) {
+      const w = Math.floor(containerW)
+      const h = Math.floor(containerH)
+      if (w <= 0 || h <= 0) return
+      // Fit 16:9 within available space
+      const byWidth = { width: w, height: Math.round(w * 9 / 16) }
+      if (byWidth.height <= h) {
+        setCanvasDims(byWidth)
+      } else {
+        // Height-constrained
+        const fitW = Math.round(h * 16 / 9)
+        setCanvasDims({ width: fitW, height: h })
+      }
+    }
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (entry) {
-        const w = Math.floor(entry.contentRect.width)
-        setCanvasWidth(w)
+        fitCanvas(entry.contentRect.width, entry.contentRect.height)
       }
     })
     observer.observe(container)
 
     // Set initial size
-    setCanvasWidth(Math.floor(container.clientWidth))
+    fitCanvas(container.clientWidth, container.clientHeight)
 
     return () => observer.disconnect()
   }, [])
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex flex-col md:flex-row flex-1 min-h-0 text-left">
       {/* Left: canvas area ~70% */}
-      <div className="flex flex-col flex-[7]">
+      <div className="flex flex-col flex-1 md:flex-[7] min-h-0">
         <DrawingToolbar onDelete={handleEditorDelete} />
+        {identityMode === 'degraded' && (
+          <div className="bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs px-3 py-2 text-center">
+            Device identity is limited to capture card name. Devices may be misidentified if multiple identical cards are connected.
+          </div>
+        )}
         {assignedCount > 20 && (
           <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400 text-xs px-3 py-2 text-center">
             {assignedCount}/20 channels assigned — bridge will ignore excess channels.
           </div>
         )}
-        <div ref={containerRef} className="flex-1 overflow-hidden bg-black">
+        <div ref={containerRef} className="flex-1 overflow-hidden min-h-[200px]">
           <EditorCanvas
-            width={canvasWidth}
-            height={canvasHeight}
+            width={canvasDims.width}
+            height={canvasDims.height}
             onDeleteRequest={handleEditorDelete}
           />
         </div>
       </div>
 
-      {/* Right: light panel ~30% */}
-      <div className="flex flex-[3] min-h-0 overflow-hidden">
+      {/* Right (desktop) / Bottom (mobile): light panel */}
+      <div className="flex md:flex-[3] min-h-0 overflow-hidden max-h-[40vh] md:max-h-none border-t md:border-t-0 border-white/[0.06]">
         <LightPanel />
       </div>
     </div>
