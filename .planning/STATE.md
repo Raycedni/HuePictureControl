@@ -1,36 +1,34 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: — Full ambient lighting with gradient device support
+milestone: v1.1
+milestone_name: Multi-Camera Support
 status: planning
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-04-02T15:22:23.310Z"
-last_activity: 2026-03-23 — Roadmap created
+stopped_at: —
+last_updated: "2026-04-03"
+last_activity: 2026-04-03 — Milestone v1.1 started
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
-  percent: 25
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-23)
+See: .planning/PROJECT.md (updated 2026-04-03)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 1 — Infrastructure and DTLS Spike
+**Current focus:** Defining requirements for v1.1 Multi-Camera Support
 
 ## Current Position
 
-Phase: 1 of 6 (Infrastructure and DTLS Spike)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-23 — Roadmap created
-
-Progress: [███░░░░░░░] 25%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-03 — Milestone v1.1 started
 
 ## Performance Metrics
 

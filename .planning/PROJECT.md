@@ -53,6 +53,16 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - **Network**: Hue Bridge must be reachable from Docker network (host network or bridge with LAN access)
 - **No auth**: Web UI is unauthenticated — local network tool only
 
+## Current Milestone: v1.1 Multi-Camera Support
+
+**Goal:** Replace the single static camera with a per-entertainment-zone camera selector, showing all available video devices.
+
+**Target features:**
+- Enumerate all video capture devices available to the container/host
+- Camera dropdown selector per entertainment zone in the UI
+- Each entertainment zone can independently use a different camera source
+- Live preview updates when camera selection changes
+
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
@@ -62,5 +72,22 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 | Docker Compose deployment | User's preferred deployment model, capture card passthrough via device mapping | — Pending |
 | No auth | Single-user local tool, complexity not justified | — Pending |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd:transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-03-23 after project initialization*
+*Last updated: 2026-04-03 after milestone v1.1 initialization*
