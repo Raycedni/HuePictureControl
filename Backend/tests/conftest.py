@@ -51,6 +51,21 @@ async def db():
             PRIMARY KEY (region_id, channel_id, entertainment_config_id)
         )
     """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS known_cameras (
+            stable_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            last_seen_at TEXT,
+            last_device_path TEXT
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS camera_assignments (
+            entertainment_config_id TEXT PRIMARY KEY,
+            camera_stable_id TEXT NOT NULL,
+            camera_name TEXT NOT NULL
+        )
+    """)
     await conn.commit()
     yield conn
     await conn.close()
