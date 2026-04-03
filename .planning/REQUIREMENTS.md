@@ -3,14 +3,14 @@
 **Defined:** 2026-03-23
 **Core Value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
 
-## v1 Requirements
+## v1.0 Requirements (Validated)
 
 ### Bridge Integration
 
 - [x] **BRDG-01**: User can pair with Hue Bridge via link button press from the web UI
 - [x] **BRDG-02**: Bridge credentials (application key + client key) are persisted and survive restarts
 - [x] **BRDG-03**: Application discovers all lights, rooms, and entertainment configurations from the bridge
-- [ ] **BRDG-04**: Gradient-capable devices (Festavia, Flux, Play Gradient) are identified with their per-segment channel count
+- [x] **BRDG-04**: Gradient-capable devices (Festavia, Flux, Play Gradient) are identified with their per-segment channel count
 - [x] **BRDG-05**: Entertainment configuration can be selected from the UI (lists available configs from bridge)
 
 ### Frame Capture
@@ -28,122 +28,105 @@
 - [x] **REGN-03**: User can assign each region to a Hue light or gradient segment channel
 - [x] **REGN-04**: Region coordinates are stored as normalized [0..1] values (resolution-independent)
 - [x] **REGN-05**: Region-to-light mappings persist across restarts
-- [x] **REGN-06**: Live camera preview is available in the web UI via WebSocket for verifying mappings
 
-### Color Streaming
+### Color Processing
 
-- [x] **STRM-01**: Dominant color is extracted from each mapped region using pre-computed polygon masks
-- [x] **STRM-02**: RGB colors are converted to CIE xy with Gamut C clamping before sending to bridge
-- [x] **STRM-03**: Colors are streamed to the bridge via Entertainment API (DTLS/UDP) at 25-50 Hz
-- [x] **STRM-04**: All mapped channels are sent in a single HueStream v2 UDP packet per frame
+- [x] **COLR-01**: Dominant color is extracted from each mapped region per frame
+- [x] **COLR-02**: RGB values are converted to CIE xy color space for Hue compatibility
+- [x] **COLR-03**: Color extraction runs at ≥25 fps to match Entertainment API rate
+
+### Streaming
+
+- [x] **STRM-01**: Backend connects to Hue Bridge Entertainment API via DTLS/UDP
+- [x] **STRM-02**: Extracted colors are streamed to assigned lights at ≥25 Hz
+- [x] **STRM-03**: Streaming session is tied to one entertainment configuration
+- [x] **STRM-04**: User can start/stop streaming from the web UI
 - [x] **STRM-05**: End-to-end latency from frame capture to light update is under 100ms
-- [x] **STRM-06**: Streaming supports 16+ simultaneous light channels
 
-### Gradient Devices
+### Frontend
 
-- [x] **GRAD-01**: Festavia string light segments are individually assignable to regions
-- [x] **GRAD-02**: Flux lightstrip segments are individually assignable to regions
-- [x] **GRAD-03**: Other gradient devices (Play Gradient Lightstrip) are supported with per-segment control
-- [x] **GRAD-04**: 20-channel Entertainment API limit is enforced with a warning in the UI
-- [x] **GRAD-05**: Non-gradient Hue lights are supported as single-color targets
-
-### Web UI
-
-- [x] **UI-01**: Web UI is accessible without authentication on the local network
-- [x] **UI-02**: Bridge pairing flow is guided in the UI (instructions + status feedback)
-- [x] **UI-03**: Global start/stop toggle controls the capture and streaming loop
-- [x] **UI-04**: Real-time status display shows FPS, latency, bridge connection state, and errors
-- [x] **UI-05**: Light discovery panel shows all available lights with their type and segment count
-- [x] **UI-06**: Region canvas shows semi-transparent color overlay indicating what each region is "seeing"
+- [x] **FRNT-01**: Web UI with canvas editor for drawing/editing regions
+- [x] **FRNT-02**: Live camera preview via WebSocket stream
+- [x] **FRNT-03**: Status bar showing streaming metrics (FPS, latency, active lights)
+- [x] **FRNT-04**: Drag-and-drop light/segment assignment onto regions
 
 ### Infrastructure
 
 - [x] **INFR-01**: Backend and frontend run as separate Docker Compose services
-- [x] **INFR-02**: USB capture card is passed through to the backend container
-- [x] **INFR-03**: Backend uses host networking for DTLS/UDP and mDNS access to Hue Bridge
-- [ ] **INFR-04**: Frontend is served via nginx with reverse proxy to backend API and WebSocket
-- [x] **INFR-05**: Configuration persists in SQLite database with volume mount
+- [x] **INFR-02**: USB capture device passed through to backend container
+- [x] **INFR-03**: Backend uses host network for DTLS/UDP and mDNS access
 
-## v2 Requirements
+## v1.1 Requirements
 
-### Advanced Color
+### Device Enumeration
 
-- **COLR-01**: K-means dominant color extraction for multi-color regions
-- **COLR-02**: Configurable color saturation boost / brightness scaling per light
-- **COLR-03**: Color smoothing / transition interpolation (configurable curve)
+- [ ] **DEVC-01**: Backend enumerates all V4L2 video capture devices, filtering out metadata nodes via VIDIOC_QUERYCAP capability check
+- [ ] **DEVC-02**: API endpoint (`GET /api/cameras`) returns list of available cameras with device path and human-readable name
+- [ ] **DEVC-03**: Device list refreshes on demand when user opens camera selector (re-scans /dev/video*)
+- [ ] **DEVC-04**: Devices are identified by stable identity (sysfs VID/PID/serial) to survive USB re-plug path changes
+- [ ] **DEVC-05**: User can trigger a manual reconnect for a disconnected camera device
 
-### Advanced UI
+### Camera Assignment
 
-- **AUI-01**: Preset region layouts (grid, edge sampling templates)
-- **AUI-02**: Import/export configuration as JSON
-- **AUI-03**: Entertainment configuration creation directly from the app (bypass Hue app)
-- **AUI-04**: Per-light color preview widgets showing current output color
+- [ ] **CAMA-01**: Camera is assigned per entertainment config (zone), not per-region — all regions in a zone share one camera
+- [ ] **CAMA-02**: Camera-to-entertainment-config mapping is persisted in the database and survives restarts
+- [ ] **CAMA-03**: When no camera is explicitly assigned, the system falls back to the default capture device
+- [ ] **CAMA-04**: UI shows camera health status (connected/disconnected) per entertainment zone
 
-### Automation
+### Multi-Camera Capture
 
-- **AUTO-01**: Auto-start streaming on Docker container boot (optional)
-- **AUTO-02**: Scene profiles (save/load different region+light configurations)
+- [ ] **MCAP-01**: StreamingService uses the assigned camera for each entertainment config instead of a global singleton
+- [ ] **MCAP-02**: Preview WebSocket serves frames from the zone's assigned camera, not a global device
+- [ ] **MCAP-03**: Multiple entertainment zones can stream simultaneously from different cameras
+
+### Camera UI
+
+- [ ] **CMUI-01**: Camera dropdown selector per entertainment zone in the editor UI
+- [ ] **CMUI-02**: Dropdown shows device name and path for each available camera
+- [ ] **CMUI-03**: Live preview updates immediately when camera selection changes
+
+### Docker
+
+- [ ] **DOCK-01**: Docker Compose supports multiple video device passthrough
+- [ ] **DOCK-02**: Documentation for adding/configuring multiple capture devices
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| User authentication | Single-user local network tool; adds complexity with no value |
-| Non-Hue smart lights | Hue ecosystem only; other protocols (WLED, Z-Wave) are different projects |
-| Audio reactivity | Video/color only; audio sync is a separate domain |
-| Cloud / remote access | Fully local; Hue Bridge is on LAN only |
-| Mobile app | Web UI is sufficient; responsive design covers tablet/phone |
-| 4K capture | 640x480 is sufficient for color analysis; 4K is 6.7x more work for no perceptible gain |
-| WebRTC preview | WebSocket JPEG is adequate for a config UI; WebRTC adds STUN/TURN complexity |
+| Per-region camera assignment | Streaming is per entertainment config; per-region adds complexity with no benefit |
+| udev hot-plug monitoring | Overkill — manual refresh/reconnect is sufficient |
+| Live thumbnails in dropdown | Nice-to-have deferred; adds bandwidth overhead |
+| Audio capture | Video/color only — out of project scope |
+| Non-V4L2 devices (Windows DirectShow) | Docker deployment targets Linux only |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BRDG-01 | Phase 1 | Complete |
-| BRDG-02 | Phase 1 | Complete |
-| BRDG-03 | Phase 1 | Complete |
-| BRDG-04 | Phase 5 | Pending |
-| BRDG-05 | Phase 1 | Complete |
-| CAPT-01 | Phase 2 | Complete |
-| CAPT-02 | Phase 2 | Complete |
-| CAPT-03 | Phase 3 | Complete |
-| CAPT-04 | Phase 3 | Complete |
-| CAPT-05 | Phase 2 | Complete |
-| REGN-01 | Phase 4 | Complete |
-| REGN-02 | Phase 4 | Complete |
-| REGN-03 | Phase 4 | Complete |
-| REGN-04 | Phase 4 | Complete |
-| REGN-05 | Phase 4 | Complete |
-| REGN-06 | Phase 4 | Complete |
-| STRM-01 | Phase 3 | Complete |
-| STRM-02 | Phase 3 | Complete |
-| STRM-03 | Phase 3 | Complete |
-| STRM-04 | Phase 3 | Complete |
-| STRM-05 | Phase 3 | Complete |
-| STRM-06 | Phase 3 | Complete |
-| GRAD-01 | Phase 5 | Complete |
-| GRAD-02 | Phase 5 | Complete |
-| GRAD-03 | Phase 5 | Complete |
-| GRAD-04 | Phase 5 | Complete |
-| GRAD-05 | Phase 3 | Complete |
-| UI-01 | Phase 4 | Complete |
-| UI-02 | Phase 1 | Complete |
-| UI-03 | Phase 4 | Complete |
-| UI-04 | Phase 4 | Complete |
-| UI-05 | Phase 4 | Complete |
-| UI-06 | Phase 4 | Complete |
-| INFR-01 | Phase 1 | Complete |
-| INFR-02 | Phase 1 | Complete |
-| INFR-03 | Phase 1 | Complete |
-| INFR-04 | Phase 6 | Pending |
-| INFR-05 | Phase 1 | Complete |
+| DEVC-01 | — | Pending |
+| DEVC-02 | — | Pending |
+| DEVC-03 | — | Pending |
+| DEVC-04 | — | Pending |
+| DEVC-05 | — | Pending |
+| CAMA-01 | — | Pending |
+| CAMA-02 | — | Pending |
+| CAMA-03 | — | Pending |
+| CAMA-04 | — | Pending |
+| MCAP-01 | — | Pending |
+| MCAP-02 | — | Pending |
+| MCAP-03 | — | Pending |
+| CMUI-01 | — | Pending |
+| CMUI-02 | — | Pending |
+| CMUI-03 | — | Pending |
+| DOCK-01 | — | Pending |
+| DOCK-02 | — | Pending |
 
 **Coverage:**
-- v1 requirements: 38 total
-- Mapped to phases: 38
-- Unmapped: 0 ✓
+- v1.1 requirements: 17 total
+- Mapped to phases: 0
+- Unmapped: 17 ⚠️
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-03-23 after initial definition*
+*Last updated: 2026-04-03 after milestone v1.1 definition*
