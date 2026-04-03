@@ -10,6 +10,7 @@ Exports:
     CAPTURE_DEVICE   -- Module-level device path from env
     CaptureBackend   -- Abstract base class defining the capture interface
     create_capture   -- Factory that returns the right backend for the OS
+    CaptureRegistry  -- Thread-safe ref-counted pool of CaptureBackend instances
 """
 import abc
 import logging
@@ -133,3 +134,83 @@ def create_capture(device_path: str = CAPTURE_DEVICE) -> CaptureBackend:
     else:
         from services.capture_v4l2 import V4L2Capture
         return V4L2Capture(device_path)
+
+
+class CaptureRegistry:
+    """Thread-safe, reference-counted pool of CaptureBackend instances.
+
+    Backends are keyed by device path.  Multiple callers (zones) may acquire
+    the same device path — they share one backend and each increment the
+    reference count.  The backend is only released (closed + destroyed) when
+    the last holder calls release().
+
+    Methods use a threading.Lock (not asyncio.Lock) because callers run from
+    asyncio.to_thread() worker threads, not the event loop.
+
+    Usage::
+
+        registry = CaptureRegistry()
+        backend = registry.acquire("/dev/video0")   # creates or reuses
+        ...
+        registry.release("/dev/video0")             # decrements ref; destroys at 0
+        registry.shutdown()                         # force-release all
+    """
+
+    def __init__(self) -> None:
+        self._backends: dict[str, CaptureBackend] = {}
+        self._ref_counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, device_path: str) -> CaptureBackend:
+        """Return a backend for *device_path*, creating it on first acquisition.
+
+        Increments the reference count.  The backend's ``open()`` is called
+        only on the first acquisition.
+        """
+        with self._lock:
+            if device_path not in self._backends:
+                backend = create_capture(device_path)
+                backend.open()
+                self._backends[device_path] = backend
+                self._ref_counts[device_path] = 0
+            self._ref_counts[device_path] += 1
+            return self._backends[device_path]
+
+    def release(self, device_path: str) -> None:
+        """Decrement the reference count for *device_path*.
+
+        When the count reaches zero the backend is removed from the pool and
+        its ``release()`` method is called.  Releasing a path that was never
+        acquired is a no-op.
+        """
+        with self._lock:
+            if device_path not in self._ref_counts:
+                return
+            self._ref_counts[device_path] -= 1
+            if self._ref_counts[device_path] <= 0:
+                backend = self._backends.pop(device_path)
+                self._ref_counts.pop(device_path)
+                backend.release()
+
+    def get_default(self) -> Optional[CaptureBackend]:
+        """Return the backend for the default CAPTURE_DEVICE, or None."""
+        with self._lock:
+            return self._backends.get(CAPTURE_DEVICE)
+
+    def shutdown(self) -> None:
+        """Force-release all backends regardless of reference count.
+
+        Exceptions raised by individual ``backend.release()`` calls are caught
+        and logged so that all backends are released even if one fails.
+        """
+        with self._lock:
+            for device_path, backend in list(self._backends.items()):
+                try:
+                    backend.release()
+                except Exception:
+                    logger.exception(
+                        "Error releasing capture backend for %s during shutdown",
+                        device_path,
+                    )
+            self._backends.clear()
+            self._ref_counts.clear()
