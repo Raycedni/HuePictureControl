@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import DATABASE_PATH, close_db, init_db
+from routers.cameras import router as cameras_router
 from routers.capture import router as capture_router
 from routers.health import router as health_router
 from routers.hue import router as hue_router
@@ -88,6 +89,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(hue_router)
 app.include_router(capture_router)
+app.include_router(cameras_router)
 app.include_router(regions_router)
 app.include_router(streaming_ws_router)
 app.include_router(preview_ws_router)
