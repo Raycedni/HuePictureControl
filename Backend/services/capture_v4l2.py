@@ -3,14 +3,19 @@
 Reads MJPEG frames directly from the V4L2 device via mmap, bypassing
 OpenCV's broken V4L2 backend in pip-installed opencv-python-headless.
 Decodes MJPEG to BGR with cv2.imdecode.
+
+Also provides enumerate_capture_devices() for listing available V4L2
+capture nodes without opening a streaming session.
 """
 import ctypes
 import fcntl
+import glob
 import logging
 import mmap
 import os
 import struct
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -93,6 +98,74 @@ _VIDIOC_DQBUF = _iowr(ord("V"), 17, _v4l2_buf_size)
 _VIDIOC_STREAMON = 0x40045612
 _VIDIOC_STREAMOFF = 0x40045613
 _VIDIOC_S_PARM = 0xC0CC5616
+
+
+# ---------------------------------------------------------------------------
+# Device enumeration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class V4L2DeviceInfo:
+    """Metadata for a V4L2 capture-capable device node."""
+
+    device_path: str
+    card: str
+    driver: str
+    bus_info: str
+
+
+def enumerate_capture_devices() -> list[V4L2DeviceInfo]:
+    """Return all /dev/video* nodes that support V4L2_CAP_VIDEO_CAPTURE.
+
+    Opens each node with O_RDWR | O_NONBLOCK (non-blocking prevents stalling
+    on devices already held by the capture backend). Issues VIDIOC_QUERYCAP
+    and filters to nodes where the device_caps field has bit 0x01 set.
+
+    Inaccessible or non-capture nodes are silently skipped.
+
+    Returns:
+        List of V4L2DeviceInfo sorted by device_path.
+    """
+    devices: list[V4L2DeviceInfo] = []
+
+    for path in sorted(glob.glob("/dev/video*")):
+        fd = None
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+            cap_buf = bytearray(104)
+            fcntl.ioctl(fd, _VIDIOC_QUERYCAP, cap_buf)
+
+            device_caps = struct.unpack_from("<I", cap_buf, 88)[0]
+            if not (device_caps & 0x01):
+                # Not a VIDEO_CAPTURE node — skip (e.g. metadata nodes)
+                continue
+
+            driver = cap_buf[0:16].rstrip(b"\x00").decode("utf-8", errors="replace")
+            card = cap_buf[16:48].rstrip(b"\x00").decode("utf-8", errors="replace")
+            bus_info = cap_buf[48:80].rstrip(b"\x00").decode("utf-8", errors="replace")
+
+            devices.append(
+                V4L2DeviceInfo(
+                    device_path=path,
+                    card=card,
+                    driver=driver,
+                    bus_info=bus_info,
+                )
+            )
+        except OSError:
+            # Device inaccessible, busy, or not a V4L2 node — skip silently
+            pass
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    return devices
+
+
+# ---------------------------------------------------------------------------
+# Streaming capture backend
+# ---------------------------------------------------------------------------
 
 
 class V4L2Capture(CaptureBackend):
