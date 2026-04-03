@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-03)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 07 — device-enumeration-and-camera-assignment-schema
+**Current focus:** v1.1 Phase 8 — Capture Registry
 
 ## Current Position
 
@@ -30,7 +30,7 @@ Plan: Not started
 Status: Ready to execute
 Last activity: 2026-04-03
 
-Progress: [░░░░░░░░░░] 0% (v1.1)
+Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 
 ## Performance Metrics
 
@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 7. Device Enumeration + Schema | TBD | - | - |
+| 7. Device Enumeration + Schema | 2 | ✓ Complete | ~7 min/plan |
 | 8. Capture Registry | TBD | - | - |
 | 9. Preview Routing + Region API | TBD | - | - |
 | 10. Frontend Camera Selector | TBD | - | - |
@@ -72,11 +72,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 7]: Verify /sys/class/video4linux/videoX/device/idVendor is accessible inside Docker on WSL2 before finalizing device identity DB schema — fallback to card name from VIDIOC_QUERYCAP if sysfs unavailable
+- ~~[Phase 7]: sysfs accessibility~~ — Resolved: get_stable_id() implements fallback to card@bus_info when sysfs unavailable
 - [Phase 8]: Reference counting edge cases during mid-stream camera switches need explicit test scenarios before CaptureRegistry is finalized
 
 ## Session Continuity
 
-Last session: 2026-04-03T17:10:32.711Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-04-03T17:30:00.000Z
+Stopped at: Phase 7 complete, auto-advancing to Phase 8
 Resume file: None
