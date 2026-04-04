@@ -69,9 +69,15 @@ async def get_snapshot(request: Request) -> Response:
         200 image/jpeg on success
         503 if the capture device is unavailable
     """
-    capture_service = request.app.state.capture
+    registry = request.app.state.capture_registry
+    backend = registry.get_default()
+    if backend is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No capture device is currently active. Start streaming first or wait for a device to be acquired.",
+        )
     try:
-        frame = await capture_service.get_frame()
+        frame = await backend.get_frame()
     except RuntimeError as exc:
         logger.warning("Snapshot failed: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc))
@@ -85,24 +91,11 @@ async def get_snapshot(request: Request) -> Response:
 
 @router.put("/device")
 async def set_device(body: SetDeviceRequest, request: Request):
-    """Switch the capture device path without restarting the container.
-
-    Args:
-        body: JSON body with ``device_path`` field
-
-    Returns:
-        200 JSON with device_path and status on success
-        503 if the new device path is invalid / cannot be opened
-    """
-    capture_service = request.app.state.capture
-    try:
-        capture_service.open(body.device_path)
-    except RuntimeError as exc:
-        logger.warning("Device switch failed: %s", exc)
-        raise HTTPException(status_code=503, detail=str(exc))
-
-    logger.info("Capture device switched to %s", body.device_path)
-    return {"device_path": body.device_path, "status": "opened"}
+    """Deprecated: use PUT /api/cameras/assignments instead."""
+    raise HTTPException(
+        status_code=410,
+        detail="Device switching via this endpoint is deprecated. Use PUT /api/cameras/assignments to assign cameras per entertainment config.",
+    )
 
 
 @router.get("/debug/color")
@@ -115,9 +108,12 @@ async def debug_color(request: Request):
     Returns:
         JSON with ``rgb`` (list of 3 ints) and ``xy`` (list of 2 floats)
     """
-    capture_service = request.app.state.capture
+    registry = request.app.state.capture_registry
+    backend = registry.get_default()
+    if backend is None:
+        raise HTTPException(status_code=503, detail="No capture device is currently active")
     try:
-        frame = await capture_service.get_frame()
+        frame = await backend.get_frame()
     except RuntimeError as exc:
         logger.warning("Debug color capture failed: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc))

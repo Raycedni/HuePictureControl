@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -15,13 +14,11 @@ from routers.hue import router as hue_router
 from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
-from services.capture_service import create_capture
+from services.capture_service import CaptureRegistry
 from services.status_broadcaster import StatusBroadcaster
 from services.streaming_service import StreamingService
 
 logger = logging.getLogger(__name__)
-
-CAPTURE_DEVICE = os.getenv("CAPTURE_DEVICE", "/dev/video0")
 
 
 @asynccontextmanager
@@ -45,23 +42,15 @@ async def lifespan(app: FastAPI):
         await db.commit()
         logger.info("Purged %d undersized regions (area < %s)", purged, MIN_REGION_AREA)
 
-    # Startup: initialize capture service (non-fatal if device absent)
-    capture = create_capture(CAPTURE_DEVICE)
-    try:
-        capture.open()
-    except RuntimeError as exc:
-        logger.warning(
-            "Capture device unavailable at startup (%s) — "
-            "snapshot endpoint will return 503 until a valid device is configured.",
-            exc,
-        )
-    app.state.capture = capture
+    # Startup: create capture registry (lazy — no device opened at startup)
+    registry = CaptureRegistry()
+    app.state.capture_registry = registry
 
     # Startup: create StatusBroadcaster and StreamingService
     broadcaster = StatusBroadcaster()
     app.state.broadcaster = broadcaster
 
-    streaming = StreamingService(db=db, capture=capture, broadcaster=broadcaster)
+    streaming = StreamingService(db=db, capture_registry=registry, broadcaster=broadcaster)
     app.state.streaming = streaming
 
     yield
@@ -70,8 +59,8 @@ async def lifespan(app: FastAPI):
     if streaming.state not in ("idle",):
         await streaming.stop()
 
-    # Shutdown: release capture device
-    capture.release()
+    # Shutdown: release all capture backends
+    registry.shutdown()
 
     # Shutdown: close DB connection
     await close_db(db)

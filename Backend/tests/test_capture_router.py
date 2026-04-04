@@ -33,24 +33,13 @@ class TestSnapshotEndpoint:
 
 
 class TestSetDeviceEndpoint:
-    def test_set_device_calls_open_and_returns_200(self, capture_app_client):
-        """PUT /api/capture/device with valid path calls open() and returns 200."""
+    def test_set_device_returns_410_deprecated(self, capture_app_client):
+        """PUT /api/capture/device returns 410 Gone (deprecated)."""
         response = capture_app_client.put(
             "/api/capture/device",
             json={"device_path": "/dev/video1"},
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["device_path"] == "/dev/video1"
-        assert data["status"] == "opened"
-
-    def test_set_device_returns_503_when_open_raises(self, capture_app_client_broken_open):
-        """PUT /api/capture/device returns 503 when open() raises RuntimeError."""
-        response = capture_app_client_broken_open.put(
-            "/api/capture/device",
-            json={"device_path": "/dev/video99"},
-        )
-        assert response.status_code == 503
+        assert response.status_code == 410
 
 
 class TestDebugColorEndpoint:

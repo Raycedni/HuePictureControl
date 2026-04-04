@@ -116,13 +116,16 @@ def _make_capture_mock(get_frame_side_effect=None, open_side_effect=None):
 
 
 def _make_capture_app_client(mock_capture):
-    """Create a TestClient with a FastAPI app that has mock capture on app.state."""
+    """Create a TestClient with a FastAPI app that has mock capture_registry on app.state."""
     from fastapi import FastAPI
     from routers.capture import router as capture_router
 
+    mock_registry = MagicMock()
+    mock_registry.get_default = MagicMock(return_value=mock_capture)
+
     @asynccontextmanager
     async def capture_lifespan(app):
-        app.state.capture = mock_capture
+        app.state.capture_registry = mock_registry
         yield
 
     test_app = FastAPI(lifespan=capture_lifespan)
@@ -173,13 +176,16 @@ def _make_streaming_service_mock():
 
 
 def _make_capture_app_client_with_streaming(mock_capture, mock_streaming):
-    """Create a TestClient with both mock capture and mock streaming on app.state."""
+    """Create a TestClient with mock capture_registry and mock streaming on app.state."""
     from fastapi import FastAPI
     from routers.capture import router as capture_router
 
+    mock_registry = MagicMock()
+    mock_registry.get_default = MagicMock(return_value=mock_capture)
+
     @asynccontextmanager
     async def capture_lifespan(app):
-        app.state.capture = mock_capture
+        app.state.capture_registry = mock_registry
         app.state.streaming = mock_streaming
         yield
 

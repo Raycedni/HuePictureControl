@@ -24,12 +24,16 @@ async def ws_preview(websocket: WebSocket):
     Access pattern: reads ``websocket.app.state.capture`` for frame acquisition.
     """
     await websocket.accept()
-    capture = websocket.app.state.capture
+    registry = websocket.app.state.capture_registry
 
     try:
         while True:
+            backend = registry.get_default()
+            if backend is None:
+                await asyncio.sleep(1.0)
+                continue
             try:
-                jpeg_bytes = await capture.get_jpeg()
+                jpeg_bytes = await backend.get_jpeg()
                 await websocket.send_bytes(jpeg_bytes)
                 # Cap at ~60 fps to avoid flooding the client
                 await asyncio.sleep(0.016)
