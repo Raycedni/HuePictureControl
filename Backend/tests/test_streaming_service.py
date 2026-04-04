@@ -17,7 +17,7 @@ def _solid_blue_frame() -> np.ndarray:
 
 
 def _make_mocks():
-    """Return fresh mock objects for db, capture, broadcaster, and pykit streaming."""
+    """Return fresh mock objects for db, capture, registry, broadcaster, and pykit streaming."""
     mock_db = MagicMock()
 
     # Capture mock
@@ -25,6 +25,12 @@ def _make_mocks():
     mock_capture.get_frame = AsyncMock(return_value=_solid_blue_frame())
     mock_capture.release = MagicMock()
     mock_capture.open = MagicMock()
+
+    # Registry mock — acquire returns mock_capture so existing frame-loop tests still work
+    mock_registry = MagicMock()
+    mock_registry.acquire = MagicMock(return_value=mock_capture)
+    mock_registry.release = MagicMock()
+    mock_registry.get_default = MagicMock(return_value=mock_capture)
 
     # Broadcaster mock
     mock_broadcaster = MagicMock()
@@ -43,9 +49,51 @@ def _make_mocks():
     return {
         "db": mock_db,
         "capture": mock_capture,
+        "registry": mock_registry,
         "broadcaster": mock_broadcaster,
         "streaming": mock_streaming,
     }
+
+
+def _make_db_with_camera_assignment(config_id: str, stable_id: str | None, device_path: str | None):
+    """Return a mock aiosqlite DB that returns camera_assignments + known_cameras rows.
+
+    If stable_id is None, camera_assignments returns no row (no assignment).
+    If device_path is None, known_cameras returns no row (unknown camera).
+    """
+    db = MagicMock()
+
+    def make_cursor_for_assignment():
+        cursor = MagicMock()
+        if stable_id is not None:
+            row = MagicMock()
+            row.__getitem__ = MagicMock(side_effect=lambda k: {
+                "camera_stable_id": stable_id,
+            }[k])
+            cursor.fetchone = AsyncMock(return_value=row)
+        else:
+            cursor.fetchone = AsyncMock(return_value=None)
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        return cursor
+
+    def make_cursor_for_known_camera():
+        cursor = MagicMock()
+        if device_path is not None:
+            row = MagicMock()
+            row.__getitem__ = MagicMock(side_effect=lambda k: {
+                "last_device_path": device_path,
+            }[k])
+            cursor.fetchone = AsyncMock(return_value=row)
+        else:
+            cursor.fetchone = AsyncMock(return_value=None)
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        return cursor
+
+    cursors = [make_cursor_for_assignment(), make_cursor_for_known_camera()]
+    db.execute = AsyncMock(side_effect=cursors)
+    return db
 
 
 def _make_streaming_db_cursor(rows):
@@ -60,10 +108,14 @@ def _make_streaming_db_cursor(rows):
 def _make_db_with_rows(region_rows, bridge_row=None, assignment_rows=None):
     """Mock aiosqlite db with execute returning given rows.
 
-    The db.execute mock returns:
-      1st call: bridge_config cursor (fetchone)
-      2nd call: light_assignments cursor (fetchall) — empty by default
-      3rd call: regions cursor (fetchall)
+    The db.execute mock returns (in order, accounting for _resolve_device_path calls):
+      1st call: camera_assignments cursor (fetchone) — None (no camera assignment)
+             → _resolve_device_path returns early (no known_cameras query)
+      2nd call: bridge_config cursor (fetchone)
+      3rd call: light_assignments cursor (fetchall) — empty by default
+      4th call: regions cursor (fetchall)
+
+    The camera_assignments cursor returns None so _resolve_device_path falls back to CAPTURE_DEVICE.
     """
     if bridge_row is None:
         bridge_row = {
@@ -85,6 +137,13 @@ def _make_db_with_rows(region_rows, bridge_row=None, assignment_rows=None):
     if assignment_rows is None:
         assignment_rows = []
 
+    # Camera assignment cursor — returns None (no assignment → falls back to CAPTURE_DEVICE)
+    # When fetchone returns None, _resolve_device_path returns early without querying known_cameras.
+    cam_assign_cursor = MagicMock()
+    cam_assign_cursor.fetchone = AsyncMock(return_value=None)
+    cam_assign_cursor.__aenter__ = AsyncMock(return_value=cam_assign_cursor)
+    cam_assign_cursor.__aexit__ = AsyncMock(return_value=False)
+
     assignment_cursor = _make_streaming_db_cursor(assignment_rows)
     region_cursor = _make_streaming_db_cursor(region_rows)
 
@@ -94,8 +153,8 @@ def _make_db_with_rows(region_rows, bridge_row=None, assignment_rows=None):
     bridge_cursor.__aexit__ = AsyncMock(return_value=False)
 
     db = MagicMock()
-    # 1st: bridge_config, 2nd: light_assignments, 3rd: regions
-    db.execute = AsyncMock(side_effect=[bridge_cursor, assignment_cursor, region_cursor])
+    # 1st: camera_assignments, 2nd: bridge_config, 3rd: light_assignments, 4th: regions
+    db.execute = AsyncMock(side_effect=[cam_assign_cursor, bridge_cursor, assignment_cursor, region_cursor])
     return db, bridge_row_mock
 
 
@@ -175,7 +234,7 @@ async def test_start_transitions_to_streaming(service_imports):
     mock_streaming_instance = mocks["streaming"]
     mock_streaming_cls.return_value = mock_streaming_instance
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
     assert service.state == "idle"
 
     # Patch asyncio.to_thread so streaming calls don't block
@@ -214,7 +273,7 @@ async def test_start_when_already_streaming_is_noop(service_imports):
     StreamingService, _, __, mock_streaming_cls = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._state = "streaming"
 
     original_task = service._task
@@ -231,7 +290,7 @@ async def test_stop_when_idle_is_noop(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     assert service.state == "idle"
 
     await service.stop()
@@ -246,7 +305,7 @@ async def test_stop_clears_run_event_and_waits_for_task(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._state = "streaming"
 
     # Create a task that waits until run_event is cleared
@@ -292,7 +351,7 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
 
     db = _make_channel_map_db([], rows)
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
                return_value={"light-A": [0], "light-B": [1]}):
         channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
@@ -315,7 +374,7 @@ async def test_load_channel_map_empty_returns_empty_dict(service_imports):
     mocks = _make_mocks()
     db = _make_channel_map_db([], [])
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
                return_value={}):
         channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
@@ -333,7 +392,7 @@ async def test_load_channel_map_gradient_light_maps_multiple_channels(service_im
 
     db = _make_channel_map_db([], rows)
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
                return_value={"gradient-light": [1, 2, 3]}):
         channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
@@ -362,7 +421,7 @@ async def test_load_channel_map_uses_assignments_over_fallback(service_imports):
 
     db = _make_channel_map_db([assign_row], [region_row])
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
     with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock,
                return_value={"light-A": [0, 1]}):
         channel_map = await service._load_channel_map("cfg-001", "192.168.1.1", "testuser")
@@ -383,7 +442,8 @@ async def test_frame_loop_calls_get_frame_each_iteration(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     call_count = 0
 
@@ -416,7 +476,8 @@ async def test_frame_loop_calls_extract_region_color_per_channel(service_imports
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     frame_count = 0
 
@@ -459,7 +520,8 @@ async def test_frame_loop_calls_rgb_to_xy_and_set_input(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     ran = False
 
@@ -504,7 +566,8 @@ async def test_frame_loop_brightness_clamped_to_min_001(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     ran = False
 
@@ -544,7 +607,8 @@ async def test_frame_loop_16_channels(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     async def one_frame():
         # Clear event during get_frame so exactly one frame is processed
@@ -578,7 +642,8 @@ async def test_frame_loop_1_channel_non_gradient(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     async def one_frame():
         # Clear event during get_frame so exactly one frame is processed
@@ -611,7 +676,8 @@ async def test_frame_loop_calls_update_metrics_not_broadcast(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     ran = False
 
@@ -651,7 +717,8 @@ async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device disconnected"))
 
@@ -684,7 +751,7 @@ async def test_reconnect_loop_succeeds_on_first_try(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.set()
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock) as mock_activate:
@@ -701,7 +768,7 @@ async def test_reconnect_loop_returns_false_when_run_event_cleared(service_impor
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.clear()  # already stopped
 
     with patch("asyncio.sleep", new_callable=AsyncMock):
@@ -716,7 +783,7 @@ async def test_reconnect_loop_exponential_backoff(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.set()
 
     sleep_calls = []
@@ -750,7 +817,7 @@ async def test_reconnect_loop_backoff_capped_at_30s(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.set()
 
     sleep_calls = []
@@ -783,7 +850,7 @@ async def test_reconnect_loop_does_not_touch_capture(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.set()
 
     attempt = 0
@@ -818,8 +885,9 @@ async def test_capture_reconnect_loop_returns_true_on_success(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._run_event.set()
+    service._capture = mocks["capture"]  # Simulate acquired capture
 
     attempt = 0
 
@@ -848,7 +916,8 @@ async def test_capture_reconnect_loop_returns_false_when_run_event_cleared(servi
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]
     service._run_event.set()
 
     call_count = 0
@@ -872,7 +941,8 @@ async def test_capture_reconnect_loop_pushes_reconnecting_state(service_imports)
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]
     service._run_event.set()
 
     mocks["capture"].open = MagicMock()  # succeeds immediately
@@ -896,7 +966,8 @@ async def test_capture_reconnect_loop_pushes_streaming_state_on_success(service_
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]
     service._run_event.set()
 
     mocks["capture"].open = MagicMock()  # succeeds immediately
@@ -920,7 +991,8 @@ async def test_frame_loop_calls_capture_reconnect_on_runtime_error(service_impor
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     call_count = 0
 
@@ -962,7 +1034,8 @@ async def test_frame_loop_exits_when_capture_reconnect_returns_false(service_imp
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]  # simulate acquired capture
 
     mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device gone"))
 
@@ -989,7 +1062,8 @@ async def test_capture_open_called_via_to_thread(service_imports):
     StreamingService, _, __, ___ = service_imports
 
     mocks = _make_mocks()
-    service = StreamingService(mocks["db"], mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]
     service._run_event.set()
 
     to_thread_calls = []
@@ -1028,11 +1102,11 @@ async def test_stop_sequence_order(service_imports):
     async def track_deactivate(bridge_ip, username, config_id):
         call_order.append("deactivate")
 
-    def track_release():
+    def track_release(device_path=None):
         call_order.append("release")
 
     mock_streaming_instance.stop_stream = MagicMock(side_effect=track_stop_stream)
-    mocks["capture"].release = MagicMock(side_effect=track_release)
+    mocks["registry"].release = MagicMock(side_effect=track_release)
 
     frame_count = 0
 
@@ -1045,7 +1119,7 @@ async def test_stop_sequence_order(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=two_frames)
 
-    service = StreamingService(db, mocks["capture"], mocks["broadcaster"])
+    service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
 
     async def fake_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
@@ -1061,3 +1135,284 @@ async def test_stop_sequence_order(service_imports):
 
     assert call_order == ["stop_stream", "deactivate", "release"], \
         f"Expected stop_stream -> deactivate -> release, got: {call_order}"
+
+
+# ---------------------------------------------------------------------------
+# Registry integration tests (Phase 08-02)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_start_uses_assigned_camera(service_imports):
+    """start() calls registry.acquire('/dev/video1') when camera_assignments maps config_id there."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-registry-01", "cam-stable-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    # Make _run_loop exit quickly after acquiring device
+    frame_count = 0
+
+    async def one_frame():
+        nonlocal frame_count
+        frame_count += 1
+        if frame_count >= 1:
+            service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-registry-01")
+                        if service._task:
+                            await service._task
+
+    mocks["registry"].acquire.assert_called_once_with("/dev/video1")
+
+
+@pytest.mark.asyncio
+async def test_no_assignment_uses_default(service_imports):
+    """start() falls back to CAPTURE_DEVICE when camera_assignments has no entry for config_id."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    # No assignment (stable_id=None)
+    camera_db = _make_db_with_camera_assignment("cfg-no-assignment", None, None)
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    frame_count = 0
+
+    async def one_frame():
+        nonlocal frame_count
+        frame_count += 1
+        if frame_count >= 1:
+            service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        with patch("services.streaming_service.CAPTURE_DEVICE", "/dev/video0"):
+                            await service.start("cfg-no-assignment")
+                            if service._task:
+                                await service._task
+
+    # Should acquire CAPTURE_DEVICE (the default)
+    call_args = mocks["registry"].acquire.call_args[0][0]
+    assert call_args == "/dev/video0"
+
+
+@pytest.mark.asyncio
+async def test_assignment_to_unknown_camera_uses_default(service_imports):
+    """start() falls back to CAPTURE_DEVICE when camera_assignments has entry but known_cameras has no matching row."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    # Has assignment but device_path=None (unknown camera in known_cameras)
+    camera_db = _make_db_with_camera_assignment("cfg-unknown-cam", "cam-unknown-stable", None)
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    frame_count = 0
+
+    async def one_frame():
+        nonlocal frame_count
+        frame_count += 1
+        if frame_count >= 1:
+            service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        with patch("services.streaming_service.CAPTURE_DEVICE", "/dev/video0"):
+                            await service.start("cfg-unknown-cam")
+                            if service._task:
+                                await service._task
+
+    call_args = mocks["registry"].acquire.call_args[0][0]
+    assert call_args == "/dev/video0"
+
+
+@pytest.mark.asyncio
+async def test_stop_releases_device(service_imports):
+    """After start() acquires a device, the _run_loop finally block calls registry.release()."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-release-01", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    frame_count = 0
+
+    async def one_frame():
+        nonlocal frame_count
+        frame_count += 1
+        if frame_count >= 1:
+            service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-release-01")
+                        if service._task:
+                            await service._task
+
+    mocks["registry"].release.assert_called_once_with("/dev/video1")
+
+
+@pytest.mark.asyncio
+async def test_camera_reassignment_mid_stream(service_imports):
+    """start(A), stop(), change DB assignment, start(B) — acquire called with A then B."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    # First call: cfg returns /dev/video1
+    # Second call: cfg returns /dev/video2
+    # We model this by swapping the DB between starts
+
+    db_video1 = _make_db_with_camera_assignment("cfg-reassign", "cam-A", "/dev/video1")
+    db_video2 = _make_db_with_camera_assignment("cfg-reassign", "cam-B", "/dev/video2")
+
+    # We'll track which DB to use via a mutable container
+    active_db = [db_video1]
+
+    class ProxyDB:
+        async def execute(self, *args, **kwargs):
+            return await active_db[0].execute(*args, **kwargs)
+
+    service = StreamingService(ProxyDB(), mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def one_frame_then_stop():
+        service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        # First run: acquires /dev/video1
+                        mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+                        await service.start("cfg-reassign")
+                        if service._task:
+                            await service._task
+
+                        # Simulate reassignment
+                        active_db[0] = db_video2
+                        service._state = "idle"
+                        service._run_event.clear()
+
+                        # Second run: acquires /dev/video2
+                        mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+                        await service.start("cfg-reassign")
+                        if service._task:
+                            await service._task
+
+    acquire_calls = [c[0][0] for c in mocks["registry"].acquire.call_args_list]
+    assert "/dev/video1" in acquire_calls
+    assert "/dev/video2" in acquire_calls
+
+    release_calls = [c[0][0] for c in mocks["registry"].release.call_args_list]
+    assert "/dev/video1" in release_calls
+    assert "/dev/video2" in release_calls
+
+
+@pytest.mark.asyncio
+async def test_run_loop_finally_releases_device(service_imports):
+    """When _run_loop exits due to exception, registry.release() is called in finally block."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-err-release", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    # Force an error after acquire — activate raises
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("services.streaming_service.activate_entertainment_config",
+               new_callable=AsyncMock, side_effect=RuntimeError("Bridge offline")):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-err-release")
+                        if service._task:
+                            await service._task
+
+    # Even on error, release must be called for the acquired device
+    mocks["registry"].release.assert_called_once_with("/dev/video1")
+
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_does_not_touch_registry(service_imports):
+    """_capture_reconnect_loop calls capture.release() and capture.open() directly, NOT registry."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._run_event.set()
+    service._capture = mocks["capture"]  # Simulate acquired capture
+
+    mocks["capture"].open = MagicMock()
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await service._capture_reconnect_loop()
+
+    # capture.release and capture.open should be called (reconnect logic)
+    mocks["capture"].release.assert_called()
+    mocks["capture"].open.assert_called()
+
+    # registry.acquire and registry.release should NOT be called
+    mocks["registry"].acquire.assert_not_called()
+    mocks["registry"].release.assert_not_called()

@@ -14,6 +14,7 @@ import time
 
 from hue_entertainment_pykit import create_bridge, Entertainment, Streaming
 
+from services.capture_service import CAPTURE_DEVICE
 from services.color_math import extract_region_color, rgb_to_xy, build_polygon_mask
 from services.hue_client import (
     activate_entertainment_config,
@@ -46,9 +47,11 @@ class StreamingService:
 
     DEFAULT_HZ = 50
 
-    def __init__(self, db, capture, broadcaster) -> None:
+    def __init__(self, db, capture_registry, broadcaster) -> None:
         self._db = db
-        self._capture = capture
+        self._capture_registry = capture_registry
+        self._capture = None        # Set by start() via registry.acquire()
+        self._device_path = None    # Track for release in stop()
         self._broadcaster = broadcaster
         self._run_event: asyncio.Event = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -84,6 +87,19 @@ class StreamingService:
         self._config_id = config_id
         self._state = "starting"
         await self._broadcaster.push_state(self._state)
+
+        # Resolve device path from DB camera assignment (falls back to CAPTURE_DEVICE)
+        device_path = await self._resolve_device_path(config_id)
+        self._device_path = device_path
+
+        # Acquire capture backend from registry
+        try:
+            self._capture = await asyncio.to_thread(self._capture_registry.acquire, device_path)
+        except RuntimeError as exc:
+            self._state = "error"
+            await self._broadcaster.push_state("error", error=str(exc))
+            return
+
         self._run_event.set()
         self._task = asyncio.create_task(self._run_loop(config_id))
 
@@ -103,6 +119,45 @@ class StreamingService:
             await self._task
         self._state = "idle"
         await self._broadcaster.push_state(self._state)
+
+    # ------------------------------------------------------------------
+    # Internal: device resolution
+    # ------------------------------------------------------------------
+
+    async def _resolve_device_path(self, config_id: str) -> str:
+        """Resolve the device path for the given entertainment config.
+
+        Looks up camera_assignments for the config_id, then finds the
+        last_device_path in known_cameras. Falls back to CAPTURE_DEVICE
+        if no assignment exists or the camera is unknown.
+
+        Args:
+            config_id: Entertainment configuration UUID.
+
+        Returns:
+            Device path string (e.g. '/dev/video0').
+        """
+        async with await self._db.execute(
+            "SELECT camera_stable_id FROM camera_assignments WHERE entertainment_config_id = ?",
+            (config_id,),
+        ) as cursor:
+            assign_row = await cursor.fetchone()
+
+        if assign_row is None:
+            return CAPTURE_DEVICE
+
+        stable_id = assign_row["camera_stable_id"]
+
+        async with await self._db.execute(
+            "SELECT last_device_path FROM known_cameras WHERE stable_id = ?",
+            (stable_id,),
+        ) as cursor:
+            cam_row = await cursor.fetchone()
+
+        if cam_row is None or not cam_row["last_device_path"]:
+            return CAPTURE_DEVICE
+
+        return cam_row["last_device_path"]
 
     # ------------------------------------------------------------------
     # Internal: run loop
@@ -170,11 +225,6 @@ class StreamingService:
             # 6. Set color space to xyb
             await asyncio.to_thread(streaming.set_color_space, "xyb")
 
-            # Ensure capture device is open before entering frame loop
-            if not self._capture.is_open:
-                logger.info("Capture device not open, opening before frame loop")
-                await asyncio.to_thread(self._capture.open)
-
             # Transition to streaming state
             self._state = "streaming"
             await self._broadcaster.push_state(self._state)
@@ -211,7 +261,13 @@ class StreamingService:
             if bridge_ip and username and self._config_id:
                 await deactivate_entertainment_config(bridge_ip, username, self._config_id)
 
-            self._capture.release()
+            if self._device_path:
+                try:
+                    await asyncio.to_thread(self._capture_registry.release, self._device_path)
+                except Exception:
+                    logger.warning("Registry release failed (best-effort)")
+                self._device_path = None
+                self._capture = None
 
             if self._state not in ("error",):
                 self._state = "idle"
