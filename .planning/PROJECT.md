@@ -29,6 +29,15 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - [ ] Scale to 16+ simultaneous light segments
 - [ ] No authentication on the web UI
 
+### Active (v1.2)
+
+- [ ] Wireless screen mirroring from Windows via Miracast (WiFi Direct) as a virtual camera input
+- [ ] Wireless screen mirroring from Android via scrcpy over WiFi as a fallback input
+- [ ] v4l2loopback virtual camera management — create/destroy on demand, transparent to capture pipeline
+- [ ] FFmpeg pipeline management — pipe wireless streams to virtual V4L2 devices with health monitoring
+- [ ] Wireless input API — start/stop receivers, list sessions, check NIC capabilities
+- [ ] Docker configuration for wireless dependencies and Linux capabilities
+
 ### Out of Scope
 
 - User authentication / multi-user support — single-user local tool
@@ -36,6 +45,7 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - Non-Hue smart lights — Hue ecosystem only
 - Audio reactivity — video/color only
 - Cloud connectivity — fully local, Bridge on LAN
+- Apple AirPlay support — user explicitly scoped to Windows and Android only
 
 ## Context
 
@@ -62,6 +72,17 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - Camera dropdown selector per entertainment zone in the UI
 - Each entertainment zone can independently use a different camera source
 - Live preview updates when camera selection changes
+
+## Next Milestone: v1.2 Wireless Input
+
+**Goal:** Enable any Windows or Android device to wirelessly mirror its screen to the system as an input source, supplementing or replacing the physical HDMI capture card.
+
+**Target features:**
+- Miracast (WiFi Direct) receiver for Windows and older Android — appears as Cast target in Win+K
+- scrcpy over WiFi fallback for newer Android devices that dropped Miracast
+- v4l2loopback virtual cameras fed by FFmpeg pipelines — transparent to existing capture pipeline
+- Wireless sources appear in camera selector alongside physical devices
+- API for starting/stopping wireless receivers and checking NIC capabilities
 
 ## Key Decisions
 
@@ -90,4 +111,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-03 after milestone v1.1 initialization*
+*Last updated: 2026-04-03 after milestone v1.2 definition*

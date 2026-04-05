@@ -12,12 +12,14 @@ Exports:
 import asyncio
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from services.capture_v4l2 import enumerate_capture_devices
+if sys.platform != "win32":
+    from services.capture_v4l2 import enumerate_capture_devices
 from services.device_identity import get_stable_id
 
 logger = logging.getLogger(__name__)
@@ -75,11 +77,16 @@ async def _scan_devices() -> tuple[dict[str, dict], bool]:
     The scan is run in a thread executor to avoid blocking the event loop.
     For each device, get_stable_id() is also called in executor (sysfs reads).
 
+    On Windows, V4L2 is unavailable — returns empty results immediately.
+
     Returns:
         A tuple of:
           - dict mapping stable_id -> {"device_path", "card", "stable_id", "display_name"}
           - bool: True if any device had degraded identity (no sysfs)
     """
+    if sys.platform == "win32":
+        return {}, True
+
     loop = asyncio.get_event_loop()
 
     # enumerate_capture_devices performs ioctl — must run in thread

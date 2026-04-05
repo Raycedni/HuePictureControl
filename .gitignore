@@ -4,3 +4,4 @@
 /Backend/.venv/*
 /Frontend/node_modules.bak/*
 .hpc-pids
+/.claude/worktrees/
