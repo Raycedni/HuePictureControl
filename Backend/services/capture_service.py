@@ -192,6 +192,15 @@ class CaptureRegistry:
                 self._ref_counts.pop(device_path)
                 backend.release()
 
+    def get(self, device_path: str) -> Optional[CaptureBackend]:
+        """Return the already-acquired backend for *device_path*, or None.
+
+        Does NOT increment reference count. Used by preview/peek callers.
+        Per D-01: preview is a passive observer.
+        """
+        with self._lock:
+            return self._backends.get(device_path)
+
     def get_default(self) -> Optional[CaptureBackend]:
         """Return the backend for the default CAPTURE_DEVICE, or None."""
         with self._lock:

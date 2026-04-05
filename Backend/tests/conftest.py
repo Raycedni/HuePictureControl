@@ -40,7 +40,9 @@ async def db():
             id TEXT PRIMARY KEY,
             name TEXT,
             polygon TEXT NOT NULL,
-            order_index INTEGER DEFAULT 0
+            order_index INTEGER DEFAULT 0,
+            light_id TEXT,
+            entertainment_config_id TEXT
         )
     """)
     await conn.execute("""

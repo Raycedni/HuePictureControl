@@ -164,6 +164,56 @@ class TestGetDefault:
 
 
 # ---------------------------------------------------------------------------
+# get — non-ref-counted peek
+# ---------------------------------------------------------------------------
+
+
+class TestGet:
+    def test_get_returns_none_when_not_acquired(self):
+        """get() on a fresh registry returns None for any device path."""
+        registry = CaptureRegistry()
+        assert registry.get("/dev/video0") is None
+
+    def test_get_returns_acquired_backend(self):
+        """get() returns the backend after acquire() on the same path."""
+        registry = CaptureRegistry()
+        mock_backend = _make_backend_mock()
+        with patch("services.capture_service.create_capture", return_value=mock_backend):
+            registry.acquire("/dev/video0")
+        result = registry.get("/dev/video0")
+        assert result is mock_backend
+
+    def test_get_returns_none_for_different_path(self):
+        """get() returns None for a path not yet acquired."""
+        registry = CaptureRegistry()
+        mock_backend = _make_backend_mock()
+        with patch("services.capture_service.create_capture", return_value=mock_backend):
+            registry.acquire("/dev/video0")
+        assert registry.get("/dev/video1") is None
+
+    def test_get_does_not_increment_ref_count(self):
+        """get() does not increment reference count — acquire, get, release fully releases."""
+        registry = CaptureRegistry()
+        mock_backend = _make_backend_mock()
+        with patch("services.capture_service.create_capture", return_value=mock_backend):
+            registry.acquire("/dev/video0")
+        # get() should not increment ref count — one release should destroy the backend
+        registry.get("/dev/video0")
+        registry.release("/dev/video0")
+        mock_backend.release.assert_called_once()
+        assert "/dev/video0" not in registry._backends
+
+    def test_get_returns_none_after_release(self):
+        """get() returns None once the last holder calls release()."""
+        registry = CaptureRegistry()
+        mock_backend = _make_backend_mock()
+        with patch("services.capture_service.create_capture", return_value=mock_backend):
+            registry.acquire("/dev/video0")
+        registry.release("/dev/video0")
+        assert registry.get("/dev/video0") is None
+
+
+# ---------------------------------------------------------------------------
 # Thread safety — basic smoke test
 # ---------------------------------------------------------------------------
 
