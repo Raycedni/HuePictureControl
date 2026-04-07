@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: — Full ambient lighting with gradient device support
 status: planning
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-04-02T15:22:23.310Z"
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-04-07T19:54:18.915Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
   total_phases: 7
@@ -35,6 +35,7 @@ Progress: [███░░░░░░░] 25%
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: -
 - Total execution time: 0 hours
@@ -46,6 +47,7 @@ Progress: [███░░░░░░░] 25%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: none yet
 - Trend: -
 
@@ -68,6 +70,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 04-frontend-canvas-editor P03 | 10min | 2 tasks | 5 files |
 | Phase 04-frontend-canvas-editor P04 | 15min | 2 tasks | 4 files |
 | Phase 05-gradient-device-support-and-polish P02 | 2min | 2 tasks | 4 files |
+| Phase 10-frontend-camera-selector P01 | 1330 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -116,6 +119,8 @@ Recent decisions affecting current work:
 - [Phase 04-frontend-canvas-editor]: lightMap built from getLights() on mount in EditorCanvas to resolve light IDs to names for polygon labels without modifying region model
 - [Phase 05-gradient-device-support-and-polish]: Gradient segment drag sets channelId + lightId in dataTransfer; drop handler uses lightId for region update (forward-compatible with future light_assignments writes)
 - [Phase 05-gradient-device-support-and-polish]: Warning banner is soft-only: count message only, no identification of excess channels, does not block operations
+- [Phase 10]: useCameras uses simple useEffect+useState (no Zustand) — camera list is transient UI state not shared across routes
+- [Phase 10]: putCameraAssignment is fire-and-forget void return — component handles optimistic UI without waiting for confirmation
 
 ### Pending Todos
 
@@ -132,6 +137,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T15:22:23.290Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-04-07T19:54:18.453Z
+Stopped at: Completed 10-01-PLAN.md
 Resume file: None
