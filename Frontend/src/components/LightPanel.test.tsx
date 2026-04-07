@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import '@testing-library/jest-dom'
 import { LightPanel } from './LightPanel'
 
 // Mock the API and hooks that LightPanel will import
@@ -9,6 +10,7 @@ vi.mock('@/api/hue', () => ({
     { id: 'config-2', name: 'Wohnzimmer', status: 'inactive', channel_count: 4 },
   ]),
   getLights: vi.fn().mockResolvedValue([]),
+  fetchConfigChannels: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/api/cameras', () => ({
@@ -17,6 +19,10 @@ vi.mock('@/api/cameras', () => ({
 
 vi.mock('@/api/regions', () => ({
   getRegions: vi.fn().mockResolvedValue([]),
+  fetchRegions: vi.fn().mockResolvedValue([]),
+  startStreaming: vi.fn().mockResolvedValue(undefined),
+  stopStreaming: vi.fn().mockResolvedValue(undefined),
+  clearAllAssignments: vi.fn().mockResolvedValue(undefined),
 }))
 
 const mockCamerasData = {
