@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: — Full ambient lighting with gradient device support
+milestone: v1.1
+milestone_name: Multi-Camera Support
 status: planning
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-04-07T19:54:18.915Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-04-07T20:30:12.832Z"
 last_activity: 2026-03-23 — Roadmap created
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
+  total_phases: 5
+  completed_phases: 4
+  total_plans: 9
+  completed_plans: 9
   percent: 25
 ---
 
@@ -71,6 +71,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 04-frontend-canvas-editor P04 | 15min | 2 tasks | 4 files |
 | Phase 05-gradient-device-support-and-polish P02 | 2min | 2 tasks | 4 files |
 | Phase 10-frontend-camera-selector P01 | 1330 | 2 tasks | 5 files |
+| Phase 10-frontend-camera-selector P02 | 31min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,8 @@ Recent decisions affecting current work:
 - [Phase 05-gradient-device-support-and-polish]: Warning banner is soft-only: count message only, no identification of excess channels, does not block operations
 - [Phase 10]: useCameras uses simple useEffect+useState (no Zustand) — camera list is transient UI state not shared across routes
 - [Phase 10]: putCameraAssignment is fire-and-forget void return — component handles optimistic UI without waiting for confirmation
+- [Phase 10-frontend-camera-selector]: LightPanel switches to getEntertainmentConfigs from hue api — aligns with Wave 0 test mock structure
+- [Phase 10-frontend-camera-selector]: Props-down pattern: EditorPage owns selectedConfigId + selectedDevice state, passes to LightPanel and EditorCanvas
 
 ### Pending Todos
 
@@ -137,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-07T19:54:18.453Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-04-07T20:30:12.456Z
+Stopped at: Completed 10-02-PLAN.md
 Resume file: None

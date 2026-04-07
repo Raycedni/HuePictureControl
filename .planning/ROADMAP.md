@@ -164,7 +164,7 @@ Plans:
 - [x] **Phase 7: Device Enumeration and Camera Assignment Schema** - Enumerate all V4L2 capture devices and persist camera-to-zone assignments in the database (completed 2026-04-03)
 - [ ] **Phase 8: Capture Registry** - Replace the global CaptureBackend singleton with a per-device registry that supports concurrent multi-zone capture
 - [x] **Phase 9: Preview Routing and Region API** - Route preview WebSocket to the zone's assigned camera; expose camera_device in region CRUD (completed 2026-04-07)
-- [ ] **Phase 10: Frontend Camera Selector** - Per-zone camera dropdown in the editor UI with live preview switching
+- [x] **Phase 10: Frontend Camera Selector** - Per-zone camera dropdown in the editor UI with live preview switching (completed 2026-04-07)
 - [ ] **Phase 11: Docker Multi-Device Infrastructure** - Docker Compose configuration and documentation for multiple video device passthrough
 
 ## Phase Details
@@ -231,8 +231,8 @@ Plans:
 
 - [x] 10-00-PLAN.md — Wave 0 test scaffolds (cameras.test.ts, LightPanel.test.tsx)
 Plans:
-- [ ] 10-01-PLAN.md — Camera API types, fetch wrappers, useCameras hook, usePreviewWS test fix
-- [ ] 10-02-PLAN.md — EditorPage state lift, LightPanel zone+camera dropdowns, EditorCanvas device wiring
+- [x] 10-01-PLAN.md — Camera API types, fetch wrappers, useCameras hook, usePreviewWS test fix
+- [x] 10-02-PLAN.md — EditorPage state lift, LightPanel zone+camera dropdowns, EditorCanvas device wiring
 **UI hint**: yes
 
 ---
@@ -332,7 +332,7 @@ Plans:
 | 7. Device Enumeration and Camera Assignment Schema | v1.1 | 2/2 | Complete   | 2026-04-03 |
 | 8. Capture Registry | v1.1 | 1/2 | In Progress|  |
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete   | 2026-04-07 |
-| 10. Frontend Camera Selector | v1.1 | 1/3 | In Progress|  |
+| 10. Frontend Camera Selector | v1.1 | 3/3 | Complete   | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 0/TBD | Not started | - |
 | 12. Virtual Camera & Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
