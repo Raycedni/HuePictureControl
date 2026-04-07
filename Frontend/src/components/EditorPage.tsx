@@ -3,21 +3,24 @@ import { DrawingToolbar } from './DrawingToolbar'
 import { EditorCanvas, handleEditorDelete } from './EditorCanvas'
 import { LightPanel } from './LightPanel'
 import { useRegionStore } from '@/store/useRegionStore'
+import { useCameras } from '@/hooks/useCameras'
 
 export function EditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [canvasDims, setCanvasDims] = useState({ width: 640, height: 360 })
   const [identityMode, setIdentityMode] = useState<string | null>(null)
+  const [selectedConfigId, setSelectedConfigId] = useState<string>('')
+  const [selectedDevice, setSelectedDevice] = useState<string | undefined>(undefined)
+  const cameras = useCameras()
 
   const regions = useRegionStore((s) => s.regions)
   const assignedCount = regions.filter((r) => r.light_id !== null).length
 
   useEffect(() => {
-    fetch('/api/cameras')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => { if (data) setIdentityMode(data.identity_mode) })
-      .catch(() => {}) // Silently ignore — alert simply won't show
-  }, [])
+    if (cameras.data) {
+      setIdentityMode(cameras.data.identity_mode)
+    }
+  }, [cameras.data])
 
   useEffect(() => {
     const container = containerRef.current
@@ -62,6 +65,11 @@ export function EditorPage() {
             Device identity is limited to capture card name. Devices may be misidentified if multiple identical cards are connected.
           </div>
         )}
+        {cameras.data && !cameras.data.cameras_available && (
+          <div className="bg-red-500/10 border border-red-500/25 text-red-400 text-xs px-3 py-2 text-center">
+            No capture devices detected. Connect a USB capture card and click refresh.
+          </div>
+        )}
         {assignedCount > 20 && (
           <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400 text-xs px-3 py-2 text-center">
             {assignedCount}/20 channels assigned — bridge will ignore excess channels.
@@ -72,13 +80,21 @@ export function EditorPage() {
             width={canvasDims.width}
             height={canvasDims.height}
             onDeleteRequest={handleEditorDelete}
+            device={selectedDevice}
           />
         </div>
       </div>
 
       {/* Right (desktop) / Bottom (mobile): light panel */}
       <div className="flex md:flex-[3] min-h-0 overflow-hidden max-h-[40vh] md:max-h-none border-t md:border-t-0 border-white/[0.06]">
-        <LightPanel />
+        <LightPanel
+          selectedConfigId={selectedConfigId}
+          onConfigChange={setSelectedConfigId}
+          selectedDevice={selectedDevice}
+          onDeviceChange={setSelectedDevice}
+          camerasData={cameras.data}
+          onCamerasRefresh={cameras.refresh}
+        />
       </div>
     </div>
   )

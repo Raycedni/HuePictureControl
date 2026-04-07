@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Stage, Layer, Image as KonvaImage, Line, Circle } from 'react-konva'
-import useImage from 'use-image'
 import type Konva from 'konva'
 import { usePreviewWS } from '@/hooks/usePreviewWS'
 import { useRegionStore } from '@/store/useRegionStore'
-import { normalize, denormalize, pointInPolygon } from '@/utils/geometry'
+import { normalize, denormalize, pointInPolygon, polygonArea } from '@/utils/geometry'
 import { createRegion, deleteRegion as deleteRegionAPI, fetchRegions, updateRegion as updateRegionAPI } from '@/api/regions'
-import { getLights, type Light } from '@/api/hue'
 import { RegionPolygon } from './RegionPolygon'
 
 export interface EditorCanvasProps {
@@ -14,11 +12,36 @@ export interface EditorCanvasProps {
   height: number
   /** Called by keyboard shortcuts and toolbar delete — wired from EditorPage */
   onDeleteRequest?: () => void
+  device?: string
 }
 
-export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasProps) {
-  const imgSrc = usePreviewWS(true)
-  const [previewImage] = useImage(imgSrc ?? '')
+export function EditorCanvas({ width, height, onDeleteRequest, device }: EditorCanvasProps) {
+  const imgSrc = usePreviewWS(true, device)
+
+  // Double-buffer: keep previous image visible while new one loads to prevent flicker
+  const [previewImage, setPreviewImage] = useState<HTMLImageElement | null>(null)
+  const loadingImgRef = useRef<HTMLImageElement | null>(null)
+
+  useEffect(() => {
+    if (!imgSrc) return
+    const img = new window.Image()
+    loadingImgRef.current = img
+    img.onload = () => {
+      // Only update if this is still the latest requested image
+      if (loadingImgRef.current === img) {
+        setPreviewImage(img)
+      }
+    }
+    img.src = imgSrc
+    return () => {
+      // Cancel pending load to prevent stale callbacks after unmount
+      if (loadingImgRef.current === img) {
+        img.onload = null
+        img.src = ''
+        loadingImgRef.current = null
+      }
+    }
+  }, [imgSrc])
 
   const stageRef = useRef<Konva.Stage>(null)
 
@@ -37,25 +60,18 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
   const [rectStart, setRectStart] = useState<[number, number] | null>(null)
   const [rectPreview, setRectPreview] = useState<[number, number][] | null>(null)
 
-  // Light map: light_id -> light name for label display
-  const [lightMap, setLightMap] = useState<Record<string, string>>({})
+  // Minimum region area from backend settings
+  const [minRegionArea, setMinRegionArea] = useState(0.001)
 
-  // Load regions and lights on mount
+  // Load regions, lights, and settings on mount
   useEffect(() => {
     fetchRegions().then(setRegions).catch(console.error)
+    fetch('/api/regions/settings')
+      .then((r) => r.json())
+      .then((s: { min_region_area: number }) => setMinRegionArea(s.min_region_area))
+      .catch(console.error)
   }, [setRegions])
 
-  useEffect(() => {
-    getLights()
-      .then((lights: Light[]) => {
-        const map: Record<string, string> = {}
-        for (const l of lights) {
-          map[l.id] = l.name
-        }
-        setLightMap(map)
-      })
-      .catch(console.error)
-  }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -75,6 +91,11 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
   async function commitPolygon(pixelPoints: [number, number][]) {
     if (pixelPoints.length < 3) return
     const normalized = normalize(pixelPoints, width, height)
+    if (polygonArea(normalized) < minRegionArea) {
+      console.warn('Region too small, ignoring')
+      clearDrawing()
+      return
+    }
     const regionCount = useRegionStore.getState().regions.length
     try {
       const region = await createRegion({
@@ -93,10 +114,11 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
     if (!stage) return null
     const pos = stage.getPointerPosition()
     if (!pos) return null
-    return [pos.x, pos.y]
+    // Clamp to canvas bounds
+    return [Math.min(Math.max(pos.x, 0), width), Math.min(Math.max(pos.y, 0), height)]
   }
 
-  function handleStageClick(e: Konva.KonvaEventObject<MouseEvent>) {
+  function handleStageClick(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
     // Deselect on empty stage click
     if (e.target === e.target.getStage()) {
       setSelectedId(null)
@@ -119,7 +141,7 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
     }
   }
 
-  function handleMouseDown(e: Konva.KonvaEventObject<MouseEvent>) {
+  function handleMouseDown(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
     if (drawingMode !== 'rectangle') return
     const pos = getPointerPos()
     if (!pos) return
@@ -128,7 +150,7 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
     e.cancelBubble = true
   }
 
-  function handleMouseMove(e: Konva.KonvaEventObject<MouseEvent>) {
+  function handleMouseMove(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
     if (drawingMode !== 'rectangle' || !rectStart) return
     const pos = getPointerPos()
     if (!pos) return
@@ -143,7 +165,7 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
     e.cancelBubble = true
   }
 
-  async function handleMouseUp(e: Konva.KonvaEventObject<MouseEvent>) {
+  async function handleMouseUp(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
     if (drawingMode !== 'rectangle' || !rectStart) return
     const pos = getPointerPos()
     if (!pos) return
@@ -167,7 +189,9 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
     const channelId = e.dataTransfer.getData('channelId')
+    const channelName = e.dataTransfer.getData('channelName')
     const lightId = e.dataTransfer.getData('lightId')
+    const configId = e.dataTransfer.getData('configId')
 
     if (!channelId && !lightId) return
 
@@ -188,14 +212,20 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
 
     if (!hit) return
 
-    // Use lightId for the region assignment (both gradient segments and non-gradient lights)
-    // channelId is available for future light_assignments writes
     const assignLightId = lightId || null
     if (!assignLightId) return
 
     try {
-      await updateRegionAPI(hit.id, { light_id: assignLightId })
-      updateRegionInStore(hit.id, { light_id: assignLightId })
+      const update: Parameters<typeof updateRegionAPI>[1] = {
+        light_id: assignLightId,
+        name: channelName || hit.name,
+      }
+      if (channelId && configId) {
+        update.channel_id = Number(channelId)
+        update.entertainment_config_id = configId
+      }
+      await updateRegionAPI(hit.id, update)
+      updateRegionInStore(hit.id, { light_id: assignLightId, name: update.name })
     } catch (err) {
       console.error('Failed to assign light to region:', err)
     }
@@ -205,15 +235,20 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
     <div
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
+      style={{ background: '#000', display: 'inline-block', touchAction: 'none' }}
     >
       <Stage
         ref={stageRef}
         width={width}
         height={height}
         onClick={handleStageClick}
+        onTap={handleStageClick}
         onMouseDown={handleMouseDown}
+        onTouchStart={handleMouseDown}
         onMouseMove={handleMouseMove}
+        onTouchMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onTouchEnd={handleMouseUp}
       >
         {/* Layer 0: preview — no interaction */}
         <Layer listening={false}>
@@ -231,7 +266,6 @@ export function EditorCanvas({ width, height, onDeleteRequest }: EditorCanvasPro
               isSelected={region.id === selectedId}
               stageWidth={width}
               stageHeight={height}
-              lightName={region.light_id ? lightMap[region.light_id] : undefined}
             />
           ))}
 
