@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Multi-Camera Support
 status: executing
-stopped_at: Phase 9 context gathered
-last_updated: "2026-04-05T09:09:38.119Z"
-last_activity: 2026-04-03
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-04-07T18:34:50.910Z"
+last_activity: 2026-04-07
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
   percent: 20
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-03)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 08 — capture-registry
+**Current focus:** Phase 09 — preview-routing-and-region-api
 
 ## Current Position
 
-Phase: 08 (capture-registry) — EXECUTING
+Phase: 09 (preview-routing-and-region-api) — EXECUTING
 Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-04-03
+Last activity: 2026-04-07
 
 Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 
@@ -53,6 +53,7 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 *Updated after each plan completion*
 | Phase 07 P02 | 750 | 2 tasks | 4 files |
 | Phase 08 P01 | 8 | 1 tasks | 2 files |
+| Phase 09-preview-routing-and-region-api P01 | 15 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,8 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 - [Phase 07]: PUT /api/cameras/assignments validates camera_stable_id exists in known_cameras before upsert
 - [Phase 08-01]: Used threading.Lock (not asyncio.Lock) in CaptureRegistry — callers use asyncio.to_thread so methods run from thread-pool threads
 - [Phase 08-01]: CaptureRegistry.shutdown() catches per-backend exceptions to ensure all backends released even if one fails
+- [Phase 09-01]: Preview WebSocket is a passive observer — uses registry.get() not acquire() to avoid holding ref count that would prevent streaming zones from releasing backends
+- [Phase 09-01]: Close code 1008 (Policy Violation) enforced before WebSocket accept when ?device= param missing
 
 ### Pending Todos
 
@@ -80,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T09:09:38.102Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-preview-routing-and-region-api/09-CONTEXT.md
+Last session: 2026-04-07T18:34:50.892Z
+Stopped at: Completed 09-01-PLAN.md
+Resume file: None

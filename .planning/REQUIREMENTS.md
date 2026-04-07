@@ -76,7 +76,7 @@
 ### Multi-Camera Capture
 
 - [ ] **MCAP-01**: StreamingService uses the assigned camera for each entertainment config instead of a global singleton
-- [ ] **MCAP-02**: Preview WebSocket serves frames from the zone's assigned camera, not a global device
+- [x] **MCAP-02**: Preview WebSocket serves frames from the zone's assigned camera, not a global device
 - [x] **MCAP-03**: Multiple entertainment zones can stream simultaneously from different cameras
 
 ### Camera UI
@@ -189,7 +189,7 @@
 | CAMA-03 | Phase 7 | Complete |
 | CAMA-04 | Phase 9 | Pending |
 | MCAP-01 | Phase 8 | Pending |
-| MCAP-02 | Phase 9 | Pending |
+| MCAP-02 | Phase 9 | Complete |
 | MCAP-03 | Phase 8 | Complete |
 | CMUI-01 | Phase 10 | Pending |
 | CMUI-02 | Phase 10 | Pending |
