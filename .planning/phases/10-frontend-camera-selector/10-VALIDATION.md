@@ -2,8 +2,8 @@
 phase: 10
 slug: frontend-camera-selector
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-04-07
 ---
 
@@ -38,9 +38,12 @@ created: 2026-04-07
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 10-01-01 | 01 | 1 | CMUI-01 | unit | `cd Frontend && npx vitest run --reporter=verbose src/components/LightPanel.test.tsx` | ❌ W0 | ⬜ pending |
-| 10-01-02 | 01 | 1 | CMUI-02 | unit | `cd Frontend && npx vitest run --reporter=verbose src/components/LightPanel.test.tsx` | ❌ W0 | ⬜ pending |
-| 10-01-03 | 01 | 1 | CMUI-03 | unit | `cd Frontend && npx vitest run --reporter=verbose src/hooks/usePreviewWS.test.ts` | ✅ (needs update) | ⬜ pending |
+| 10-00-01 | 00 | 0 | CMUI-01, CMUI-02 | scaffold | `ls Frontend/src/api/cameras.test.ts Frontend/src/components/LightPanel.test.tsx` | Created in W0 | ⬜ pending |
+| 10-01-01 | 01 | 1 | CMUI-02 | unit | `cd Frontend && npx vitest run --reporter=verbose src/api/cameras.test.ts` | ✅ (W0) | ⬜ pending |
+| 10-01-02 | 01 | 1 | CMUI-02 | unit | `cd Frontend && npx vitest run --reporter=verbose src/hooks/` | ✅ (exists) | ⬜ pending |
+| 10-02-01 | 02 | 2 | CMUI-03 | compile | `cd Frontend && npx tsc --noEmit --pretty` | n/a | ⬜ pending |
+| 10-02-02 | 02 | 2 | CMUI-01, CMUI-02 | unit | `cd Frontend && npx vitest run --reporter=verbose src/components/LightPanel.test.tsx` | ✅ (W0) | ⬜ pending |
+| 10-02-03 | 02 | 2 | CMUI-03 | manual | Human verify end-to-end flow | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -48,9 +51,9 @@ created: 2026-04-07
 
 ## Wave 0 Requirements
 
-- [ ] `Frontend/src/components/LightPanel.test.tsx` — stubs for CMUI-01, CMUI-02 (zone and camera dropdown rendering, option format)
-- [ ] `Frontend/src/api/cameras.test.ts` — covers `getCameras()` and `putCameraAssignment()` fetch wrappers
-- [ ] Update `Frontend/src/hooks/usePreviewWS.test.ts` — pass `device` arg to fix baseline failure
+- [x] `Frontend/src/api/cameras.test.ts` — covers `getCameras()` and `putCameraAssignment()` fetch wrappers (Plan 10-00, Task 1)
+- [x] `Frontend/src/components/LightPanel.test.tsx` — stubs for CMUI-01, CMUI-02 (zone and camera dropdown rendering, option format) (Plan 10-00, Task 1)
+- [x] Update `Frontend/src/hooks/usePreviewWS.test.ts` — pass `device` arg to fix baseline failure (Plan 10-01, Task 2)
 
 ---
 
@@ -65,11 +68,11 @@ created: 2026-04-07
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 5s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 5s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved

@@ -227,8 +227,9 @@ Plans:
   1. The editor UI shows a camera dropdown for each entertainment zone populated with device name and path for every available camera
   2. Selecting a different camera in the dropdown updates the live preview within 2 seconds without a page reload
   3. The selected camera assignment is saved and the correct camera is shown pre-selected when the user reopens the editor after a restart
-**Plans**: 2 plans
+**Plans**: 3 plans
 
+- [ ] 10-00-PLAN.md — Wave 0 test scaffolds (cameras.test.ts, LightPanel.test.tsx)
 Plans:
 - [ ] 10-01-PLAN.md — Camera API types, fetch wrappers, useCameras hook, usePreviewWS test fix
 - [ ] 10-02-PLAN.md — EditorPage state lift, LightPanel zone+camera dropdowns, EditorCanvas device wiring
