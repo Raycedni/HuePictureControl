@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Multi-Camera Support
-status: executing
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-04-07T18:34:50.910Z"
+status: verifying
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-04-07T18:39:39.534Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 20
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-03)
 
 Phase: 09 (preview-routing-and-region-api) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-07
 
 Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
@@ -54,6 +54,7 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 | Phase 07 P02 | 750 | 2 tasks | 4 files |
 | Phase 08 P01 | 8 | 1 tasks | 2 files |
 | Phase 09-preview-routing-and-region-api P01 | 15 | 2 tasks | 5 files |
+| Phase 09-preview-routing-and-region-api P02 | 18 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,9 @@ Progress: [██░░░░░░░░] 20% (v1.1) — Phase 7 complete
 - [Phase 08-01]: CaptureRegistry.shutdown() catches per-backend exceptions to ensure all backends released even if one fails
 - [Phase 09-01]: Preview WebSocket is a passive observer — uses registry.get() not acquire() to avoid holding ref count that would prevent streaming zones from releasing backends
 - [Phase 09-01]: Close code 1008 (Policy Violation) enforced before WebSocket accept when ?device= param missing
+- [Phase 09-preview-routing-and-region-api]: camera_device is read-only derived field — computed via LEFT JOIN, not stored; write path uses entertainment_config_id column
+- [Phase 09-preview-routing-and-region-api]: update_region now writes entertainment_config_id to regions table (previously only wrote to light_assignments)
+- [Phase 09-preview-routing-and-region-api]: usePreviewWS stays disconnected when device param is undefined — Phase 10 call sites will wire device
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-07T18:34:50.892Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-04-07T18:39:39.519Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
