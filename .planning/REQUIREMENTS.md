@@ -81,8 +81,8 @@
 
 ### Camera UI
 
-- [ ] **CMUI-01**: Camera dropdown selector per entertainment zone in the editor UI
-- [ ] **CMUI-02**: Dropdown shows device name and path for each available camera
+- [x] **CMUI-01**: Camera dropdown selector per entertainment zone in the editor UI
+- [x] **CMUI-02**: Dropdown shows device name and path for each available camera
 - [ ] **CMUI-03**: Live preview updates immediately when camera selection changes
 
 ### Docker
@@ -191,8 +191,8 @@
 | MCAP-01 | Phase 8 | Pending |
 | MCAP-02 | Phase 9 | Complete |
 | MCAP-03 | Phase 8 | Complete |
-| CMUI-01 | Phase 10 | Pending |
-| CMUI-02 | Phase 10 | Pending |
+| CMUI-01 | Phase 10 | Complete |
+| CMUI-02 | Phase 10 | Complete |
 | CMUI-03 | Phase 10 | Pending |
 | DOCK-01 | Phase 11 | Pending |
 | DOCK-02 | Phase 11 | Pending |
