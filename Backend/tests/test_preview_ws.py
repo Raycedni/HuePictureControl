@@ -1,21 +1,19 @@
-"""Tests for the /ws/preview WebSocket endpoint for binary JPEG streaming.
+"""Tests for the /ws/preview WebSocket endpoint — device-routed frame streaming.
 
 Tests cover:
-- /ws/preview accepts a WebSocket connection and sends binary data
-- Frames are JPEG-encoded binary (bytes, not text)
-- If capture raises RuntimeError, no crash occurs
-- Disconnecting client is handled cleanly
-- Multiple clients can connect simultaneously
-
-NOTE: These tests are currently skipped due to a hang issue with pytest-asyncio and TestClient websockets.
-This is a known limitation that needs investigation.
+- WebSocket without ?device= param is rejected with close code 1008
+- _resolve_device_path returns device path as-is when it starts with /dev/
+- _resolve_device_path resolves stable_id via known_cameras lookup
+- _resolve_device_path returns None for unknown stable_id
+- WebSocket with ?device= calls registry.get(device_path) not get_default()
 """
-import numpy as np
+import asyncio
 import pytest
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -23,13 +21,17 @@ from unittest.mock import AsyncMock, MagicMock
 # ---------------------------------------------------------------------------
 
 
-def _make_preview_ws_app(mock_capture):
-    """Build a minimal FastAPI app with preview_ws router wired to a mock capture."""
+def _make_preview_ws_app(registry=None, db=None):
+    """Build a minimal FastAPI app with preview_ws router, mock registry and db."""
     from routers.preview_ws import router as preview_ws_router
+
+    mock_registry = registry or MagicMock()
+    mock_db = db or MagicMock()
 
     @asynccontextmanager
     async def lifespan(app):
-        app.state.capture = mock_capture
+        app.state.capture_registry = mock_registry
+        app.state.db = mock_db
         yield
 
     test_app = FastAPI(lifespan=lifespan)
@@ -37,67 +39,133 @@ def _make_preview_ws_app(mock_capture):
     return test_app
 
 
-def _make_mock_capture(frame=None, error=None):
-    """Build a mock capture that returns a frame or raises an error."""
-    mock_capture = MagicMock()
-    if frame is None:
-        # Default: 480x640 solid-blue BGR frame
-        solid_blue = np.zeros((480, 640, 3), dtype=np.uint8)
-        solid_blue[:, :, 0] = 255
-        frame = solid_blue
+class _FakeCursor:
+    """Async context manager cursor that returns a fixed row."""
 
-    if error is not None:
-        mock_capture.get_frame = AsyncMock(side_effect=error)
-    else:
-        mock_capture.get_frame = AsyncMock(return_value=frame)
+    def __init__(self, row):
+        self._row = row
 
-    return mock_capture
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def fetchone(self):
+        return self._row
+
+
+class _FakeDB:
+    """Minimal fake async DB that answers SELECT from known_cameras."""
+
+    def __init__(self, row):
+        self._row = row
+
+    def execute(self, sql, params=None):
+        return _FakeCursor(self._row)
 
 
 # ---------------------------------------------------------------------------
-# /ws/preview tests (SKIPPED - pytest-asyncio + TestClient websocket hang)
+# _resolve_device_path unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDevicePath:
+    @pytest.mark.asyncio
+    async def test_resolve_device_path_direct(self):
+        """Direct /dev/ path is returned unchanged without DB lookup."""
+        from routers.preview_ws import _resolve_device_path
+
+        result = await _resolve_device_path(db=None, device="/dev/video0")
+        assert result == "/dev/video0"
+
+    @pytest.mark.asyncio
+    async def test_resolve_device_path_stable_id(self):
+        """Stable ID is resolved to last_device_path via known_cameras."""
+        from routers.preview_ws import _resolve_device_path
+
+        # Simulate a row returned from known_cameras
+        row = {"last_device_path": "/dev/video2"}
+        fake_db = _FakeDB(row=row)
+
+        result = await _resolve_device_path(db=fake_db, device="vid:pid:serial")
+        assert result == "/dev/video2"
+
+    @pytest.mark.asyncio
+    async def test_resolve_device_path_unknown_stable_id(self):
+        """Unknown stable_id (not in known_cameras) returns None."""
+        from routers.preview_ws import _resolve_device_path
+
+        fake_db = _FakeDB(row=None)
+
+        result = await _resolve_device_path(db=fake_db, device="vid:pid:unknown")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# WebSocket handler tests
 # ---------------------------------------------------------------------------
 
 
 class TestPreviewWsEndpoint:
-    @pytest.mark.skip(reason="pytest-asyncio + TestClient websocket hang issue")
-    def test_websocket_accepts_connection(self):
-        """Connecting to /ws/preview is accepted without error."""
-        mock_capture = _make_mock_capture()
-        test_app = _make_preview_ws_app(mock_capture)
-        with TestClient(test_app) as client:
-            with client.websocket_connect("/ws/preview") as ws:
-                data = ws.receive_bytes()
-            assert isinstance(data, bytes)
+    def test_missing_device_param(self):
+        """Connecting without ?device= closes with code 1008 before accept."""
+        app = _make_preview_ws_app()
+        with TestClient(app) as client:
+            with pytest.raises(Exception):
+                # TestClient raises on non-accepted close
+                with client.websocket_connect("/ws/preview") as ws:
+                    # The server closes before accept; reading should raise
+                    ws.receive_bytes()
 
-    @pytest.mark.skip(reason="pytest-asyncio + TestClient websocket hang issue")
-    def test_websocket_sends_binary_jpeg(self):
-        """Frames sent over /ws/preview are binary JPEG data (starts with FF D8)."""
-        mock_capture = _make_mock_capture()
-        test_app = _make_preview_ws_app(mock_capture)
-        with TestClient(test_app) as client:
-            with client.websocket_connect("/ws/preview") as ws:
-                data = ws.receive_bytes()
-            assert data[:2] == b"\xff\xd8"
+    def test_device_param_calls_registry_get(self):
+        """WebSocket with ?device=/dev/video0 calls registry.get('/dev/video0')."""
+        mock_backend = MagicMock()
+        mock_backend.get_jpeg = AsyncMock(return_value=b"\xff\xd8fake")
 
-    @pytest.mark.skip(reason="pytest-asyncio + TestClient websocket hang issue")
-    def test_websocket_disconnect_handled_cleanly(self):
-        """Disconnecting /ws/preview client does not raise an exception."""
-        mock_capture = _make_mock_capture()
-        test_app = _make_preview_ws_app(mock_capture)
-        with TestClient(test_app) as client:
-            with client.websocket_connect("/ws/preview") as ws:
-                ws.receive_bytes()
+        call_count = {"n": 0}
 
-    @pytest.mark.skip(reason="pytest-asyncio + TestClient websocket hang issue")
-    def test_multiple_clients_can_connect(self):
-        """Multiple simultaneous /ws/preview connections all receive frames."""
-        mock_capture = _make_mock_capture()
-        test_app = _make_preview_ws_app(mock_capture)
-        with TestClient(test_app) as client:
-            with client.websocket_connect("/ws/preview") as ws1:
-                data1 = ws1.receive_bytes()
-                with client.websocket_connect("/ws/preview") as ws2:
-                    data2 = ws2.receive_bytes()
-        assert data1[:2] == b"\xff\xd8"
-        assert data2[:2] == b"\xff\xd8"
+        def get_side_effect(path):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return mock_backend
+            return None  # Stop the loop after first frame
+
+        mock_registry = MagicMock()
+        mock_registry.get = MagicMock(side_effect=get_side_effect)
+
+        app = _make_preview_ws_app(registry=mock_registry)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/preview?device=/dev/video0") as ws:
+                    data = ws.receive_bytes()
+
+        mock_registry.get.assert_called_with("/dev/video0")
+        assert data == b"\xff\xd8fake"
+
+    def test_device_param_does_not_call_get_default(self):
+        """WebSocket with ?device= uses registry.get(), never registry.get_default()."""
+        mock_backend = MagicMock()
+        mock_backend.get_jpeg = AsyncMock(return_value=b"\xff\xd8fake")
+
+        call_count = {"n": 0}
+
+        def get_side_effect(path):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return mock_backend
+            return None
+
+        mock_registry = MagicMock()
+        mock_registry.get = MagicMock(side_effect=get_side_effect)
+        mock_registry.get_default = MagicMock()
+
+        app = _make_preview_ws_app(registry=mock_registry)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/preview?device=/dev/video0") as ws:
+                    ws.receive_bytes()
+
+        mock_registry.get_default.assert_not_called()
