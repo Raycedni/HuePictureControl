@@ -71,7 +71,7 @@
 - [ ] **CAMA-01**: Camera is assigned per entertainment config (zone), not per-region — all regions in a zone share one camera
 - [ ] **CAMA-02**: Camera-to-entertainment-config mapping is persisted in the database and survives restarts
 - [x] **CAMA-03**: When no camera is explicitly assigned, the system falls back to the default capture device
-- [ ] **CAMA-04**: UI shows camera health status (connected/disconnected) per entertainment zone
+- [x] **CAMA-04**: UI shows camera health status (connected/disconnected) per entertainment zone
 
 ### Multi-Camera Capture
 
@@ -187,7 +187,7 @@
 | CAMA-01 | Phase 7 | Pending |
 | CAMA-02 | Phase 7 | Pending |
 | CAMA-03 | Phase 7 | Complete |
-| CAMA-04 | Phase 9 | Pending |
+| CAMA-04 | Phase 9 | Complete |
 | MCAP-01 | Phase 8 | Pending |
 | MCAP-02 | Phase 9 | Complete |
 | MCAP-03 | Phase 8 | Complete |
