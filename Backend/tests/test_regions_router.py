@@ -267,3 +267,91 @@ class TestListRegionsIncludesLightId:
     def test_list_regions_shows_assigned_light_id(self, regions_client):
         """GET /api/regions/ shows non-null light_id when assigned."""
         pass
+
+
+# ---------------------------------------------------------------------------
+# Tests — camera_device derived field (Phase 9, D-08, MCAP-02)
+# ---------------------------------------------------------------------------
+
+
+class TestListRegionsCameraDevice:
+    def test_list_regions_includes_camera_device(self, db):
+        """GET /api/regions returns camera_device matching last_device_path when assignment exists."""
+        import asyncio
+
+        polygon = [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]]
+        asyncio.run(db.execute(
+            "INSERT INTO regions (id, name, polygon, order_index, entertainment_config_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("region-cam-1", "Cam Region", json.dumps(polygon), 0, "cfg-zone-1"),
+        ))
+        asyncio.run(db.execute(
+            "INSERT INTO known_cameras (stable_id, display_name, last_seen_at, last_device_path) "
+            "VALUES (?, ?, ?, ?)",
+            ("1234:5678", "AV.io HD", "2026-01-01T00:00:00Z", "/dev/video0"),
+        ))
+        asyncio.run(db.execute(
+            "INSERT INTO camera_assignments (entertainment_config_id, camera_stable_id, camera_name) "
+            "VALUES (?, ?, ?)",
+            ("cfg-zone-1", "1234:5678", "AV.io HD"),
+        ))
+        asyncio.run(db.commit())
+
+        test_app = _make_regions_app(db)
+        with TestClient(test_app) as client:
+            resp = client.get("/api/regions/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["camera_device"] == "/dev/video0"
+
+    def test_list_regions_camera_device_null_no_assignment(self, db):
+        """GET /api/regions returns camera_device=null when no entertainment_config_id set."""
+        import asyncio
+
+        polygon = [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]]
+        asyncio.run(db.execute(
+            "INSERT INTO regions (id, name, polygon, order_index) VALUES (?, ?, ?, ?)",
+            ("region-no-cam", "No Cam Region", json.dumps(polygon), 0),
+        ))
+        asyncio.run(db.commit())
+
+        test_app = _make_regions_app(db)
+        with TestClient(test_app) as client:
+            resp = client.get("/api/regions/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["camera_device"] is None
+
+    def test_update_region_writes_entertainment_config_id(self, db):
+        """PUT with entertainment_config_id writes it to the regions table."""
+        import asyncio
+
+        polygon = [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]]
+        asyncio.run(db.execute(
+            "INSERT INTO regions (id, name, polygon, order_index) VALUES (?, ?, ?, ?)",
+            ("region-update-cfg", "Update Region", json.dumps(polygon), 0),
+        ))
+        asyncio.run(db.commit())
+
+        test_app = _make_regions_app(db)
+        with TestClient(test_app) as client:
+            resp = client.put(
+                "/api/regions/region-update-cfg",
+                json={"entertainment_config_id": "cfg-zone-99"},
+            )
+        assert resp.status_code == 200
+
+        # Verify the column was written
+        async def _check():
+            async with db.execute(
+                "SELECT entertainment_config_id FROM regions WHERE id = ?",
+                ("region-update-cfg",),
+            ) as cursor:
+                row = await cursor.fetchone()
+            return row
+
+        row = asyncio.run(_check())
+        assert row is not None
+        assert row["entertainment_config_id"] == "cfg-zone-99"

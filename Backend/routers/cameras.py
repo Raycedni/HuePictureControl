@@ -40,9 +40,19 @@ class CameraDevice(BaseModel):
     last_seen_at: str | None
 
 
+class ZoneHealth(BaseModel):
+    entertainment_config_id: str
+    camera_name: str
+    camera_stable_id: str
+    connected: bool
+    device_path: str | None
+
+
 class CamerasResponse(BaseModel):
     devices: list[CameraDevice]
     identity_mode: str  # "stable" | "degraded"
+    cameras_available: bool
+    zone_health: list[ZoneHealth]
 
 
 class ReconnectRequest(BaseModel):
@@ -190,7 +200,31 @@ async def list_cameras(request: Request) -> CamerasResponse:
     else:
         identity_mode = "stable"
 
-    return CamerasResponse(devices=devices, identity_mode=identity_mode)
+    # Build zone_health from camera_assignments (per D-05, CAMA-04)
+    async with db.execute(
+        "SELECT entertainment_config_id, camera_stable_id, camera_name FROM camera_assignments"
+    ) as cursor:
+        assignment_rows = await cursor.fetchall()
+
+    zone_health: list[ZoneHealth] = []
+    for row in assignment_rows:
+        sid = row["camera_stable_id"]
+        connected = sid in scan_results
+        dp = scan_results[sid]["device_path"] if connected else None
+        zone_health.append(ZoneHealth(
+            entertainment_config_id=row["entertainment_config_id"],
+            camera_name=row["camera_name"],
+            camera_stable_id=sid,
+            connected=connected,
+            device_path=dp,
+        ))
+
+    return CamerasResponse(
+        devices=devices,
+        identity_mode=identity_mode,
+        cameras_available=len(devices) > 0,
+        zone_health=zone_health,
+    )
 
 
 @router.post("/reconnect", response_model=ReconnectResponse)

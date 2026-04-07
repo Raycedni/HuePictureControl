@@ -52,6 +52,13 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
     except Exception:
         # Column already exists — safe to ignore OperationalError
         pass
+    # Migration: add entertainment_config_id to regions for zone-camera join (Phase 9, D-08)
+    try:
+        await db.execute("ALTER TABLE regions ADD COLUMN entertainment_config_id TEXT")
+        await db.commit()
+    except Exception:
+        # Column already exists — safe to ignore
+        pass
     await db.execute("""
         CREATE TABLE IF NOT EXISTS light_assignments (
             region_id TEXT NOT NULL,

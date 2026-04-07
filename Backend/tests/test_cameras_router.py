@@ -325,3 +325,129 @@ def test_put_assignment_upsert(cameras_client):
 
     get_resp = client.get("/api/cameras/assignments/cfg-1")
     assert get_resp.json()["camera_name"] == "Cam B"
+
+
+# ---------------------------------------------------------------------------
+# Tests — cameras_available field (CAMA-04)
+# ---------------------------------------------------------------------------
+
+
+def test_cameras_available_true_with_devices(cameras_client):
+    """GET /api/cameras returns cameras_available=True when devices list is non-empty."""
+    client, *_ = cameras_client
+    resp = client.get("/api/cameras")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "cameras_available" in body
+    assert body["cameras_available"] is True
+
+
+def test_cameras_available_false_empty(cameras_client_empty):
+    """GET /api/cameras returns cameras_available=False when no devices found."""
+    resp = cameras_client_empty.get("/api/cameras")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "cameras_available" in body
+    assert body["cameras_available"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests — zone_health field (CAMA-04)
+# ---------------------------------------------------------------------------
+
+
+def test_zone_health_connected(cameras_client):
+    """zone_health entry has connected=True when stable_id matches a scanned device."""
+    client, _, _, db = cameras_client
+    # Seed known_cameras and camera_assignments
+    client.get("/api/cameras")  # seeds known_cameras with stable_id "1234:5678"
+
+    async def _seed():
+        await db.execute(
+            "INSERT INTO camera_assignments (entertainment_config_id, camera_stable_id, camera_name) "
+            "VALUES (?, ?, ?)",
+            ("cfg-zone-1", "1234:5678", "AV.io HD"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_seed())
+
+    resp = client.get("/api/cameras")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "zone_health" in body
+    zone_entries = body["zone_health"]
+    assert len(zone_entries) == 1
+    entry = zone_entries[0]
+    assert entry["entertainment_config_id"] == "cfg-zone-1"
+    assert entry["camera_stable_id"] == "1234:5678"
+    assert entry["connected"] is True
+    assert entry["device_path"] == "/dev/video0"
+
+
+def test_zone_health_disconnected(cameras_client_empty):
+    """zone_health entry has connected=False when stable_id not in current scan."""
+    import asyncio as _asyncio
+
+    # We need a client where the db has a camera_assignment but scan returns nothing
+    # cameras_client_empty scans empty, so we need to seed the db manually
+    # Re-use the fixture pattern with a fresh db that has an assignment row
+    import aiosqlite as _aiosqlite
+
+    async def _run():
+        conn = await _aiosqlite.connect(":memory:")
+        conn.row_factory = _aiosqlite.Row
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS known_cameras (
+                stable_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                last_seen_at TEXT, last_device_path TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS camera_assignments (
+                entertainment_config_id TEXT PRIMARY KEY,
+                camera_stable_id TEXT NOT NULL, camera_name TEXT NOT NULL
+            )
+        """)
+        # Insert an assignment for a stable_id that won't be in the empty scan
+        await conn.execute(
+            "INSERT INTO camera_assignments (entertainment_config_id, camera_stable_id, camera_name) "
+            "VALUES (?, ?, ?)",
+            ("cfg-zone-2", "dead:beef", "Missing Cam"),
+        )
+        await conn.commit()
+        return conn
+
+    db_conn = _asyncio.get_event_loop().run_until_complete(_run())
+
+    from routers.cameras import router as cameras_router
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch
+
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.db = db_conn
+        yield
+
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(cameras_router)
+
+    with (
+        patch("routers.cameras.enumerate_capture_devices", return_value=[]),
+        patch("routers.cameras.get_stable_id", return_value=("fallback", False)),
+        TestClient(app) as client,
+    ):
+        resp = client.get("/api/cameras")
+        assert resp.status_code == 200
+        body = resp.json()
+        zone_entries = body["zone_health"]
+        assert len(zone_entries) == 1
+        entry = zone_entries[0]
+        assert entry["entertainment_config_id"] == "cfg-zone-2"
+        assert entry["camera_stable_id"] == "dead:beef"
+        assert entry["connected"] is False
+        assert entry["device_path"] is None
+
+    _asyncio.get_event_loop().run_until_complete(db_conn.close())

@@ -151,3 +151,23 @@ async def test_fallback_contract_documented(db):
         row = await cursor.fetchone()
 
     assert row is None, "Expected no row for unassigned zone (fallback handled at API layer)"
+
+
+async def test_entertainment_config_id_migration_idempotent(tmp_path):
+    """init_db run twice on same file-based DB does not error (migration is idempotent)."""
+    db_path = str(tmp_path / "test_migration.db")
+
+    # First call creates the schema + runs migrations
+    conn1 = await init_db(db_path)
+    await close_db(conn1)
+
+    # Second call on same file must succeed without raising OperationalError
+    conn2 = await init_db(db_path)
+    try:
+        async with conn2.execute(
+            "SELECT name FROM pragma_table_info('regions') WHERE name='entertainment_config_id'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None, "entertainment_config_id column missing after double init_db"
+    finally:
+        await close_db(conn2)

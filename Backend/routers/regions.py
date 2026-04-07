@@ -154,6 +154,7 @@ async def create_region(body: CreateRegionRequest, request: Request):
         "polygon": body.polygon,
         "order_index": order_index,
         "light_id": body.light_id,
+        "camera_device": None,  # derived field — use GET /api/regions for full JOIN result
     }
 
 
@@ -195,6 +196,8 @@ async def update_region(region_id: str, body: UpdateRegionRequest, request: Requ
         updates["polygon"] = json.dumps(body.polygon)
     if body.light_id is not None:
         updates["light_id"] = body.light_id
+    if body.entertainment_config_id is not None:
+        updates["entertainment_config_id"] = body.entertainment_config_id
 
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
@@ -221,7 +224,7 @@ async def update_region(region_id: str, body: UpdateRegionRequest, request: Requ
 
     # Fetch the updated record
     async with db.execute(
-        "SELECT id, name, polygon, order_index, light_id FROM regions WHERE id=?",
+        "SELECT id, name, polygon, order_index, light_id, entertainment_config_id FROM regions WHERE id=?",
         (region_id,),
     ) as cursor:
         updated = await cursor.fetchone()
@@ -232,6 +235,7 @@ async def update_region(region_id: str, body: UpdateRegionRequest, request: Requ
         "polygon": json.loads(updated["polygon"]),
         "order_index": updated["order_index"],
         "light_id": updated["light_id"],
+        "camera_device": None,  # derived field — use GET /api/regions for full JOIN result
     }
 
 
@@ -303,7 +307,15 @@ async def list_regions(request: Request):
     db = request.app.state.db
 
     async with db.execute(
-        "SELECT id, name, polygon, order_index, light_id FROM regions ORDER BY order_index"
+        """SELECT r.id, r.name, r.polygon, r.order_index, r.light_id,
+                  r.entertainment_config_id,
+                  kc.last_device_path AS camera_device
+           FROM regions r
+           LEFT JOIN camera_assignments ca
+               ON ca.entertainment_config_id = r.entertainment_config_id
+           LEFT JOIN known_cameras kc
+               ON kc.stable_id = ca.camera_stable_id
+           ORDER BY r.order_index"""
     ) as cursor:
         rows = await cursor.fetchall()
 
@@ -314,6 +326,7 @@ async def list_regions(request: Request):
             "polygon": json.loads(row["polygon"]),
             "order_index": row["order_index"],
             "light_id": row["light_id"],
+            "camera_device": row["camera_device"],
         }
         for row in rows
     ]
