@@ -111,4 +111,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — Phase 9 complete: preview WebSocket device routing + regions camera_device join + zone health API*
+*Last updated: 2026-04-07 — Phase 10 complete: per-zone camera dropdown in editor UI with live preview switching*
