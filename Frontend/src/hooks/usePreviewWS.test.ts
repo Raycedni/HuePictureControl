@@ -38,9 +38,9 @@ describe('usePreviewWS', () => {
   })
 
   it('opens a WebSocket when enabled=true', () => {
-    renderHook(() => usePreviewWS(true))
+    renderHook(() => usePreviewWS(true, '/dev/video0'))
     expect(MockWebSocket.instances).toHaveLength(1)
-    expect(MockWebSocket.instances[0].url).toContain('/ws/preview')
+    expect(MockWebSocket.instances[0].url).toContain('/ws/preview?device=')
   })
 
   it('does not open a WebSocket when enabled=false', () => {
@@ -48,15 +48,20 @@ describe('usePreviewWS', () => {
     expect(MockWebSocket.instances).toHaveLength(0)
   })
 
+  it('does not open WebSocket when device is undefined', () => {
+    renderHook(() => usePreviewWS(true))
+    expect(MockWebSocket.instances).toHaveLength(0)
+  })
+
   it('closes WebSocket on unmount', () => {
-    const { unmount } = renderHook(() => usePreviewWS(true))
+    const { unmount } = renderHook(() => usePreviewWS(true, '/dev/video0'))
     const ws = MockWebSocket.instances[0]
     unmount()
     expect(ws.closed).toBe(true)
   })
 
   it('returns null imgSrc initially', () => {
-    const { result } = renderHook(() => usePreviewWS(true))
+    const { result } = renderHook(() => usePreviewWS(true, '/dev/video0'))
     expect(result.current).toBeNull()
   })
 })
