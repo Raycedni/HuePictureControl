@@ -245,7 +245,10 @@ Plans:
   1. Running `ls /dev/video*` inside the backend container shows all physically connected capture cards (not just the first one)
   2. `docker compose up` with two capture cards plugged in results in both devices accessible to the backend without manual container changes
   3. Documentation (inline comments or README) explains how to add a second capture device to the Compose configuration
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 11-01-PLAN.md -- Docker Compose cgroup rules + SETUP.md multi-device documentation
 
 ---
 
@@ -333,7 +336,7 @@ Plans:
 | 8. Capture Registry | v1.1 | 1/2 | In Progress|  |
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete   | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete    | 2026-04-07 |
-| 11. Docker Multi-Device Infrastructure | v1.1 | 0/TBD | Not started | - |
+| 11. Docker Multi-Device Infrastructure | v1.1 | 0/1 | Planning | - |
 | 12. Virtual Camera & Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
