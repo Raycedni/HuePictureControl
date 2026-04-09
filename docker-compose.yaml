@@ -8,15 +8,11 @@ services:
     ports:
       - "8001:8000"   # REST API
       - "2100:2100/udp"  # DTLS Entertainment API
-#    devices:
-#       - "/dev/video0:/dev/video0"  # INFR-02: USB capture card passthrough
+    device_cgroup_rules:
+      - 'c 81:* rw'    # All V4L2 video devices (major 81) — hot-plug capable
     group_add:
-       - video  # Required for /dev/video0 device access (host GID 44)
-#    usbipd list
-#    usbipd bind --busid <busid>
-#    usbipd attach --wsl --busid <busid>
-
-#    /gsd:discuss-phase 5 --auto
+      - video           # Required: host video group GID for /dev/video* access
+    # Multi-device setup and WSL2/usbipd walkthrough: see SETUP.md
     volumes:
       - hue_data:/app/data  # INFR-05: SQLite persistence
     environment:
