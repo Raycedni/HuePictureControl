@@ -10,32 +10,41 @@ type Page = 'setup' | 'preview' | 'editor'
 function App() {
   const [page, setPage] = useState<Page>('setup')
 
-  const tabClass = (active: boolean) =>
-    `px-4 py-1.5 text-sm font-medium rounded border cursor-pointer transition-colors ${
-      active
-        ? 'bg-foreground text-background border-foreground'
-        : 'bg-transparent text-foreground border-border hover:bg-muted'
-    }`
-
   return (
     <div className="app-container">
-      <h1>HuePictureControl</h1>
+      <header className="app-header">
+        <div className="app-logo">
+          <div className="app-logo-dot" />
+          <h1>HuePictureControl</h1>
+        </div>
 
-      <div className="flex gap-2 mb-6 border-b border-border pb-2">
-        <button className={tabClass(page === 'setup')} onClick={() => setPage('setup')}>
-          Setup
-        </button>
-        <button className={tabClass(page === 'preview')} onClick={() => setPage('preview')}>
-          Preview
-        </button>
-        <button className={tabClass(page === 'editor')} onClick={() => setPage('editor')}>
-          Editor
-        </button>
+        <nav className="app-nav">
+          <button
+            className={`app-nav-tab ${page === 'setup' ? 'active' : ''}`}
+            onClick={() => setPage('setup')}
+          >
+            Setup
+          </button>
+          <button
+            className={`app-nav-tab ${page === 'preview' ? 'active' : ''}`}
+            onClick={() => setPage('preview')}
+          >
+            Preview
+          </button>
+          <button
+            className={`app-nav-tab ${page === 'editor' ? 'active' : ''}`}
+            onClick={() => setPage('editor')}
+          >
+            Editor
+          </button>
+        </nav>
+      </header>
+
+      <div className={`flex-1 min-h-0 flex flex-col ${page === 'editor' ? 'overflow-hidden' : 'overflow-auto'}`}>
+        {page === 'setup' && <PairingFlow />}
+        {page === 'preview' && <PreviewPage />}
+        {page === 'editor' && <EditorPage />}
       </div>
-
-      {page === 'setup' && <PairingFlow />}
-      {page === 'preview' && <PreviewPage />}
-      {page === 'editor' && <EditorPage />}
 
       <StatusBar />
     </div>

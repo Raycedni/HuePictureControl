@@ -21,6 +21,21 @@ export function denormalize(
 }
 
 /**
+ * Compute the area of a polygon using the shoelace formula.
+ */
+export function polygonArea(points: [number, number][]): number {
+  const n = points.length
+  if (n < 3) return 0
+  let area = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    area += points[i][0] * points[j][1]
+    area -= points[j][0] * points[i][1]
+  }
+  return Math.abs(area) / 2
+}
+
+/**
  * Ray-casting algorithm to determine if a point is inside a polygon.
  */
 export function pointInPolygon(

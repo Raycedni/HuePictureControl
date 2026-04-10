@@ -14,8 +14,14 @@ export function useStatusWS(): void {
 
       ws.onmessage = (ev: MessageEvent) => {
         try {
-          const parsed = JSON.parse(ev.data as string) as Record<string, unknown>
-          useStatusStore.getState().setMetrics(parsed)
+          const raw = JSON.parse(ev.data as string) as Record<string, unknown>
+          useStatusStore.getState().setMetrics({
+            fps: typeof raw.fps === 'number' ? raw.fps : undefined,
+            latency: typeof raw.latency_ms === 'number' ? raw.latency_ms : undefined,
+            bridgeState: typeof raw.state === 'string' ? raw.state : undefined,
+            isStreaming: raw.state === 'streaming',
+            error: typeof raw.error === 'string' ? raw.error : null,
+          })
         } catch {
           // ignore malformed JSON
         }

@@ -7,18 +7,20 @@ import {
   triggerAutoMap,
 } from '../api/regions'
 import type { Config, Region } from '../api/regions'
+import { usePreviewWS } from '../hooks/usePreviewWS'
+import { Button } from './ui/button'
 
 type StreamingState = 'idle' | 'streaming'
 
 const OVERLAY_COLORS = [
-  'rgba(255, 100, 100, 0.4)',
-  'rgba(100, 200, 255, 0.4)',
-  'rgba(100, 255, 150, 0.4)',
-  'rgba(255, 220, 80, 0.4)',
-  'rgba(200, 100, 255, 0.4)',
-  'rgba(255, 160, 60, 0.4)',
-  'rgba(80, 220, 220, 0.4)',
-  'rgba(255, 100, 200, 0.4)',
+  'rgba(232, 160, 0, 0.35)',
+  'rgba(100, 200, 255, 0.35)',
+  'rgba(100, 255, 150, 0.35)',
+  'rgba(168, 85, 247, 0.35)',
+  'rgba(255, 100, 200, 0.35)',
+  'rgba(255, 160, 60, 0.35)',
+  'rgba(80, 220, 220, 0.35)',
+  'rgba(59, 130, 246, 0.35)',
 ]
 
 export default function PreviewPage() {
@@ -26,15 +28,15 @@ export default function PreviewPage() {
   const [selectedConfigId, setSelectedConfigId] = useState<string>('')
   const [regions, setRegions] = useState<Region[]>([])
   const [streamingState, setStreamingState] = useState<StreamingState>('idle')
+  const [targetHz, setTargetHz] = useState<number>(50)
   const [autoMapStatus, setAutoMapStatus] = useState<string>('')
   const [autoMapError, setAutoMapError] = useState<string>('')
   const [streamError, setStreamError] = useState<string>('')
   const [imageError, setImageError] = useState(false)
-  const [snapshotTs, setSnapshotTs] = useState<number>(Date.now())
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null)
 
   const imgRef = useRef<HTMLImageElement>(null)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const previewSrc = usePreviewWS(true)
 
   // Load configs on mount
   useEffect(() => {
@@ -54,15 +56,6 @@ export default function PreviewPage() {
       })
   }, [])
 
-  // Refresh snapshot every 2 seconds
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      setSnapshotTs(Date.now())
-    }, 2000)
-    return () => {
-      if (intervalRef.current !== null) clearInterval(intervalRef.current)
-    }
-  }, [])
 
   function handleImageLoad() {
     setImageError(false)
@@ -99,7 +92,7 @@ export default function PreviewPage() {
     if (streamingState === 'idle') {
       if (!selectedConfigId) return
       try {
-        await startStreaming(selectedConfigId)
+        await startStreaming(selectedConfigId, targetHz)
         setStreamingState('streaming')
       } catch {
         setStreamError('Failed to start streaming.')
@@ -115,7 +108,6 @@ export default function PreviewPage() {
   }
 
   const isStreaming = streamingState === 'streaming'
-  const snapshotSrc = `/api/capture/snapshot?t=${snapshotTs}`
 
   // Compute overlay style from polygon (top-left and bottom-right corners)
   function getOverlayStyle(region: Region, colorIndex: number): React.CSSProperties {
@@ -135,7 +127,8 @@ export default function PreviewPage() {
       width: `${width}px`,
       height: `${height}px`,
       backgroundColor: OVERLAY_COLORS[colorIndex % OVERLAY_COLORS.length],
-      border: '1px solid rgba(255,255,255,0.6)',
+      border: '1px solid rgba(255,255,255,0.2)',
+      borderRadius: '4px',
       boxSizing: 'border-box',
       display: 'flex',
       alignItems: 'flex-end',
@@ -145,19 +138,19 @@ export default function PreviewPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+    <div className="flex flex-col gap-4 p-5 max-w-4xl mx-auto w-full text-left">
 
       {/* Config selector row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <label htmlFor="config-select" style={{ fontWeight: 600 }}>
-          Entertainment Config:
+      <div className="glass rounded-xl p-4 flex items-center gap-3 flex-wrap">
+        <label htmlFor="config-select" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Config
         </label>
         <select
           id="config-select"
           value={selectedConfigId}
           onChange={(e) => setSelectedConfigId(e.target.value)}
           disabled={isStreaming || configs.length === 0}
-          style={{ padding: '0.3rem 0.5rem', minWidth: '180px' }}
+          className="min-w-[180px] text-sm"
         >
           {configs.length === 0 && <option value="">No configs available</option>}
           {configs.map((cfg) => (
@@ -166,93 +159,92 @@ export default function PreviewPage() {
             </option>
           ))}
         </select>
-        <button
+        <Button
           onClick={handleAutoMap}
           disabled={isStreaming || !selectedConfigId}
-          style={{ padding: '0.3rem 0.8rem' }}
+          variant="outline"
+          size="sm"
+          className="border-white/10"
         >
           Auto-Map
-        </button>
+        </Button>
         {autoMapStatus && (
-          <span style={{ color: '#2a7' }}>{autoMapStatus}</span>
+          <span className="text-xs text-green-400">{autoMapStatus}</span>
         )}
         {autoMapError && (
-          <span style={{ color: '#c33' }}>{autoMapError}</span>
+          <span className="text-xs text-red-400">{autoMapError}</span>
         )}
       </div>
 
       {/* Camera preview with region overlays */}
-      <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+      <div className="relative inline-block max-w-full">
         {imageError ? (
-          <div
-            style={{
-              width: '640px',
-              height: '360px',
-              background: '#222',
-              color: '#aaa',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: '4px',
-              maxWidth: '100%',
-            }}
-          >
-            No capture device
+          <div className="w-[640px] max-w-full aspect-video rounded-2xl glass flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-white/5 flex items-center justify-center">
+                <svg className="w-5 h-5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+              </div>
+              <span className="text-sm text-muted-foreground">No capture device</span>
+            </div>
           </div>
         ) : (
           <img
             ref={imgRef}
-            src={snapshotSrc}
+            src={previewSrc ?? ''}
             alt="Camera preview"
             onLoad={handleImageLoad}
             onError={handleImageError}
-            style={{ display: 'block', maxWidth: '100%', borderRadius: '4px' }}
+            className="block max-w-full rounded-2xl border border-white/[0.06]"
           />
         )}
         {/* Region overlays */}
         {!imageError && imgDimensions &&
           regions.map((region, idx) => (
             <div key={region.id} style={getOverlayStyle(region, idx)}>
-              <span
-                style={{
-                  fontSize: '10px',
-                  color: '#fff',
-                  background: 'rgba(0,0,0,0.55)',
-                  padding: '1px 3px',
-                  borderRadius: '2px',
-                  maxWidth: '100%',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
+              <span className="text-[10px] text-white bg-black/50 px-1.5 py-0.5 rounded max-w-full overflow-hidden text-ellipsis whitespace-nowrap backdrop-blur-sm">
                 {region.name}
               </span>
             </div>
           ))}
       </div>
 
-      {/* Start/Stop toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-        <button
+      {/* Start/Stop toggle + update rate */}
+      <div className="glass rounded-xl p-4 flex items-center gap-4 flex-wrap">
+        <Button
           onClick={handleStartStop}
           disabled={!selectedConfigId && !isStreaming}
-          style={{
-            padding: '0.5rem 1.5rem',
-            fontWeight: 600,
-            background: isStreaming ? '#c33' : '#2a7',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-          }}
+          className={
+            isStreaming
+              ? 'bg-red-500/15 text-red-400 border-red-500/25 hover:bg-red-500/25'
+              : 'bg-hue-orange/15 text-hue-amber border-hue-orange/25 hover:bg-hue-orange/25 hue-glow'
+          }
         >
           {isStreaming ? 'Stop Streaming' : 'Start Streaming'}
-        </button>
+        </Button>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+            Update Rate
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={100}
+            value={targetHz}
+            onChange={(e) => setTargetHz(Number(e.target.value))}
+            disabled={isStreaming}
+            className="w-[120px]"
+          />
+          <span className="text-sm font-mono text-foreground min-w-[3.5rem]">{targetHz} Hz</span>
+        </div>
         {streamingState === 'streaming' && (
-          <span style={{ color: '#2a7' }}>Streaming...</span>
+          <span className="text-xs text-hue-amber flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-hue-orange animate-pulse" />
+            Streaming
+          </span>
         )}
-        {streamError && <span style={{ color: '#c33' }}>{streamError}</span>}
+        {streamError && <span className="text-xs text-red-400">{streamError}</span>}
       </div>
 
     </div>

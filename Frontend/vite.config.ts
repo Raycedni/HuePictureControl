@@ -11,4 +11,17 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8000',
+      '/ws/preview': {
+        target: 'http://localhost:8000',
+        ws: true,
+      },
+      '/ws/status': {
+        target: 'http://localhost:8000',
+        ws: true,
+      },
+    },
+  },
 })
