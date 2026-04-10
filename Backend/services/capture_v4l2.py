@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _WIDTH = 320
 _HEIGHT = 240
-_NUM_BUFFERS = 4
+_NUM_BUFFERS = 2
 
 # ---- V4L2 ctypes structs (64-bit safe) ----
 

@@ -45,7 +45,7 @@ class StreamingService:
     If run_event is cleared during reconnect, streaming transitions to error.
     """
 
-    DEFAULT_HZ = 50
+    DEFAULT_HZ = 60
 
     def __init__(self, db, capture_registry, broadcaster) -> None:
         self._db = db
@@ -373,8 +373,8 @@ class StreamingService:
         # EMA smoothing state: {channel_id: (x, y, bri)}
         smooth_state: dict[int, tuple[float, float, float]] = {}
         # Smoothing factor: 0.0 = no change, 1.0 = no smoothing (instant).
-        # 0.3 at 50 Hz ≈ 63% toward target in ~3 frames (~60ms)
-        alpha = 0.3
+        # 0.7 at 50 Hz ≈ 95% toward target in ~2 frames (~40ms)
+        alpha = 0.7
 
         while self._run_event.is_set():
             t0 = time.monotonic()
