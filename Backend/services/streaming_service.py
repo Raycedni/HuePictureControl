@@ -385,6 +385,10 @@ class StreamingService:
                     await self._broadcaster.push_state("error", error=str(exc))
                     return
 
+            t_capture = time.monotonic()
+            # How old is this frame? (time since reader thread stored it)
+            frame_age = t_capture - self._capture._last_frame_time if self._capture._last_frame_time > 0 else 0
+
             # Compute colors for all channels and send immediately (no smoothing)
             inputs = []
             for channel_id, mask in channel_map.items():
@@ -393,6 +397,8 @@ class StreamingService:
                 bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
                 bri = max(bri, 0.01)  # dark scene protection
                 inputs.append((x, y, bri, channel_id))
+
+            t_color = time.monotonic()
 
             # Send all channels to bridge synchronously — set_input is a
             # tiny DTLS packet send, thread pool overhead costs more than
@@ -409,9 +415,23 @@ class StreamingService:
                 if not success:
                     return
 
+            t_send = time.monotonic()
+
             seq += 1
             elapsed = time.monotonic() - t0
             latency_ms = elapsed * 1000.0
+
+            # Log timing breakdown every 60 frames (~1s)
+            if seq % 60 == 0:
+                logger.info(
+                    "PERF seq=%d frame_age=%.1fms capture=%.1fms color=%.1fms send=%.1fms total=%.1fms",
+                    seq,
+                    frame_age * 1000,
+                    (t_capture - t0) * 1000,
+                    (t_color - t_capture) * 1000,
+                    (t_send - t_color) * 1000,
+                    latency_ms,
+                )
 
             # FPS = actual loop rate (includes sleep), not just processing speed
             cycle_time = t0 - prev_t0
