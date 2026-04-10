@@ -370,12 +370,6 @@ class StreamingService:
         packets_sent = 0
         prev_t0 = time.monotonic()
 
-        # EMA smoothing state: {channel_id: (x, y, bri)}
-        smooth_state: dict[int, tuple[float, float, float]] = {}
-        # Smoothing factor: 0.0 = no change, 1.0 = no smoothing (instant).
-        # 0.7 at 50 Hz ≈ 95% toward target in ~2 frames (~40ms)
-        alpha = 0.7
-
         while self._run_event.is_set():
             t0 = time.monotonic()
 
@@ -391,31 +385,21 @@ class StreamingService:
                     await self._broadcaster.push_state("error", error=str(exc))
                     return
 
-            # Compute colors for all channels (pure CPU, no I/O)
+            # Compute colors for all channels and send immediately (no smoothing)
             inputs = []
             for channel_id, mask in channel_map.items():
                 r, g, b = extract_region_color(frame, mask)
                 x, y = rgb_to_xy(r, g, b)
                 bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
                 bri = max(bri, 0.01)  # dark scene protection
-
-                # Smooth color transitions via EMA
-                if channel_id in smooth_state:
-                    px, py, pbri = smooth_state[channel_id]
-                    x = px + alpha * (x - px)
-                    y = py + alpha * (y - py)
-                    bri = pbri + alpha * (bri - pbri)
-                smooth_state[channel_id] = (x, y, bri)
-
                 inputs.append((x, y, bri, channel_id))
 
-            # Send all channels to bridge in a single thread call
-            def _send_batch(s, batch):
-                for inp in batch:
-                    s.set_input(inp)
-
+            # Send all channels to bridge synchronously — set_input is a
+            # tiny DTLS packet send, thread pool overhead costs more than
+            # the brief GIL hold.
             try:
-                await asyncio.to_thread(_send_batch, streaming, inputs)
+                for inp in inputs:
+                    streaming.set_input(inp)
                 packets_sent += len(inputs)
             except Exception as exc:
                 logger.warning("Bridge socket error: %s, starting reconnect", exc)
