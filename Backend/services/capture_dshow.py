@@ -6,6 +6,7 @@ if DirectShow is unavailable.
 """
 import logging
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -17,6 +18,37 @@ logger = logging.getLogger(__name__)
 
 _WIDTH = 640
 _HEIGHT = 480
+
+_MAX_PROBE_INDEX = 10
+
+
+@dataclass
+class DShowDeviceInfo:
+    """Metadata for a DirectShow capture device."""
+
+    device_path: str
+    card: str
+
+
+def enumerate_capture_devices() -> list[DShowDeviceInfo]:
+    """Probe DirectShow device indices 0.._MAX_PROBE_INDEX and return those that open successfully.
+
+    Each probe opens and immediately releases the device, so it does not
+    interfere with devices already held by a CaptureBackend instance.
+    """
+    devices: list[DShowDeviceInfo] = []
+
+    for idx in range(_MAX_PROBE_INDEX):
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            backend_name = cap.getBackendName()
+            card = f"Camera {idx} ({backend_name})"
+            cap.release()
+            devices.append(DShowDeviceInfo(device_path=str(idx), card=card))
+        else:
+            cap.release()
+
+    return devices
 
 
 class DirectShowCapture(CaptureBackend):

@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-if sys.platform != "win32":
+if sys.platform == "win32":
+    from services.capture_dshow import enumerate_capture_devices
+else:
     from services.capture_v4l2 import enumerate_capture_devices
 from services.device_identity import get_stable_id
 
@@ -94,23 +96,25 @@ async def _scan_devices() -> tuple[dict[str, dict], bool]:
           - dict mapping stable_id -> {"device_path", "card", "stable_id", "display_name"}
           - bool: True if any device had degraded identity (no sysfs)
     """
-    if sys.platform == "win32":
-        return {}, True
-
     loop = asyncio.get_event_loop()
 
-    # enumerate_capture_devices performs ioctl — must run in thread
+    # enumerate_capture_devices performs ioctl/DirectShow probing — must run in thread
     devices = await loop.run_in_executor(None, enumerate_capture_devices)
 
     scan_results: dict[str, dict] = {}
     any_degraded = False
 
     for info in devices:
-        stable_id, sysfs_ok = await loop.run_in_executor(
-            None, get_stable_id, info.device_path, info.bus_info, info.card
-        )
-        if not sysfs_ok:
+        if sys.platform == "win32":
+            # No sysfs on Windows — use card name as stable id (always degraded)
+            stable_id = f"{info.card}@dshow:{info.device_path}"
             any_degraded = True
+        else:
+            stable_id, sysfs_ok = await loop.run_in_executor(
+                None, get_stable_id, info.device_path, info.bus_info, info.card
+            )
+            if not sysfs_ok:
+                any_degraded = True
         scan_results[stable_id] = {
             "device_path": info.device_path,
             "card": info.card,
