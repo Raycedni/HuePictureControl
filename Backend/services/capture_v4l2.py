@@ -25,8 +25,8 @@ from services.capture_service import CaptureBackend
 
 logger = logging.getLogger(__name__)
 
-_WIDTH = 640
-_HEIGHT = 480
+_WIDTH = 320
+_HEIGHT = 240
 _NUM_BUFFERS = 4
 
 # ---- V4L2 ctypes structs (64-bit safe) ----
@@ -302,16 +302,17 @@ class V4L2Capture(CaptureBackend):
                 used = dqbuf.bytesused
 
                 mmapped = self._buffers[idx]
-                mmapped.seek(0)
-                jpeg_data = mmapped.read(used)
+                # Copy JPEG bytes and re-queue immediately so kernel
+                # gets the buffer back before we spend time decoding.
+                jpeg_data = mmapped[:used]
 
-                # Re-queue immediately
                 qbuf = _v4l2_buffer()
                 qbuf.index = idx
                 qbuf.type = _V4L2_BUF_TYPE_VIDEO_CAPTURE
                 qbuf.memory = _V4L2_MEMORY_MMAP
                 fcntl.ioctl(self._fd, _VIDIOC_QBUF, qbuf)
 
+                # Decode MJPEG after buffer is re-queued
                 frame = cv2.imdecode(
                     np.frombuffer(jpeg_data, dtype=np.uint8),
                     cv2.IMREAD_COLOR,

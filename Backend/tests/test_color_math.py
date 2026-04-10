@@ -4,6 +4,7 @@ import pytest
 
 from services.color_math import (
     GAMUT_C,
+    RegionMask,
     _clamp_to_gamut,
     _in_gamut,
     build_polygon_mask,
@@ -127,43 +128,50 @@ class TestClampToGamut:
 
 class TestBuildPolygonMask:
     def test_left_half_mask_shape(self):
-        """build_polygon_mask should produce a (480, 640) uint8 mask."""
+        """build_polygon_mask should produce a RegionMask with (240, 320) mask."""
         points = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]
-        mask = build_polygon_mask(points)
-        assert mask.shape == (480, 640)
-        assert mask.dtype == np.uint8
+        region = build_polygon_mask(points)
+        assert isinstance(region, RegionMask)
+        assert region.mask.shape == (240, 320)
+        assert region.mask.dtype == np.uint8
 
     def test_left_half_mask_has_255_in_left(self):
-        """Left-half polygon should fill left 320 columns with 255."""
+        """Left-half polygon should fill left columns with 255."""
         points = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]
-        mask = build_polygon_mask(points)
+        region = build_polygon_mask(points)
         # Left half should be filled
-        assert np.all(mask[:, :300] == 255), "Left portion should be 255"
+        assert np.all(region.mask[:, :140] == 255), "Left portion should be 255"
         # Right half should be empty
-        assert np.all(mask[:, 350:] == 0), "Right portion should be 0"
+        assert np.all(region.mask[:, 170:] == 0), "Right portion should be 0"
 
     def test_coordinate_clamping_at_boundary(self):
-        """x=1.0 should not produce pixel index 640 (out of bounds)."""
-        # Full-frame polygon — all points at boundary
+        """x=1.0 should not produce pixel index out of bounds."""
         points = [[0, 0], [1.0, 0], [1.0, 1.0], [0, 1.0]]
-        mask = build_polygon_mask(points)
-        # Should not raise and result should be filled
-        assert mask.shape == (480, 640)
-        # Almost the whole frame should be filled
-        assert np.sum(mask == 255) > 640 * 480 * 0.9
+        region = build_polygon_mask(points)
+        assert region.mask.shape == (240, 320)
+        assert np.sum(region.mask == 255) > 320 * 240 * 0.9
 
     def test_custom_dimensions(self):
         """build_polygon_mask should respect custom width/height arguments."""
         points = [[0, 0], [1, 0], [1, 1], [0, 1]]
-        mask = build_polygon_mask(points, width=320, height=240)
-        assert mask.shape == (240, 320)
+        region = build_polygon_mask(points, width=160, height=120)
+        assert region.mask.shape == (120, 160)
 
     def test_empty_region_when_points_outside(self):
         """A polygon with degenerate points should not crash."""
-        # Triangle with a single pixel-size area
         points = [[0, 0], [0.001, 0], [0, 0.001]]
-        mask = build_polygon_mask(points)
-        assert mask.shape == (480, 640)
+        region = build_polygon_mask(points)
+        assert region.mask.shape == (240, 320)
+
+    def test_roi_bounding_box(self):
+        """RegionMask should have a tight bounding box around the polygon."""
+        points = [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]]
+        region = build_polygon_mask(points)
+        assert region.x1 > 0
+        assert region.y1 > 0
+        assert region.x2 < 320
+        assert region.y2 < 240
+        assert region.roi_mask.shape == (region.y2 - region.y1, region.x2 - region.x1)
 
 
 # ---------------------------------------------------------------------------
@@ -171,56 +179,61 @@ class TestBuildPolygonMask:
 # ---------------------------------------------------------------------------
 
 
+def _full_mask(h=240, w=320):
+    """Helper: create a RegionMask covering the entire frame."""
+    mask = np.full((h, w), 255, dtype=np.uint8)
+    return RegionMask(mask=mask, roi_mask=mask, x1=0, y1=0, x2=w, y2=h)
+
+
+def _left_half_mask(h=240, w=320):
+    """Helper: create a RegionMask covering the left half."""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[:, :w // 2] = 255
+    roi_mask = mask[:, :w // 2]
+    return RegionMask(mask=mask, roi_mask=roi_mask, x1=0, y1=0, x2=w // 2, y2=h)
+
+
 class TestExtractRegionColor:
     def test_solid_red_frame_with_full_mask(self):
         """extract_region_color returns (255, 0, 0) for a solid red BGR frame."""
-        # OpenCV frames are BGR
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[:, :] = (0, 0, 255)  # BGR: red channel is index 2
-        mask = np.full((480, 640), 255, dtype=np.uint8)
-        r, g, b = extract_region_color(frame, mask)
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame[:, :] = (0, 0, 255)
+        r, g, b = extract_region_color(frame, _full_mask())
         assert r == 255
         assert g == 0
         assert b == 0
 
     def test_solid_green_frame_with_full_mask(self):
         """extract_region_color returns (0, 255, 0) for a solid green BGR frame."""
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[:, :] = (0, 255, 0)  # BGR: green channel is index 1
-        mask = np.full((480, 640), 255, dtype=np.uint8)
-        r, g, b = extract_region_color(frame, mask)
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame[:, :] = (0, 255, 0)
+        r, g, b = extract_region_color(frame, _full_mask())
         assert r == 0
         assert g == 255
         assert b == 0
 
     def test_solid_blue_frame_with_full_mask(self):
         """extract_region_color returns (0, 0, 255) for a solid blue BGR frame."""
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[:, :] = (255, 0, 0)  # BGR: blue channel is index 0
-        mask = np.full((480, 640), 255, dtype=np.uint8)
-        r, g, b = extract_region_color(frame, mask)
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame[:, :] = (255, 0, 0)
+        r, g, b = extract_region_color(frame, _full_mask())
         assert r == 0
         assert g == 0
         assert b == 255
 
     def test_region_mask_limits_sampling(self):
         """extract_region_color only samples pixels covered by the mask."""
-        # Left half: red (BGR 0,0,255); Right half: blue (BGR 255,0,0)
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[:, :320] = (0, 0, 255)   # Left half: red in BGR
-        frame[:, 320:] = (255, 0, 0)   # Right half: blue in BGR
-        # Mask covers only left half
-        mask = np.zeros((480, 640), dtype=np.uint8)
-        mask[:, :320] = 255
-        r, g, b = extract_region_color(frame, mask)
-        assert r == 255  # Only red pixels sampled
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame[:, :160] = (0, 0, 255)   # Left half: red in BGR
+        frame[:, 160:] = (255, 0, 0)   # Right half: blue in BGR
+        r, g, b = extract_region_color(frame, _left_half_mask())
+        assert r == 255
         assert g == 0
         assert b == 0
 
     def test_returns_integer_tuple(self):
         """extract_region_color should return a tuple of ints."""
-        frame = np.full((480, 640, 3), 128, dtype=np.uint8)
-        mask = np.full((480, 640), 255, dtype=np.uint8)
-        result = extract_region_color(frame, mask)
+        frame = np.full((240, 320, 3), 128, dtype=np.uint8)
+        result = extract_region_color(frame, _full_mask())
         assert len(result) == 3
         assert all(isinstance(v, int) for v in result)

@@ -3,10 +3,12 @@
 Exports:
     GAMUT_C       -- Gamut C triangle vertices (all newer Hue lights)
     rgb_to_xy     -- Convert sRGB to CIE xy with Gamut C clamping
-    build_polygon_mask -- Build a binary uint8 mask from normalized polygon coordinates
-    extract_region_color -- Extract mean RGB from a frame within a polygon mask
+    RegionMask    -- Pre-computed mask with bounding box for fast ROI extraction
+    build_polygon_mask -- Build a RegionMask from normalized polygon coordinates
+    extract_region_color -- Extract mean RGB from a frame within a RegionMask
 """
 import math
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -120,24 +122,34 @@ def rgb_to_xy(r: int, g: int, b: int) -> tuple[float, float]:
     return round(cx, 4), round(cy, 4)
 
 
+@dataclass
+class RegionMask:
+    """Pre-computed mask with bounding box for fast ROI-cropped color extraction."""
+    mask: np.ndarray          # Full-frame mask (height x width), uint8
+    roi_mask: np.ndarray      # Cropped mask (roi_h x roi_w), uint8
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+
 def build_polygon_mask(
     normalized_points: list[list[float]],
-    width: int = 640,
-    height: int = 480,
-) -> np.ndarray:
-    """Build a binary uint8 mask for a polygon region from normalized coordinates.
+    width: int = 320,
+    height: int = 240,
+) -> RegionMask:
+    """Build a binary uint8 mask with pre-computed bounding box for ROI extraction.
 
     Coordinates are clamped with ``min(1.0, max(0.0, v)) * (dim - 1)`` before
-    int conversion to prevent out-of-bounds indices at the frame boundary
-    (Pitfall 4 in research).
+    int conversion to prevent out-of-bounds indices at the frame boundary.
 
     Args:
         normalized_points: List of [x, y] pairs in range [0..1]
-        width: Frame width in pixels (default 640)
-        height: Frame height in pixels (default 480)
+        width: Frame width in pixels (default 320)
+        height: Frame height in pixels (default 240)
 
     Returns:
-        uint8 mask of shape (height, width) with 255 inside polygon, 0 outside
+        RegionMask with full mask, cropped ROI mask, and bounding box coordinates
     """
     mask = np.zeros((height, width), dtype=np.uint8)
     pts = np.array(
@@ -151,22 +163,35 @@ def build_polygon_mask(
         dtype=np.int32,
     )
     cv2.fillPoly(mask, [pts], color=255)
-    return mask
+
+    # Pre-compute bounding box for ROI crop
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return RegionMask(mask=mask, roi_mask=mask, x1=0, y1=0, x2=width, y2=height)
+
+    x1, x2 = int(xs.min()), int(xs.max()) + 1
+    y1, y2 = int(ys.min()), int(ys.max()) + 1
+    roi_mask = mask[y1:y2, x1:x2]
+
+    return RegionMask(mask=mask, roi_mask=roi_mask, x1=x1, y1=y1, x2=x2, y2=y2)
 
 
 def extract_region_color(
-    frame: np.ndarray, mask: np.ndarray
+    frame: np.ndarray, region: RegionMask
 ) -> tuple[int, int, int]:
     """Extract mean BGR color from a frame within a polygon mask region.
 
+    Uses bounding-box crop to avoid scanning the entire frame.
+
     Args:
-        frame: BGR uint8 numpy array from cv2.VideoCapture
-        mask: uint8 mask from build_polygon_mask()
+        frame: BGR uint8 numpy array from capture
+        region: RegionMask from build_polygon_mask()
 
     Returns:
         (r, g, b) tuple of mean color in [0..255] range
     """
-    # cv2.mean returns (B, G, R, alpha) for BGR images
-    mean_bgr = cv2.mean(frame, mask=mask)
+    # Crop frame and mask to bounding box — scans only the ROI pixels
+    roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
+    mean_bgr = cv2.mean(roi_frame, mask=region.roi_mask)
     b, g, r_val = int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
     return r_val, g, b

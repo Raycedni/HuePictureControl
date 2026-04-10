@@ -16,6 +16,13 @@ def _solid_blue_frame() -> np.ndarray:
     return frame
 
 
+def _mock_region_mask(h=480, w=640):
+    """Create a RegionMask covering the full frame for tests."""
+    from services.color_math import RegionMask
+    mask = np.ones((h, w), dtype=np.uint8) * 255
+    return RegionMask(mask=mask, roi_mask=mask, x1=0, y1=0, x2=w, y2=h)
+
+
 def _make_mocks():
     """Return fresh mock objects for db, capture, registry, broadcaster, and pykit streaming."""
     mock_db = MagicMock()
@@ -359,11 +366,12 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
     assert len(channel_map) == 2
     assert 0 in channel_map
     assert 1 in channel_map
-    # Each value should be a numpy uint8 mask
-    for mask in channel_map.values():
-        assert isinstance(mask, np.ndarray)
-        assert mask.dtype == np.uint8
-        assert mask.shape == (480, 640)
+    # Each value should be a RegionMask with a numpy uint8 mask
+    from services.color_math import RegionMask
+    for region in channel_map.values():
+        assert isinstance(region, RegionMask)
+        assert region.mask.dtype == np.uint8
+        assert region.mask.shape == (240, 320)
 
 
 @pytest.mark.asyncio
@@ -457,7 +465,7 @@ async def test_frame_loop_calls_get_frame_each_iteration(service_imports):
     mocks["capture"].get_frame = AsyncMock(side_effect=controlled_frame)
 
     mock_streaming = mocks["streaming"]
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
 
     async def fake_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
@@ -491,8 +499,8 @@ async def test_frame_loop_calls_extract_region_color_per_channel(service_imports
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {
-        0: np.ones((480, 640), dtype=np.uint8) * 255,
-        1: np.ones((480, 640), dtype=np.uint8) * 255,
+        0: _mock_region_mask(),
+        1: _mock_region_mask(),
     }
 
     extract_calls = []
@@ -534,12 +542,15 @@ async def test_frame_loop_calls_rgb_to_xy_and_set_input(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
+
+    # Track set_input calls via the mock's side_effect
     set_input_calls = []
+    def record_set_input(inp):
+        set_input_calls.append(inp)
+    mocks["streaming"].set_input = MagicMock(side_effect=record_set_input)
 
     async def fake_to_thread(fn, *args, **kwargs):
-        if fn == mocks["streaming"].set_input:
-            set_input_calls.append(args[0])
         return fn(*args, **kwargs)
 
     service._run_event.set()
@@ -580,12 +591,14 @@ async def test_frame_loop_brightness_clamped_to_min_001(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
+
     set_input_calls = []
+    def record_set_input(inp):
+        set_input_calls.append(inp)
+    mocks["streaming"].set_input = MagicMock(side_effect=record_set_input)
 
     async def fake_to_thread(fn, *args, **kwargs):
-        if fn == mocks["streaming"].set_input:
-            set_input_calls.append(args[0])
         return fn(*args, **kwargs)
 
     service._run_event.set()
@@ -617,12 +630,14 @@ async def test_frame_loop_16_channels(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
-    channel_map = {i: np.ones((480, 640), dtype=np.uint8) * 255 for i in range(16)}
+    channel_map = {i: _mock_region_mask() for i in range(16)}
+
     set_input_calls = []
+    def record_set_input(inp):
+        set_input_calls.append(inp)
+    mocks["streaming"].set_input = MagicMock(side_effect=record_set_input)
 
     async def fake_to_thread(fn, *args, **kwargs):
-        if fn == mocks["streaming"].set_input:
-            set_input_calls.append(args[0])
         return fn(*args, **kwargs)
 
     service._run_event.set()
@@ -652,12 +667,14 @@ async def test_frame_loop_1_channel_non_gradient(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
+
     set_input_calls = []
+    def record_set_input(inp):
+        set_input_calls.append(inp)
+    mocks["streaming"].set_input = MagicMock(side_effect=record_set_input)
 
     async def fake_to_thread(fn, *args, **kwargs):
-        if fn == mocks["streaming"].set_input:
-            set_input_calls.append(args[0])
         return fn(*args, **kwargs)
 
     service._run_event.set()
@@ -690,7 +707,7 @@ async def test_frame_loop_calls_update_metrics_not_broadcast(service_imports):
 
     mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
 
     async def fake_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
@@ -728,7 +745,7 @@ async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
 
     service._capture_reconnect_loop = fake_reconnect_false
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
 
     service._run_event.set()
     with patch("asyncio.sleep", new_callable=AsyncMock):
@@ -1013,7 +1030,7 @@ async def test_frame_loop_calls_capture_reconnect_on_runtime_error(service_impor
         reconnect_called = True
         return True
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
 
     service._run_event.set()
     service._capture_reconnect_loop = fake_reconnect
@@ -1042,7 +1059,7 @@ async def test_frame_loop_exits_when_capture_reconnect_returns_false(service_imp
     async def fake_reconnect_false():
         return False
 
-    channel_map = {0: np.ones((480, 640), dtype=np.uint8) * 255}
+    channel_map = {0: _mock_region_mask()}
 
     service._run_event.set()
     service._capture_reconnect_loop = fake_reconnect_false

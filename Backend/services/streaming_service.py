@@ -409,12 +409,13 @@ class StreamingService:
 
                 inputs.append((x, y, bri, channel_id))
 
-            # Send all channels to bridge in parallel
+            # Send all channels to bridge in a single thread call
+            def _send_batch(s, batch):
+                for inp in batch:
+                    s.set_input(inp)
+
             try:
-                await asyncio.gather(*(
-                    asyncio.to_thread(streaming.set_input, inp)
-                    for inp in inputs
-                ))
+                await asyncio.to_thread(_send_batch, streaming, inputs)
                 packets_sent += len(inputs)
             except Exception as exc:
                 logger.warning("Bridge socket error: %s, starting reconnect", exc)
