@@ -253,13 +253,16 @@ class V4L2Capture(CaptureBackend):
             fcntl.ioctl(fd, _VIDIOC_QBUF, qbuf)
 
         # Request highest framerate (60fps) — device will clamp to its max
+        # v4l2_streamparm layout:
+        #   0: type (4B), 4: capability (4B), 8: capturemode (4B),
+        #  12: timeperframe.numerator (4B), 16: timeperframe.denominator (4B)
         parm = bytearray(204)
         struct.pack_into("<I", parm, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
-        struct.pack_into("<II", parm, 8, 1, 60)
+        struct.pack_into("<II", parm, 12, 1, 60)  # numerator=1, denominator=60
         try:
             fcntl.ioctl(fd, _VIDIOC_S_PARM, parm)
-            actual_num = struct.unpack_from("<I", parm, 8)[0]
-            actual_den = struct.unpack_from("<I", parm, 12)[0]
+            actual_num = struct.unpack_from("<I", parm, 12)[0]
+            actual_den = struct.unpack_from("<I", parm, 16)[0]
             if actual_num > 0:
                 logger.info("Capture framerate set to %d/%d fps", actual_den, actual_num)
         except OSError:
