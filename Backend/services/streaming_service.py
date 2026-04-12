@@ -423,14 +423,9 @@ class StreamingService:
 
             # Log timing breakdown every 60 frames (~1s)
             if seq % 60 == 0:
-                logger.info(
-                    "PERF seq=%d frame_age=%.1fms capture=%.1fms color=%.1fms send=%.1fms total=%.1fms",
-                    seq,
-                    frame_age * 1000,
-                    (t_capture - t0) * 1000,
-                    (t_color - t_capture) * 1000,
-                    (t_send - t_color) * 1000,
-                    latency_ms,
+                print(
+                    f"PERF seq={seq} frame_age={frame_age*1000:.1f}ms capture={( t_capture-t0)*1000:.1f}ms color={(t_color-t_capture)*1000:.1f}ms send={(t_send-t_color)*1000:.1f}ms total={latency_ms:.1f}ms",
+                    flush=True,
                 )
 
             # FPS = actual loop rate (includes sleep), not just processing speed
