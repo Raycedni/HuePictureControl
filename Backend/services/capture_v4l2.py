@@ -25,8 +25,8 @@ from services.capture_service import CaptureBackend
 
 logger = logging.getLogger(__name__)
 
-_WIDTH = 320
-_HEIGHT = 240
+_WIDTH = 640
+_HEIGHT = 480
 _NUM_BUFFERS = 2
 
 # ---- V4L2 ctypes structs (64-bit safe) ----
@@ -322,6 +322,8 @@ class V4L2Capture(CaptureBackend):
                         self._latest_frame = frame
                         self._latest_jpeg = jpeg_data
                         self._last_frame_time = time.monotonic()
+                        self._frame_seq += 1
+                    self._new_frame_event.set()
 
             except OSError:
                 if not self._stop_event.is_set():

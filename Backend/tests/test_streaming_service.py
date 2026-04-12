@@ -30,6 +30,7 @@ def _make_mocks():
     # Capture mock
     mock_capture = MagicMock()
     mock_capture.get_frame = AsyncMock(return_value=_solid_blue_frame())
+    mock_capture.wait_for_new_frame = AsyncMock(return_value=_solid_blue_frame())
     mock_capture.release = MagicMock()
     mock_capture.open = MagicMock()
 
@@ -261,7 +262,7 @@ async def test_start_transitions_to_streaming(service_imports):
                         service._run_event.clear()
                     return _solid_blue_frame()
 
-                mocks["capture"].get_frame = AsyncMock(side_effect=controlled_get_frame)
+                mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=controlled_get_frame)
 
                 await service.start("cfg-001")
 
@@ -371,7 +372,7 @@ async def test_load_channel_map_returns_dict_with_masks(service_imports):
     for region in channel_map.values():
         assert isinstance(region, RegionMask)
         assert region.mask.dtype == np.uint8
-        assert region.mask.shape == (240, 320)
+        assert region.mask.shape == (480, 640)
 
 
 @pytest.mark.asyncio
@@ -462,7 +463,7 @@ async def test_frame_loop_calls_get_frame_each_iteration(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=controlled_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=controlled_frame)
 
     mock_streaming = mocks["streaming"]
     channel_map = {0: _mock_region_mask()}
@@ -496,7 +497,7 @@ async def test_frame_loop_calls_extract_region_color_per_channel(service_imports
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {
         0: _mock_region_mask(),
@@ -540,7 +541,7 @@ async def test_frame_loop_calls_rgb_to_xy_and_set_input(service_imports):
         ran = True
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {0: _mock_region_mask()}
 
@@ -589,7 +590,7 @@ async def test_frame_loop_brightness_clamped_to_min_001(service_imports):
         ran = True
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {0: _mock_region_mask()}
 
@@ -628,7 +629,7 @@ async def test_frame_loop_16_channels(service_imports):
         service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {i: _mock_region_mask() for i in range(16)}
 
@@ -665,7 +666,7 @@ async def test_frame_loop_1_channel_non_gradient(service_imports):
         service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {0: _mock_region_mask()}
 
@@ -705,7 +706,7 @@ async def test_frame_loop_calls_update_metrics_not_broadcast(service_imports):
         ran = True
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     channel_map = {0: _mock_region_mask()}
 
@@ -737,7 +738,7 @@ async def test_frame_loop_capture_error_stops_and_pushes_error(service_imports):
     service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._capture = mocks["capture"]  # simulate acquired capture
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device disconnected"))
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=RuntimeError("Device disconnected"))
 
     # Reconnect fails (returns False) — loop should exit with error
     async def fake_reconnect_false():
@@ -1021,7 +1022,7 @@ async def test_frame_loop_calls_capture_reconnect_on_runtime_error(service_impor
         service._run_event.clear()  # exit after successful reconnect
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=frame_raises_then_ok)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=frame_raises_then_ok)
 
     reconnect_called = False
 
@@ -1054,7 +1055,7 @@ async def test_frame_loop_exits_when_capture_reconnect_returns_false(service_imp
     service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
     service._capture = mocks["capture"]  # simulate acquired capture
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=RuntimeError("Device gone"))
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=RuntimeError("Device gone"))
 
     async def fake_reconnect_false():
         return False
@@ -1134,7 +1135,7 @@ async def test_stop_sequence_order(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=two_frames)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=two_frames)
 
     service = StreamingService(db, mocks["registry"], mocks["broadcaster"])
 
@@ -1182,7 +1183,7 @@ async def test_start_uses_assigned_camera(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
@@ -1220,7 +1221,7 @@ async def test_no_assignment_uses_default(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
@@ -1261,7 +1262,7 @@ async def test_assignment_to_unknown_camera_uses_default(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
@@ -1300,7 +1301,7 @@ async def test_stop_releases_device(service_imports):
             service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
@@ -1345,7 +1346,7 @@ async def test_camera_reassignment_mid_stream(service_imports):
         service._run_event.clear()
         return _solid_blue_frame()
 
-    mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame_then_stop)
 
     with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
         with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
@@ -1353,7 +1354,7 @@ async def test_camera_reassignment_mid_stream(service_imports):
                 with patch("asyncio.to_thread", side_effect=fake_to_thread):
                     with patch("asyncio.sleep", new_callable=AsyncMock):
                         # First run: acquires /dev/video1
-                        mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+                        mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame_then_stop)
                         await service.start("cfg-reassign")
                         if service._task:
                             await service._task
@@ -1364,7 +1365,7 @@ async def test_camera_reassignment_mid_stream(service_imports):
                         service._run_event.clear()
 
                         # Second run: acquires /dev/video2
-                        mocks["capture"].get_frame = AsyncMock(side_effect=one_frame_then_stop)
+                        mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame_then_stop)
                         await service.start("cfg-reassign")
                         if service._task:
                             await service._task

@@ -13,6 +13,7 @@ Exports:
     CaptureRegistry  -- Thread-safe ref-counted pool of CaptureBackend instances
 """
 import abc
+import asyncio
 import logging
 import os
 import sys
@@ -44,6 +45,8 @@ class CaptureBackend(abc.ABC):
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
         self._last_frame_time: float = 0.0
+        self._frame_seq: int = 0  # Incremented on each new frame
+        self._new_frame_event = threading.Event()  # Signaled when new frame arrives
         self._reader_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._reader_error = threading.Event()
@@ -68,6 +71,25 @@ class CaptureBackend(abc.ABC):
     async def get_frame(self) -> np.ndarray:
         """Return the most recent decoded BGR frame. Non-blocking."""
         self._check_health()
+        with self._frame_lock:
+            if self._latest_frame is None:
+                raise RuntimeError("No frame available from capture device")
+            return self._latest_frame
+
+    async def wait_for_new_frame(self, timeout: float = 0.2) -> np.ndarray:
+        """Wait for a fresh frame from the capture device, then return it.
+
+        Blocks (via asyncio.to_thread) until the reader thread delivers a
+        new frame, avoiding re-processing stale data.
+        """
+        self._check_health()
+        self._new_frame_event.clear()
+
+        def _wait():
+            self._new_frame_event.wait(timeout=timeout)
+
+        await asyncio.to_thread(_wait)
+
         with self._frame_lock:
             if self._latest_frame is None:
                 raise RuntimeError("No frame available from capture device")

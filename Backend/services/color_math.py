@@ -135,8 +135,8 @@ class RegionMask:
 
 def build_polygon_mask(
     normalized_points: list[list[float]],
-    width: int = 320,
-    height: int = 240,
+    width: int = 640,
+    height: int = 480,
 ) -> RegionMask:
     """Build a binary uint8 mask with pre-computed bounding box for ROI extraction.
 

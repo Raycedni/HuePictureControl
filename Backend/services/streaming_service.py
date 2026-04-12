@@ -374,7 +374,7 @@ class StreamingService:
             t0 = time.monotonic()
 
             try:
-                frame = await self._capture.get_frame()
+                frame = await self._capture.wait_for_new_frame()
             except RuntimeError as exc:
                 logger.warning("Capture device error: %s, starting reconnect", exc)
                 success = await self._capture_reconnect_loop()
@@ -387,7 +387,11 @@ class StreamingService:
 
             t_capture = time.monotonic()
             # How old is this frame? (time since reader thread stored it)
-            frame_age = t_capture - self._capture._last_frame_time if self._capture._last_frame_time > 0 else 0
+            try:
+                lft = self._capture._last_frame_time
+                frame_age = t_capture - lft if isinstance(lft, (int, float)) and lft > 0 else 0
+            except Exception:
+                frame_age = 0
 
             # Compute colors for all channels and send immediately (no smoothing)
             inputs = []
@@ -440,10 +444,8 @@ class StreamingService:
                 "seq": seq,
             })
 
-            # Sleep to maintain target Hz
-            sleep_time = self._period - elapsed
-            if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+            # No sleep needed — wait_for_new_frame paces the loop
+            # to the capture card's actual framerate
 
     # ------------------------------------------------------------------
     # Internal: reconnect
