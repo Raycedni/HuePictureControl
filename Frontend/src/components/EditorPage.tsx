@@ -11,6 +11,7 @@ export function EditorPage() {
   const [identityMode, setIdentityMode] = useState<string | null>(null)
   const [selectedConfigId, setSelectedConfigId] = useState<string>('')
   const [selectedDevice, setSelectedDevice] = useState<string | undefined>(undefined)
+  const [previewEnabled, setPreviewEnabled] = useState(true)
   const cameras = useCameras()
 
   const regions = useRegionStore((s) => s.regions)
@@ -59,7 +60,7 @@ export function EditorPage() {
     <div className="flex flex-col md:flex-row flex-1 min-h-0 text-left">
       {/* Left: canvas area ~70% */}
       <div className="flex flex-col flex-1 md:flex-[7] min-h-0">
-        <DrawingToolbar onDelete={handleEditorDelete} />
+        <DrawingToolbar onDelete={handleEditorDelete} previewEnabled={previewEnabled} onPreviewToggle={setPreviewEnabled} />
         {identityMode === 'degraded' && (
           <div className="bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs px-3 py-2 text-center">
             Device identity is limited to capture card name. Devices may be misidentified if multiple identical cards are connected.
@@ -81,6 +82,7 @@ export function EditorPage() {
             height={canvasDims.height}
             onDeleteRequest={handleEditorDelete}
             device={selectedDevice}
+            previewEnabled={previewEnabled}
           />
         </div>
       </div>

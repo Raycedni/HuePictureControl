@@ -4,9 +4,11 @@ import { deleteAllRegions } from '@/api/regions'
 
 interface DrawingToolbarProps {
   onDelete: () => void
+  previewEnabled: boolean
+  onPreviewToggle: (enabled: boolean) => void
 }
 
-export function DrawingToolbar({ onDelete }: DrawingToolbarProps) {
+export function DrawingToolbar({ onDelete, previewEnabled, onPreviewToggle }: DrawingToolbarProps) {
   const drawingMode = useRegionStore((s) => s.drawingMode)
   const setDrawingMode = useRegionStore((s) => s.setDrawingMode)
   const setRegions = useRegionStore((s) => s.setRegions)
@@ -65,6 +67,16 @@ export function DrawingToolbar({ onDelete }: DrawingToolbarProps) {
         className="bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20"
       >
         Clear All
+      </Button>
+      <div className="w-px bg-white/[0.08] mx-1" />
+      <Button
+        size="sm"
+        onClick={() => onPreviewToggle(!previewEnabled)}
+        className={previewEnabled
+          ? 'bg-hue-orange/15 text-hue-amber border-hue-orange/30 hover:bg-hue-orange/20'
+          : 'bg-white/[0.03] text-muted-foreground border-white/[0.08] hover:bg-white/[0.06] hover:text-foreground'}
+      >
+        {previewEnabled ? 'Preview On' : 'Preview Off'}
       </Button>
     </div>
   )
