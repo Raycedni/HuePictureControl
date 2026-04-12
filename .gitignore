@@ -5,3 +5,6 @@
 /Frontend/node_modules.bak/*
 .hpc-pids
 /.claude/worktrees/
+/.claude/proxmox-api-reference.md
+/.claude/vm-exec.sh
+/.claude/proxmox access.txt
