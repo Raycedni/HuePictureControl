@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A real-time ambient lighting system that captures HDMI video via a USB capture card, analyzes configurable freeform regions of the frame, and drives Philips Hue lights (including gradient-capable devices like Festavia and Flux) to match the on-screen colors. Supports multiple simultaneous capture devices with per-entertainment-zone camera selection. Controlled entirely through a web UI with no authentication required.
+A real-time ambient lighting system that captures HDMI video via a USB capture card (or wirelessly mirrored screens), analyzes configurable freeform regions of the frame, and drives Philips Hue lights (including gradient-capable devices like Festavia and Flux) to match the on-screen colors. Supports multiple simultaneous capture devices with per-entertainment-zone camera selection. Runs natively on Linux, controlled entirely through a web UI with no authentication required.
 
 ## Core Value
 
@@ -35,7 +35,6 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - [ ] v4l2loopback virtual camera management — create/destroy on demand, transparent to capture pipeline
 - [ ] FFmpeg pipeline management — pipe wireless streams to virtual V4L2 devices with health monitoring
 - [ ] Wireless input API — start/stop receivers, list sessions, check NIC capabilities
-- [ ] Docker configuration for wireless dependencies and Linux capabilities
 
 ### Active (v1.3)
 
@@ -55,22 +54,23 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - Audio reactivity — video/color only
 - Cloud connectivity — fully local, Bridge on LAN
 - Apple AirPlay support — user explicitly scoped to Windows and Android only
+- Docker containerization — dropped in v1.2, native Linux deployment simplifies kernel module and device access
 
 ## Context
 
-- **Hardware setup:** HDMI source → 4K USB capture card (presents as UVC webcam) → Docker container. Hue Bridge on local network with all lights paired and operational.
+- **Hardware setup:** HDMI source → 4K USB capture card (presents as UVC webcam) → Linux host. Hue Bridge on local network with all lights paired and operational.
 - **Specific devices:** Philips Hue Festavia (20m, 250 mini LEDs, gradient), Philips Hue Flux 3m lightstrip (RGBWWIC, gradient)
 - **Prior experience:** User has tried Hyperion and similar ambilight solutions — primary frustration was lack of support for gradient-capable Hue devices with per-segment control
 - **Key technical challenge:** Hue REST API is rate-limited (~10 req/s). The Entertainment API (UDP streaming, ~25Hz) is required to hit the <100ms latency target with 16+ segments
-- **Environment:** Docker Compose with separate backend/frontend containers. USB device passthrough to backend container via cgroup rules (hot-plug capable).
-- **Current state:** v1.1 shipped — 19 phases planned across 4 milestones. Backend: ~4,500 LOC Python. Frontend: ~3,500 LOC TypeScript/React. 167+ backend tests, 30+ frontend tests.
+- **Environment:** Native Linux deployment. Backend (FastAPI/uvicorn) and frontend (React) run directly on the host.
+- **Current state:** v1.1 shipped — phases planned across 4 milestones. Backend: ~4,500 LOC Python. Frontend: ~3,500 LOC TypeScript/React. 167+ backend tests, 30+ frontend tests.
 
 ## Constraints
 
 - **Latency**: <100ms from frame capture to light update — requires Entertainment API streaming, not REST polling
-- **Docker**: All services containerized; USB capture device passed through to backend container
+- **Platform**: Native Linux deployment — no Docker containerization
 - **Hue API**: Direct API usage (v2 CLIP for config, Entertainment API for streaming) — no third-party Hue wrapper libraries
-- **Network**: Hue Bridge must be reachable from Docker network (host network or bridge with LAN access)
+- **Network**: Hue Bridge must be reachable on LAN
 - **No auth**: Web UI is unauthenticated — local network tool only
 
 ## Current Milestone: v1.2 Wireless Input
@@ -83,6 +83,7 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - v4l2loopback virtual cameras fed by FFmpeg pipelines — transparent to existing capture pipeline
 - Wireless sources appear in camera selector alongside physical devices
 - API for starting/stopping wireless receivers and checking NIC capabilities
+- Frontend controls for wireless source management
 
 ## Next Milestone: v1.3 WLED Support, HA Control & Bug Fixes
 
@@ -110,6 +111,7 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 | CaptureRegistry ref-counted pool | Thread-safe concurrent multi-camera without race conditions | ✓ Good — v1.1 |
 | device_cgroup_rules for Docker passthrough | Hot-plug support without container restart | ✓ Good — v1.1 |
 | Props-down state lifting in EditorPage | Zone + camera state owned at page level, passed to children | ✓ Good — v1.1 |
+| Drop Docker, native Linux | Docker added friction for kernel modules (v4l2loopback), WiFi Direct, device access — no benefit for single-user local tool | — Pending |
 
 ## Evolution
 
@@ -130,4 +132,4 @@ This document evolves at phase transitions and milestone boundaries.
 5. All milestone decisions added to Key Decisions
 
 ---
-*Last updated: 2026-04-14 after v1.1 milestone*
+*Last updated: 2026-04-14 after v1.2 milestone start*

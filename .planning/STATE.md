@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 
 ## Current Position
 
-Phase: Not started
-Plan: Not started
-Status: v1.1 complete, preparing v1.2
-Last activity: 2026-04-14
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-14 — Milestone v1.2 started
 
 ## Performance Metrics
 
