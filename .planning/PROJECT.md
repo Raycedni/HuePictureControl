@@ -134,4 +134,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-14 — Milestone v1.3 defined: WLED support, HA control endpoints, zone persistence fix*
+*Last updated: 2026-04-14 — Phase 11 complete: Docker multi-device cgroup passthrough + SETUP.md*
