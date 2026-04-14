@@ -61,7 +61,11 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   4. `CaptureRegistry.acquire()` blocks until the FFmpeg producer has written its first frame into the virtual device (producer_ready gate prevents blank-frame acquisition)
   5. `GET /api/wireless/capabilities` returns NIC P2P support status, installed tool versions (ffmpeg, scrcpy, adb, iw), and a ready/not-ready assessment
   6. `GET /api/wireless/sessions` lists all active wireless sessions with source type and status
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 12-01-PLAN.md — Pydantic models and PipelineManager service with full subprocess lifecycle
+- [ ] 12-02-PLAN.md — Wireless router endpoints, main.py integration, and router tests
+- [ ] 12-03-PLAN.md — PipelineManager unit tests and conftest fixtures
 
 ---
 
@@ -192,7 +196,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete | 2026-04-14 |
-| 12. Virtual Device Infrastructure | v1.2 | 0/TBD | Not started | - |
+| 12. Virtual Device Infrastructure | v1.2 | 0/3 | Not started | - |
 | 13. scrcpy Android Integration | v1.2 | 0/TBD | Not started | - |
 | 14. Miracast Windows Integration | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Frontend Tab | v1.2 | 0/TBD | Not started | - |
