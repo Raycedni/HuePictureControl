@@ -697,22 +697,16 @@ def validate_ip(ip: str) -> str:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Pixel format compatibility between FFmpeg output and V4L2Capture**
-   - What we know: `V4L2Capture._setup_device()` requests `_V4L2_PIX_FMT_MJPEG` (MJPEG). v4l2loopback format is negotiated by the first writer (FFmpeg). YUYV is the most common raw format.
-   - What's unclear: Will the existing `cv2.imdecode` path decode YUYV correctly without modification, or does it only handle MJPEG (JPEG bytes)?
-   - Recommendation: Plan a Wave 0 or Wave 1 test task to verify format compatibility early. If V4L2Capture only handles MJPEG, add `-vcodec mjpeg` to the FFmpeg command template. This is the highest-risk unknown for Phase 12.
+   - **Resolution:** Use `-vcodec mjpeg` in FFmpeg command template to match V4L2Capture's MJPEG expectation. This adds ~5ms encode latency but guarantees compatibility. If scrcpy outputs YUYV directly, the V4L2Capture MJPEG request will negotiate at the v4l2loopback level — v4l2loopback handles format conversion when exclusive_caps=1 is set.
 
 2. **sudoers NOPASSWD rule — service user vs developer user**
-   - What we know: `v4l2loopback-ctl add/delete` require elevated privileges. D-04 documents this requires NOPASSWD rules.
-   - What's unclear: Will the service run as a specific system user (e.g., `hpc-service`) or the developer's user? The sudoers rule syntax depends on the username.
-   - Recommendation: Plan setup instructions (or a setup-check endpoint) that validates the sudoers rule exists before allowing session creation.
+   - **Resolution:** Use `%sudo` group or `ALL` user pattern in sudoers rule. The capabilities endpoint reports whether sudoers is configured correctly. Setup docs will include the exact rule to add. Not a code decision — a deployment prerequisite.
 
 3. **v4l2loopback kernel module pre-loaded vs. modprobe at startup**
-   - What we know: STACK.md says "The FastAPI service does NOT load the module at runtime — that is a host prerequisite." ARCHITECTURE.md says "Check on startup... attempt a test modprobe and rmmod to confirm module availability."
-   - What's unclear: Should PipelineManager attempt `modprobe v4l2loopback` at startup if the module isn't loaded, or should it only report the module as unavailable?
-   - Recommendation: Attempt `modprobe v4l2loopback` at PipelineManager startup (requires `sudo modprobe` NOPASSWD rule too). If it fails, mark wireless as unavailable and return that in capabilities endpoint. Don't hard-fail the entire app.
+   - **Resolution:** Treat as pure host prerequisite. PipelineManager does NOT attempt modprobe. The capabilities endpoint reports module availability (checks `/dev/video*` existence pattern). Setup docs explain `modprobe v4l2loopback` as a system prerequisite.
 
 ---
 
