@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: WLED Support, HA Control & Bug Fixes
-status: defining_requirements
+status: planning
 stopped_at: null
 last_updated: "2026-04-14T00:00:00.000Z"
-last_activity: 2026-04-14 -- Milestone v1.3 started
+last_activity: 2026-04-14 -- v1.3 roadmap created (Phases 16-19)
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-23)
+See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 11 — docker-multi-device-infrastructure
+**Current focus:** Phase 16 — zone-persistence-bug-fixes
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-14 — Milestone v1.3 started
+Phase: 16 of 19 (zone-persistence-bug-fixes)
+Plan: unexecuted
+Status: Roadmap created — v1.3 phases 16-19 defined, ready for planning
+Last activity: 2026-04-14 — v1.3 roadmap created
 
 ## Performance Metrics
 
@@ -122,6 +122,11 @@ Recent decisions affecting current work:
 - [Phase 10]: putCameraAssignment is fire-and-forget void return — component handles optimistic UI without waiting for confirmation
 - [Phase 10-frontend-camera-selector]: LightPanel switches to getEntertainmentConfigs from hue api — aligns with Wave 0 test mock structure
 - [Phase 10-frontend-camera-selector]: Props-down pattern: EditorPage owns selectedConfigId + selectedDevice state, passes to LightPanel and EditorCanvas
+- [v1.3 roadmap]: WLED streaming uses stdlib socket (UDP) — no new library; DRGB for <=490 LEDs, DNRGB for >490 (auto-selected by WledService)
+- [v1.3 roadmap]: WLED device registration uses existing httpx to fetch /json/info from device IP before persisting
+- [v1.3 roadmap]: WLED channels use shared channel abstraction — painted ranges appear in light panel alongside Hue segments, same drag-drop assignment
+- [v1.3 roadmap]: HA endpoints are unauthenticated thin adapters over the existing StreamingCoordinator — no new auth layer
+- [v1.3 roadmap]: Phase 16 (bug fixes) runs first as warm-up — independent of WLED, unblocks clean state for WLED testing
 
 ### Pending Todos
 
@@ -130,6 +135,7 @@ None yet.
 ### Roadmap Evolution
 
 - Phase 3.1 inserted after Phase 3: Auto-Mapping from Entertainment Config — auto-generate screen regions from channel positions before building manual canvas editor (user decision 2026-03-24)
+- v1.3 Phases 16-19 added 2026-04-14: Zone persistence fixes, WLED backend+streaming, HA control endpoints, WLED strip paint UI
 
 ### Blockers/Concerns
 
@@ -138,6 +144,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T20:31:35.077Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-docker-multi-device-infrastructure/11-CONTEXT.md
+Last session: 2026-04-14T00:00:00.000Z
+Stopped at: v1.3 roadmap created — Phases 16-19 defined
+Resume file: .planning/ROADMAP.md

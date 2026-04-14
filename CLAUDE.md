@@ -81,72 +81,93 @@ A real-time ambient lighting system that captures HDMI video via a USB capture c
 |-------|-----------|---------|
 | Backend framework | FastAPI | >=0.115 |
 | Async DB | aiosqlite | >=0.20 |
-| Frame capture (Linux) | Custom V4L2 ctypes/ioctl + mmap | — (in `capture_v4l2.py`) |
+| HTTP client | httpx | >=0.27 |
+| Frame capture (Linux) | Custom V4L2 ctypes/ioctl + mmap | in `capture_v4l2.py` |
 | Frame decode | opencv-python-headless | >=4.10 |
 | Hue streaming | hue-entertainment-pykit | 0.9.4 |
 | Python | 3.12 (pinned) | 3.12 |
 | Frontend | React 19 + TypeScript + Konva.js + Zustand | — |
+| Device enumeration | linuxpy | >=0.24 (added in v1.1) |
 ## Recommended Stack Additions
-### Core Technologies
+### Core Technologies (Backend — New)
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| `linuxpy` | `>=0.24` | Enumerate available V4L2 capture devices inside the container | Provides `iter_video_capture_devices()` — a stdlib-equivalent iterator that runs `VIDIOC_QUERYCAP` ioctl on every `/dev/video*` node and filters to those with `V4L2_CAP_VIDEO_CAPTURE`. No shell subprocess required, no `v4l2-ctl` binary dependency. Pure Python, no C extension. Python 3.10+ — compatible with pinned 3.12. Version 0.24.0 released Feb 2026 (current). |
-### Supporting Libraries
+| Python `socket` stdlib (UDP) | stdlib (3.12) | WLED DRGB/DNRGB realtime packet sending | No library needed. WLED UDP realtime is a 2-byte header + raw RGB bytes over `SOCK_DGRAM`. This codebase already builds protocols from scratch (see `capture_v4l2.py`, `hue_client.py`). One `WledStreamer` class with `socket.socket(AF_INET, SOCK_DGRAM)` is the complete implementation — ~30 lines of Python. |
+| `zeroconf` | `>=0.148,<2` | WLED device discovery via mDNS (`_wled._tcp.local.`) | Pure Python, no system Bonjour/Avahi/D-Bus dependency. WLED devices advertise as `_wled._tcp.local.`; `AsyncServiceBrowser` integrates with the existing asyncio event loop. Version 0.148.0 released Oct 2025. Python 3.9+ compatible, no conflict with existing requirements. See Docker caveat below — only useful if backend uses `network_mode: host`. |
+| `httpx` (already present) | `>=0.27` | WLED JSON API queries + Home Assistant REST API | Already a dependency. WLED's `GET /json/info` returns `leds.count` (needed at device registration for strip UI). HA REST API uses the same bearer-token HTTP pattern. Zero new libraries needed for either integration. |
+### Core Technologies (Frontend — New)
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `react-konva` (already in use) | current | Paint-on-strip LED range selector UI | Already the established canvas primitive. The strip UI is a horizontal canvas showing one cell per LED (or one rect per zone range). Click-drag paints a zone color assignment. Same pointer event model as the existing freeform region editor — no new library needed. |
+## Protocol Specifications (Build-Not-Buy)
+### WLED UDP Realtime — Packet Formats
+### WLED JSON API (Device Registration)
+### Home Assistant REST API (Inbound — HA Calls HuePictureControl)
+- No HA token stored in HuePictureControl config
+- No outbound firewall rules needed
+- HA user configures `rest_command:` in their `configuration.yaml` pointing at `http://[HPC_HOST]:8001/api/ha/...`
+- HuePictureControl exposes new unauthenticated REST endpoints (consistent with existing no-auth design)
+## Integration Points with Existing Code
+### New `WledStreamingService` (sibling to `StreamingService`)
+| Aspect | Hue (existing) | WLED (new) |
+|--------|---------------|------------|
+| Transport | DTLS/UDP via `hue-entertainment-pykit` | Raw UDP `socket.SOCK_DGRAM` |
+| Color space | xyb (CIE 1931) | Raw RGB bytes |
+| Activation | REST call to Bridge required | None — UDP is stateless |
+| Reconnect | Bridge socket re-activate | Reconnect UDP socket (trivial) |
+| Config | Entertainment config UUID | WLED device IP + LED count |
+### `database.py` — Three New Tables
+### `main.py` — App State Addition
+### New Router Files
+- `routers/wled.py` — CRUD for WLED devices, start/stop WLED streaming, paint assignments (`/api/wled/...`)
+- `routers/ha.py` — HA control endpoints (`/api/ha/start`, `/api/ha/stop`, `/api/ha/camera`, `/api/ha/zone`)
+- No changes to `routers/capture.py`, `routers/hue.py`, or `routers/regions.py`
+## Supporting Libraries
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| Python `glob` + `fcntl` stdlib | stdlib | Fallback device scan if `linuxpy` unavailable | Only if `linuxpy` import fails at startup (e.g., slim Docker image); scan `/dev/video*` + `VIDIOC_QUERYCAP` manually using the existing ctypes infrastructure already in `capture_v4l2.py` |
-### Development Tools
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| `v4l2-ctl --list-devices` (host only) | Manual verification of device names during dev | Do NOT ship in Docker image — only used outside container for debugging |
-| `usbipd` (Windows host) | Attach additional USB capture cards to WSL2 | Existing workflow, no change |
-## Database Schema Addition
-## API Surface Addition
-- `PUT /api/capture/device` — already exists, already switches device path; no change needed
-- `GET /api/regions` / `PUT /api/regions/{id}` — add `camera_device` field to the region model
-## Docker Compose — Multiple Device Passthrough
-### Recommended Approach: Explicit `devices` List
-### Alternative: `device_cgroup_rules` Wildcard
-### WSL2 Reality
-## Installation
-# Add to Backend/requirements.txt
-# Install in venv
+| `zeroconf` | `>=0.148,<2` | WLED auto-discovery on LAN via `_wled._tcp.local.` | Only during user-initiated device scan in the WLED tab. `AsyncServiceBrowser` with 3-second timeout. Not continuous background browsing. Only useful with `network_mode: host` in Docker — see caveat. |
+| Python `socket` stdlib | stdlib | WLED UDP DRGB/DNRGB packet send | Per-frame during streaming. One `SOCK_DGRAM` socket per WLED device created at stream start, reused for the session, closed on stop. |
+| `httpx` (existing) | `>=0.27` | WLED `/json/info` fetch, HA REST calls | At device registration and on-demand refresh. Not per-frame. |
 ## Alternatives Considered
-| Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|------------------------|
-| `linuxpy.video.device.iter_video_capture_devices()` | `subprocess.run(["v4l2-ctl", "--list-devices"])` | Never — requires `v4l2-utils` installed in the Docker image, adds a binary dependency, and produces text that must be parsed. Pure Python ioctl is already the pattern in this codebase. |
-| `linuxpy.video.device.iter_video_capture_devices()` | Extend existing ctypes code in `capture_v4l2.py` | If `linuxpy` adds unacceptable image size or dependency complexity. The existing `capture_v4l2.py` already has `VIDIOC_QUERYCAP` partially implemented — a pure-stdlib fallback using `glob('/dev/video*')` + the existing `_VIDIOC_QUERYCAP` constant is a viable alternative with zero new dependencies. |
-| `linuxpy.video.device.iter_video_capture_devices()` | `cv2.VideoCapture(index)` probe loop | Never — OpenCV's V4L2 backend in `opencv-python-headless` is broken on Linux (that is exactly why the project already replaced it with direct ioctls). Probing by integer index also produces silent failures rather than a clean device list. |
-| Explicit `devices` list in docker-compose.yaml | `device_cgroup_rules: 'c 81:* rw'` wildcard | Only if the number of capture cards is dynamic at runtime and unpredictable. For this project (1-4 cards max, plugged before container start), explicit mapping is more reliable across Compose versions. |
-| `camera_device` column in existing `regions` table | New `zone_camera_assignments` join table | Only if the same zone ever needs to switch cameras per entertainment config. Current requirement is one camera per zone globally. A nullable column in `regions` is simpler and backward compatible. |
+| Recommended | Alternative | Why Not |
+|-------------|-------------|---------|
+| Raw `socket` stdlib for WLED UDP | `python-wled` (PyPI v0.21.0) | `python-wled` wraps the JSON API only — no UDP realtime protocol support. Confirmed from source. Adding a 3+ dependency library for HTTP calls already covered by `httpx` is unjustified. |
+| DNRGB for strips > 490 LEDs | DDP protocol (port 4048) | DDP has a 10-byte header with push IDs, flags, and offset fields. WLED explicitly states it ignores optional timecodes in DDP headers. DNRGB achieves the same segmented addressing with a 4-byte header. Lower complexity, same result for this use case. |
+| DRGB for strips <= 490 LEDs | WARLS (protocol byte = 1) | WARLS has a 255 LED limit and requires per-LED index bytes. DRGB covers 490 LEDs, has a simpler packet format (no indices), and is the recommended WLED realtime protocol for full-strip updates. |
+| HA calls HuePictureControl (`rest_command`) | HuePictureControl calls HA REST API | Storing an HA long-lived access token in HuePictureControl adds a configuration burden and an outbound dependency. `rest_command` is purpose-built for HA→external service control. Simpler, no secrets stored in HPC. |
+| Sibling `WledStreamingService` class | Extend `StreamingService` with WLED support | Extending entangles DTLS and UDP codepaths, making each harder to test. `StreamingService` has Hue-specific activation/deactivation; WLED has none. Same lifecycle interface, separate classes. |
+| `react-konva` (existing) for strip paint UI | Dedicated LED strip React component | No suitable package exists for this specific interaction pattern. The Konva canvas already handles pointer drag events and zone coloring in this project. A custom component using `Rect` nodes per LED range is ~150 lines of TSX. |
+| Manual IP entry as primary discovery | mDNS-only discovery | mDNS multicast does not propagate through Docker bridge networks. Manual IP entry works reliably regardless of Docker network mode. |
 ## What NOT to Use
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `v4l2py` (PyPI) | Version 3.0.0 is explicitly a shim re-exporting `linuxpy` — use the real library directly | `linuxpy>=0.24` |
-| `capture-devices` (PyPI) | Thin wrapper around OpenCV integer probing; inherits the broken Linux V4L2 backend problem | `linuxpy` + existing ctypes approach |
-| `pyudev` | Adds libudev C dependency; overkill for simple device listing when V4L2 ioctl achieves the same | `linuxpy` or glob+ioctl |
-| `cv2.VideoCapture(index)` probe loop | Broken V4L2 backend — this is documented in project history as why `capture_v4l2.py` was written from scratch | Direct `VIDIOC_QUERYCAP` ioctl via `linuxpy` or existing ctypes |
-| `privileged: true` in docker-compose | Security: grants host-level access far beyond what video capture needs | Explicit `devices` list + `group_add: [video]` |
-| New camera manager service / process | Overengineering: the existing `CaptureBackend` pool pattern (one instance per active device) is sufficient | Extend `app.state` to hold a dict of `CaptureBackend` instances keyed by device path |
+| `python-wled` (PyPI) | JSON API only, no UDP realtime streaming. Adds indirect dependencies for functionality `httpx` already covers. | `httpx` for JSON API; raw `socket` for UDP |
+| DDP over DNRGB | More complex header, no benefit for this use case. WLED ignores optional DDP timecodes anyway. | DNRGB chunked packets for > 490 LEDs |
+| WARLS protocol (byte 0 = 1) | 255 LED limit. Superseded by DRGB/DNRGB. Most WS2812B strips are 300–1200 LEDs. | DRGB or DNRGB |
+| Polling `/json/state` per frame | HTTP polling destroys latency. WLED does not confirm UDP receipt. | Fire-and-forget UDP only during streaming |
+| `zeroconf` with Docker bridge network mode | Multicast does not propagate through Docker bridge. `AsyncServiceBrowser` will find zero devices. | Manual IP entry; mDNS only if backend switches to `network_mode: host` |
+| Storing HA long-lived access token in HuePictureControl | Adds secret management burden; violates no-auth local tool design. | HA calls HPC via `rest_command`; HPC exposes unauthenticated control endpoints |
+| New camera manager service / process for WLED camera | The existing `CaptureRegistry` pattern is sufficient. WLED streaming uses the same frame as Hue streaming — no second capture needed for the same device. | Extend `app.state` with `wled_streaming` that calls `registry.acquire()` on the same device path |
+## Docker / Network Considerations
 ## Version Compatibility
 | Package | Compatible With | Notes |
 |---------|-----------------|-------|
-| `linuxpy>=0.24` | Python 3.10–3.12 | Tested with 3.12; uses `fcntl`/`ctypes` stdlib only; no conflict with `opencv-python-headless` |
-| `linuxpy>=0.24` | `fastapi>=0.115` | No interaction; used only in a new synchronous device-scan function called from a FastAPI route |
-| `linuxpy>=0.24` | Docker `python:3.12-slim` base image | Pure Python, no apt packages needed |
-## Integration Points with Existing Code
-### `capture_service.py` — `create_capture(device_path)` factory
-### `database.py` — schema migration
-### `routers/capture.py` — new `/devices` endpoint
-### `streaming_service.py`
+| `zeroconf>=0.148,<2` | Python 3.9–3.14, asyncio | Pure Python, no C extension required. Optional Cython for performance (not needed). No conflict with any existing requirement. |
+| `zeroconf>=0.148,<2` | `fastapi>=0.115`, `uvicorn[standard]` | No interaction. Used only in a FastAPI route handler via `asyncio.to_thread` or `AsyncServiceBrowser`. |
+| Python `socket` stdlib | Python 3.12, asyncio | Use `asyncio.to_thread(sock.sendto, data, addr)` for non-blocking sends — same pattern as `capture_v4l2.py` uses `asyncio.to_thread` for blocking ioctl calls. Consistent with existing codebase. |
+## Installation
+# Add to Backend/requirements.txt:
+# Install in venv:
 ## Sources
-- [linuxpy PyPI page](https://pypi.org/project/linuxpy/) — version 0.24.0, Python >=3.10, HIGH confidence
-- [linuxpy async FastAPI example](https://github.com/tiagocoutinho/linuxpy/blob/master/examples/video/web/async.py) — `iter_video_capture_devices()` API confirmed, HIGH confidence
-- [Docker Compose `services` reference](https://docs.docker.com/reference/compose-file/services/) — `devices` list and `device_cgroup_rules` syntax, HIGH confidence
-- [docker/compose #9059](https://github.com/docker/compose/issues/9059) — `device_cgroup_rules` instability history, MEDIUM confidence
-- [docker/compose #12102](https://github.com/docker/compose/issues/12102) — cgroup rules bug resolved as user error in v2.29.2, MEDIUM confidence
-- [VIDIOC_QUERYCAP kernel docs](https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/vidioc-querycap.html) — `V4L2_CAP_VIDEO_CAPTURE` capability flag, HIGH confidence
-- v4l2py PyPI page — confirmed v3.0 is a linuxpy shim, HIGH confidence
+- [WLED UDP Realtime docs](https://kno.wled.ge/interfaces/udp-realtime/) — WARLS/DRGB/DNRGB/DRGBW packet formats, port 21324, LED count limits, HIGH confidence
+- [WLED Wiki UDP Realtime Control](https://github.com/Aircoookie/WLED/wiki/UDP-Realtime-Control) — Protocol byte values (1=WARLS, 2=DRGB, 3=DRGBW, 4=DNRGB), timeout semantics, exact byte offsets, HIGH confidence
+- [WLED DDP docs](https://kno.wled.ge/interfaces/ddp/) — DDP port 4048, WLED does not read optional timecodes, HIGH confidence
+- [WLED JSON API docs](https://kno.wled.ge/interfaces/json-api/) — `/json/info` endpoint, `leds.count` field structure, HIGH confidence
+- [python-wled GitHub](https://github.com/frenck/python-wled) — v0.21.0, JSON API only, no UDP realtime, confirmed via README, HIGH confidence
+- [zeroconf PyPI](https://pypi.org/project/zeroconf/) — v0.148.0 (Oct 2025), Python 3.9+, pure Python with optional Cython, HIGH confidence
+- [WLED mDNS service type issue #103](https://github.com/Aircoookie/WLED/issues/103) — `_wled._tcp.local.` service type confirmed, HIGH confidence
+- [Home Assistant REST API developer docs](https://developers.home-assistant.io/docs/api/rest/) — Bearer token auth, `/api/services/` endpoint format, HIGH confidence
+- [wledcast reference implementation](https://github.com/ppamment/wledcast) — DDP streaming from Python, MEDIUM confidence (reference only, uses wxPython GUI not relevant here)
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
@@ -167,9 +188,9 @@ Architecture not yet mapped. Follow existing patterns found in the codebase.
 Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
 
 Use these entry points:
-- `/gsd:quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd:debug` for investigation and bug fixing
-- `/gsd:execute-phase` for planned phase work
+- `/gsd-quick` for small fixes, doc updates, and ad-hoc tasks
+- `/gsd-debug` for investigation and bug fixing
+- `/gsd-execute-phase` for planned phase work
 
 Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
 <!-- GSD:workflow-end -->
@@ -180,3 +201,14 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 > Profile not yet configured. Run `/gsd:profile-user` to generate your developer profile.
 > This section is managed by `generate-claude-profile` -- do not edit manually.
 <!-- GSD:profile-end -->
+
+<!-- GSD:skills-start source:skills/ -->
+## Project Skills
+
+| Skill | Description | Path |
+|-------|-------------|------|
+| health | Check full stack health — backend API, frontend, Hue Bridge connectivity, and WebSocket endpoints | `.claude/skills/health/SKILL.md` |
+| preflight | Full pre-commit verification — runs tests, health checks, and visual UI verification before committing | `.claude/skills/preflight/SKILL.md` |
+| test | Run all backend and frontend tests in parallel and report results | `.claude/skills/test/SKILL.md` |
+| verify-ui | Visually verify the frontend UI by screenshotting all tabs using Playwright MCP | `.claude/skills/verify-ui/SKILL.md` |
+<!-- GSD:skills-end -->

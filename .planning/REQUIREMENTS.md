@@ -262,12 +262,34 @@
 | WFNT-01 | Phase 14 | Pending |
 | WFNT-02 | Phase 14 | Pending |
 
+| BFIX-01 | Phase 16 | Pending |
+| BFIX-02 | Phase 16 | Pending |
+| WLED-01 | Phase 17 | Pending |
+| WLED-02 | Phase 17 | Pending |
+| WLED-03 | Phase 17 | Pending |
+| WLED-04 | Phase 17 | Pending |
+| WLED-05 | Phase 17 | Pending |
+| WSTR-01 | Phase 17 | Pending |
+| WSTR-02 | Phase 17 | Pending |
+| WSTR-03 | Phase 17 | Pending |
+| WSTR-04 | Phase 17 | Pending |
+| HASS-01 | Phase 18 | Pending |
+| HASS-02 | Phase 18 | Pending |
+| HASS-03 | Phase 18 | Pending |
+| HASS-04 | Phase 18 | Pending |
+| HASS-05 | Phase 18 | Pending |
+| WMAP-01 | Phase 19 | Pending |
+| WMAP-02 | Phase 19 | Pending |
+| WMAP-03 | Phase 19 | Pending |
+| WMAP-04 | Phase 19 | Pending |
+| WMAP-05 | Phase 19 | Pending |
+
 **Coverage:**
 - v1.0 requirements: 30 total — all validated
 - v1.1 requirements: 17 total, mapped: 17, unmapped: 0 ✓
 - v1.2 requirements: 22 total, mapped: 22, unmapped: 0 ✓
-- v1.3 requirements: 21 total, mapped: 0, unmapped: 21 ⚠️ (awaiting roadmap)
+- v1.3 requirements: 21 total, mapped: 21, unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-04-14 after v1.3 milestone creation*
+*Last updated: 2026-04-14 — v1.3 traceability complete (Phases 16-19)*

@@ -5,6 +5,7 @@
 - **v1.0 Full Ambient Lighting** - Phases 1-6 (completed 2026-03-24)
 - **v1.1 Multi-Camera Support** - Phases 7-11 (in progress)
 - **v1.2 Wireless Input** - Phases 12-15 (planned)
+- **v1.3 WLED Support, HA Control & Bug Fixes** - Phases 16-19 (planned)
 
 ## Phases
 
@@ -162,7 +163,7 @@ Plans:
 **Milestone Goal:** Replace the single static camera with a per-entertainment-zone camera selector, enabling each zone to independently use a different video capture device.
 
 - [x] **Phase 7: Device Enumeration and Camera Assignment Schema** - Enumerate all V4L2 capture devices and persist camera-to-zone assignments in the database (completed 2026-04-03)
-- [ ] **Phase 8: Capture Registry** - Replace the global CaptureBackend singleton with a per-device registry that supports concurrent multi-zone capture
+- [x] **Phase 8: Capture Registry** - Replace the global CaptureBackend singleton with a per-device registry that supports concurrent multi-zone capture (completed 2026-04-09)
 - [x] **Phase 9: Preview Routing and Region API** - Route preview WebSocket to the zone's assigned camera; expose camera_device in region CRUD (completed 2026-04-07)
 - [x] **Phase 10: Frontend Camera Selector** - Per-zone camera dropdown in the editor UI with live preview switching (completed 2026-04-07)
 - [ ] **Phase 11: Docker Multi-Device Infrastructure** - Docker Compose configuration and documentation for multiple video device passthrough
@@ -199,7 +200,7 @@ Plans:
 
 Plans:
 - [x] 08-01-PLAN.md - CaptureRegistry class with ref-counted acquire/release/shutdown
-- [ ] 08-02-PLAN.md - StreamingService registry integration + lifespan wiring + router backward compat
+- [x] 08-02-PLAN.md - StreamingService registry integration + lifespan wiring + router backward compat
 
 ---
 
@@ -321,6 +322,75 @@ Plans:
 
 ---
 
+---
+
+## v1.3 WLED Support, HA Control & Bug Fixes (Planned)
+
+**Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
+
+- [ ] **Phase 16: Zone Persistence Bug Fixes** - Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
+- [ ] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output
+- [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
+- [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
+
+## Phase Details (v1.3)
+
+### Phase 16: Zone Persistence Bug Fixes
+**Goal**: The entertainment config selection persists correctly per camera across page reloads, and the dropdown accurately reflects the actual streaming state when the page loads.
+**Depends on**: Phase 15 (v1.2 complete)
+**Requirements**: BFIX-01, BFIX-02
+**Success Criteria** (what must be TRUE):
+  1. After selecting an entertainment config and reloading the page, the same config is pre-selected in the dropdown without manual re-selection
+  2. If streaming was active when the page was opened in another tab, the dropdown on the new tab shows the streaming state correctly rather than a default/idle state
+  3. Selecting different entertainment configs for different cameras persists independently — switching cameras shows the config last used with that camera
+**Plans**: TBD
+
+---
+
+### Phase 17: WLED Backend and Streaming
+**Goal**: The backend can register WLED devices, persist their configuration, and stream color data to them concurrently with Hue at up to 60 Hz via UDP, with automatic DRGB/DNRGB protocol selection based on LED count.
+**Depends on**: Phase 16
+**Requirements**: WLED-01, WLED-02, WLED-03, WLED-04, WLED-05, WSTR-01, WSTR-02, WSTR-03, WSTR-04
+**Success Criteria** (what must be TRUE):
+  1. User can add a WLED device by IP, see its name and LED count fetched from the device, and remove it — all changes persist across restarts
+  2. A WLED device can be enabled or disabled without being removed; disabled devices receive no UDP packets
+  3. With a WLED device enabled and channels assigned to regions, the LED strip updates color in sync with the captured frame at 50-60 Hz
+  4. Strips with more than 490 LEDs automatically use DNRGB chunked packets; strips with 490 or fewer use DRGB — no user configuration required
+  5. When streaming stops, the UDP timeout byte causes the strip to release the last color within the configured timeout rather than staying frozen
+  6. Hue and WLED devices stream simultaneously from the same captured frame without interference or frame-rate degradation
+**Plans**: TBD
+
+---
+
+### Phase 18: Home Assistant Control Endpoints
+**Goal**: Home Assistant can start and stop streaming, select the active camera and entertainment zone, and query current streaming status via REST endpoints — without requiring access to the web UI.
+**Depends on**: Phase 17
+**Requirements**: HASS-01, HASS-02, HASS-03, HASS-04, HASS-05
+**Success Criteria** (what must be TRUE):
+  1. `POST /api/ha/start` starts streaming from HA with the currently configured zone and camera; `POST /api/ha/stop` stops it cleanly
+  2. `GET /api/ha/status` returns current streaming state, active zone, and active camera in a machine-readable format
+  3. HA can select a specific camera via REST and a subsequent start uses that camera
+  4. HA can select a specific entertainment zone via REST and a subsequent start activates that zone
+  5. All HA endpoints are unauthenticated and accessible from within the local network, consistent with the rest of the API
+**Plans**: TBD
+
+---
+
+### Phase 19: WLED Strip Paint UI
+**Goal**: Users can visually paint LED channel ranges directly onto a strip representation in the UI, and the resulting channels appear in the light panel for assignment to canvas regions via the same drag-drop workflow used for Hue segments.
+**Depends on**: Phase 17
+**Requirements**: WMAP-01, WMAP-02, WMAP-03, WMAP-04, WMAP-05
+**Success Criteria** (what must be TRUE):
+  1. The WLED tab shows a visual horizontal strip for each device; user can click and drag to paint a named channel range onto the strip
+  2. Each painted channel appears in the light panel dropdown with a distinct color, assignable to canvas regions by drag-and-drop — identical workflow to Hue gradient segments
+  3. Adjacent channel zones are visually separated by color and the boundary handle can be dragged to resize them
+  4. Painted channel assignments persist across restarts; reopening the editor shows the same strip layout and region assignments
+  5. Removing a painted channel unassigns it from any regions it was linked to and updates the canvas immediately
+**Plans**: TBD
+**UI hint**: yes
+
+---
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -333,7 +403,7 @@ Plans:
 | 5. Gradient Device Support and Polish | v1.0 | 2/2 | Complete | 2026-03-24 |
 | 6. Hardening and Deployment | v1.0 | TBD | Complete | 2026-03-24 |
 | 7. Device Enumeration and Camera Assignment Schema | v1.1 | 2/2 | Complete   | 2026-04-03 |
-| 8. Capture Registry | v1.1 | 1/2 | In Progress|  |
+| 8. Capture Registry | v1.1 | 2/2 | Complete   | 2026-04-09 |
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete   | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete    | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 0/1 | Planning | - |
@@ -341,8 +411,13 @@ Plans:
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Docker & Polish | v1.2 | 0/TBD | Not started | - |
+| 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
+| 17. WLED Backend and Streaming | v1.3 | 0/TBD | Not started | - |
+| 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
+| 19. WLED Strip Paint UI | v1.3 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-23*
 *v1.1 phases added: 2026-04-03*
 *v1.2 phases added: 2026-04-03*
+*v1.3 phases added: 2026-04-14*
