@@ -406,7 +406,7 @@ Plans:
 | 8. Capture Registry | v1.1 | 2/2 | Complete   | 2026-04-09 |
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete   | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete    | 2026-04-07 |
-| 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete   | 2026-04-14 |
+| 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete    | 2026-04-14 |
 | 12. Virtual Camera & Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
