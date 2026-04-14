@@ -1,391 +1,267 @@
-# Architecture Research
+# Architecture Patterns: Wireless Input Integration (v1.2)
 
-**Domain:** Real-time ambient lighting — WLED UDP streaming, Home Assistant control endpoints, entertainment zone persistence
+**Domain:** Real-time ambient lighting — wireless screen mirroring input via Miracast, scrcpy, v4l2loopback, FFmpeg
 **Researched:** 2026-04-14
-**Confidence:** HIGH — based on direct code inspection of the existing implementation and verified WLED/HA protocol documentation
+**Confidence:** HIGH — based on direct codebase inspection, verified upstream documentation, and confirmed protocol behaviour
 
-> This document covers v1.3 additions only. For the existing v1.0/v1.1 architecture see the sections preserved at the bottom.
-> v1.3 adds three independent concerns: WLED streaming, HA control endpoints, zone persistence fix.
-
----
-
-## What Already Exists (Do Not Re-Research)
-
-The existing backend has a well-established layered architecture:
-
-```
-FastAPI main.py
-  app.state: db, capture_registry, broadcaster, streaming (StreamingService)
-
-Services:
-  capture_service.py    CaptureRegistry + CaptureBackend ABC (V4L2/DirectShow)
-  streaming_service.py  Hue-specific loop: CaptureRegistry -> color_math -> DTLS
-  hue_client.py         REST + Entertainment config activation/deactivation
-  color_math.py         RGB->CIE xy, build_polygon_mask, extract_region_color
-  status_broadcaster.py WebSocket fan-out
-
-Routers: capture.py, hue.py, regions.py, cameras.py
-WebSockets: streaming_ws.py (/ws/status), preview_ws.py (/ws/preview)
-
-Database tables: bridge_config, entertainment_configs, regions,
-  light_assignments, known_cameras, camera_assignments
-```
+> This document covers v1.2 wireless input additions only.
+> The existing v1.1 architecture (CaptureRegistry, preview WebSocket, camera_assignments, known_cameras) is already shipped and is not re-documented here.
+> The v1.3 architecture (WledService, StreamingCoordinator, HA router) is in the archived v1.3 ARCHITECTURE.md.
 
 ---
 
-## System Overview (v1.3 additions)
+## System Overview (v1.2)
+
+The core insight: v4l2loopback lets any wireless input appear as a `/dev/video*` device. Once that device exists, the **existing CaptureRegistry, V4L2Capture, StreamingService, and preview WebSocket require zero changes.** The entire integration lives in a new PipelineManager service and a new wireless router.
 
 ```
-+------------------------------------------------------------------+
-|  Frontend (React 19)                                             |
-|                                                                  |
-|  App.tsx                                                         |
-|  tabs: Setup | Preview | Editor | WLED (new)                     |
-|                                                                  |
-|  +------------+  +------------+  +---------------------------+   |
-|  | EditorPage |  | WledPage   |  | PairingFlow / Setup       |   |
-|  | (Konva.js  |  | (device    |  | entertainment config      |   |
-|  |  canvas)   |  |  list +    |  | dropdown with persistence |   |
-|  | unchanged  |  |  StripPainter) | fix (new)                |   |
-|  +------------+  +------------+  +---------------------------+   |
-|                                                                  |
-|  Stores: useRegionStore  useStatusStore  useWledStore (new)      |
-|  API:    regions.ts  hue.ts  cameras.ts  wled.ts (new)           |
-+---------------------------+--------------------------------------+
-                            | HTTP / WebSocket
-+---------------------------v--------------------------------------+
-|  FastAPI Backend                                                 |
-|                                                                  |
-|  Existing routers (unchanged):                                   |
-|  /api/hue  /api/cameras  /api/regions  /ws/status  /ws/preview  |
-|                                                                  |
-|  New routers:                                                    |
-|  +---------------+   +-------------------+                      |
-|  | /api/wled     |   | /api/ha           |                      |
-|  | (CRUD devices |   | (inbound control  |                      |
-|  |  + segments)  |   |  from HA)         |                      |
-|  +-------+-------+   +---------+---------+                      |
-|          |                     |                                 |
-|  Modified router:              |                                 |
-|  +--------------------------------------------------+           |
-|  | /api/capture (add selected-config GET/PUT)       |           |
-|  +-------------------------------+------------------+           |
-|                                  |                              |
-|  New service:                    |                              |
-|  +--------------------------------------------------+           |
-|  | streaming_coordinator.py                         |           |
-|  |  .start(config_id) -> fans out to both services  |           |
-|  |  .stop() -> stops both services                  |           |
-|  |  owns the one frame loop                         |           |
-|  +----------------+-----------------+---------------+           |
-|                   |                 |                            |
-|  +----------------v---+  +----------v---------+                 |
-|  | streaming_service  |  | wled_service (new) |                 |
-|  | (Hue DTLS)         |  | (UDP socket send)  |                 |
-|  | unchanged          |  |                    |                 |
-|  +--------+-----------+  +----------+---------+                 |
-|           |                         |                            |
-|  +--------v-------------------------v---------+                  |
-|  | color_math.py (shared, unchanged)          |                  |
-|  | extract_region_color, build_polygon_mask   |                  |
-|  +--------------------------------------------+                  |
-|                                                                  |
-|  Database (aiosqlite):                                           |
-|  existing tables + wled_devices + wled_strip_assignments         |
-|  + selected_configs (zone persistence fix)                       |
-+------------------------------------------------------------------+
++-------------------------------------------------------+
+|  Wireless Source                                      |
+|                                                       |
+|  Windows machine     Android device                   |
+|  (Win+K Miracast)    (scrcpy over WiFi)               |
++----------+------------------+--------------------------+
+           |  WiFi Direct     |  TCP/IP (adb 5555)
+           |                  |
++----------v------------------v-----------+
+|  Linux Host — Wireless Input Layer     |
+|                                        |
+|  MiracleCast sink     scrcpy process   |
+|  (miracled daemon)    --v4l2-sink      |
+|         |              (direct, no     |
+|         |               FFmpeg needed) |
+|         | RTSP stream                  |
+|  +------v------+                       |
+|  | FFmpeg proc |                       |
+|  | -i rtsp://  |                       |
+|  | -vf scale   |                       |
+|  | -f v4l2     |                       |
+|  +------+------+                       |
+|         |                              |
+|  /dev/video10 (v4l2loopback)           |
+|  /dev/video11 (v4l2loopback)           |
+|         |                              |
+|  PipelineManager (new service)         |
+|  v4l2loopback-ctl / modprobe           |
++----+---------+--------------------------+
+     |         |
++----v---------v------------------------------------------+
+|  Existing V4L2 Pipeline (UNCHANGED)                     |
+|                                                         |
+|  CaptureRegistry.acquire("/dev/video10")                |
+|    -> V4L2Capture.open("/dev/video10")                  |
+|    -> VIDIOC_QUERYCAP -> VIDEO_CAPTURE capability found |
+|    -> MJPEG mmap streaming starts                       |
+|                                                         |
+|  StreamingService._resolve_device_path() -> /dev/video10|
+|  preview_ws.py -> registry.get("/dev/video10")         |
+|                                                         |
+|  cameras.py: enumerate_capture_devices()               |
+|   -> scans /dev/video* including /dev/video10          |
+|   -> video10 appears in camera selector dropdown       |
++----------------------------------------------------------+
 ```
 
 ---
 
-## New Component Boundaries
+## Key Constraint: scrcpy Does Not Need FFmpeg
 
-### Backend
+scrcpy has a native `--v4l2-sink=/dev/videoN` flag (Linux only). It creates the loopback device directly — no FFmpeg intermediary needed for Android. This is the preferred path for Android.
 
-| Component | File | Responsibility | Communicates With |
-|-----------|------|----------------|-------------------|
-| WledService | `services/wled_service.py` | Per-device UDP socket; builds DRGB/DNRGB packets; `process_frame(frame, segment_map)` | `color_math.extract_region_color`, DB (reads strip assignments at startup) |
-| StreamingCoordinator | `services/streaming_coordinator.py` | Unified `start()/stop()` that owns the one frame loop and fans out to Hue and WLED sinks | `StreamingService`, `WledService`, `CaptureRegistry`, `StatusBroadcaster` |
-| WledRouter | `routers/wled.py` | CRUD for WLED devices; read/write strip segment assignments | `wled_service.py`, DB |
-| HaRouter | `routers/ha.py` | Inbound REST endpoints for HA automations (`start`, `stop`, `camera`, `zone`) | `app.state.coordinator` (the StreamingCoordinator) |
+For Miracast (Windows), the sink is a RTSP stream from the MiracleCast receiver daemon. FFmpeg is needed to transcode that RTSP output into rawvideo and pipe it into a v4l2loopback device.
 
-### Frontend
-
-| Component | File | Responsibility | Communicates With |
-|-----------|------|----------------|-------------------|
-| WledPage | `components/WledPage.tsx` | WLED tab: device list, add/remove, open StripPainter | `useWledStore`, `api/wled.ts` |
-| StripPainter | `components/StripPainter.tsx` | 1D LED strip canvas — drag to select LED range, click zone to assign | `useWledStore`, `useRegionStore` |
-| useWledStore | `store/useWledStore.ts` | Devices list, segment assignments, selected device state | `api/wled.ts` |
-| api/wled.ts | `api/wled.ts` | HTTP client for `/api/wled/*` | WledRouter |
+```
+Android path:   scrcpy --tcpip=IP --v4l2-sink=/dev/video10 --no-display
+Windows path:   miracled (RTSP on port 7236) -> ffmpeg -i rtsp://localhost:7236/wfd1.0 -f v4l2 /dev/video10
+```
 
 ---
 
-## Data Flow
+## New vs Modified Components
 
-### Frame to WLED Strip (new parallel path)
+### New Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| PipelineManager | `services/pipeline_manager.py` | Lifecycle manager for FFmpeg and scrcpy subprocesses + v4l2loopback device creation/deletion |
+| WirelessRouter | `routers/wireless.py` | REST API: start/stop wireless sessions, list sessions, NIC capability check |
+| WirelessSession (model) | `models/wireless.py` | Pydantic: session type, device path, status, PID, source IP |
+
+### Modified Components
+
+| Component | File | Change |
+|-----------|------|--------|
+| `main.py` | existing | Add `app.state.pipeline_manager = PipelineManager()` in lifespan. Add `wireless_router` include. Shutdown: call `pipeline_manager.stop_all()`. |
+| `cameras.py` router | existing | `enumerate_capture_devices()` already scans all `/dev/video*`. Virtual devices created by v4l2loopback appear automatically. No code change required — only `display_name` from `VIDIOC_QUERYCAP` will read the card_label set at device creation time. |
+| `database.py` | existing | Add `wireless_sessions` table (one row per active session, cleared on startup). |
+
+### Unchanged Components (explicitly verified)
+
+| Component | Why Unchanged |
+|-----------|--------------|
+| `V4L2Capture` | v4l2loopback devices advertise `V4L2_CAP_VIDEO_CAPTURE` — `V4L2Capture.open()` works identically |
+| `CaptureRegistry` | Acquires by device path. `/dev/video10` is identical to `/dev/video0` from its perspective |
+| `StreamingService` | Resolves device path from DB, acquires from registry. Transparent to how the device was created |
+| `preview_ws.py` | `registry.get(device_path)` — works for any device path |
+| `streaming_ws.py` | No changes |
+| All existing routers | `capture.py`, `hue.py`, `regions.py`, `streaming_ws.py` — unmodified |
+
+---
+
+## Component Boundaries
+
+| Component | Responsibility | Communicates With |
+|-----------|----------------|-------------------|
+| `PipelineManager` | Create/destroy v4l2loopback devices via `v4l2loopback-ctl`. Spawn/monitor/restart FFmpeg and scrcpy subprocesses. Map session_id -> process + device_path. Emit health events. | `asyncio.create_subprocess_exec`, `subprocess.run` (for v4l2loopback-ctl), OS signals |
+| `WirelessRouter` | Start/stop wireless sessions via REST. List active sessions. Check NIC P2P capability. | `PipelineManager`, `database.py` |
+| Frontend WirelessPage | Tab with start/stop controls, session list, NIC status indicator | `api/wireless.ts` HTTP client |
+
+---
+
+## Data Flow: Wireless Source to Hue Lights
 
 ```
-CaptureBackend.wait_for_new_frame()
-  |
-  v (frame: BGR ndarray, shared reference — no copy)
-StreamingCoordinator._frame_loop()
-  |
-  +---> StreamingService.process_frame(frame)
-  |       for each channel_id, mask in hue_channel_map:
-  |         r,g,b = extract_region_color(frame, mask)
-  |         x,y = rgb_to_xy(r,g,b)
-  |         streaming.set_input((x, y, bri, channel_id))
-  |
-  +---> WledService.process_frame(frame)
-          for each wled_device in active_devices:
-            rgb_values = []
-            for segment in device.segments:
-              r,g,b = color_cache.get(segment.region_id)
-                      or extract_region_color(frame, segment.mask)
-              fill rgb_values[segment.led_start : segment.led_end+1]
-            packet = _build_packet(device.led_count, rgb_values)
-            device.socket.sendto(packet, (device.ip, device.port))
+1. User clicks "Start Miracast" in UI
+   -> POST /api/wireless/sessions {type: "miracast"}
+   -> WirelessRouter -> PipelineManager.start_miracast()
+
+2. PipelineManager creates virtual device
+   -> subprocess.run(["v4l2loopback-ctl", "add", "-n", "Miracast Input", "/dev/video10"])
+   -> writes session to wireless_sessions table
+
+3. PipelineManager spawns FFmpeg (for Miracast) or scrcpy (for Android)
+   Miracast:
+     -> asyncio.create_subprocess_exec(
+          "ffmpeg", "-i", "rtsp://localhost:7236/wfd1.0",
+          "-vf", "scale=640:480",
+          "-pix_fmt", "yuyv422",   # matches V4L2Capture's _V4L2_PIX_FMT_MJPEG expectation
+          "-f", "v4l2", "/dev/video10"
+        )
+   Android (scrcpy):
+     -> asyncio.create_subprocess_exec(
+          "scrcpy", "--tcpip=192.168.x.x",
+          "--v4l2-sink=/dev/video10",
+          "--no-display"
+        )
+
+4. /dev/video10 now appears as a V4L2 capture device
+   -> GET /api/cameras lists it with display_name "Miracast Input"
+
+5. User assigns /dev/video10 to entertainment config in UI
+   -> PUT /api/cameras/assignments/{config_id} {camera_stable_id: ..., camera_name: "Miracast Input"}
+
+6. User starts streaming
+   -> POST /api/capture/start {config_id: "..."}
+   -> StreamingService._resolve_device_path() -> "/dev/video10"
+   -> CaptureRegistry.acquire("/dev/video10") -> V4L2Capture.open("/dev/video10")
+   -> V4L2Capture._setup_device() -> VIDIOC_QUERYCAP OK, MJPEG streaming starts
+   -> Frame loop runs at target Hz, extracts colors, drives Hue lights
 ```
 
-**Color cache:** The coordinator maintains a `dict[region_id, (r,g,b)]` populated once per frame. Both Hue and WLED sinks look up this cache before calling `extract_region_color`, so a region shared between Hue and WLED is extracted exactly once per frame.
+---
 
-**WLED packet sizes:**
-- DRGB (byte 0 = 0x02): 2-byte header + 3 bytes/LED, max 490 LEDs per packet
-- DNRGB (byte 0 = 0x04): 4-byte header (includes 2-byte start index) + 3 bytes/LED, no pixel limit across multiple packets
-- For a 300-LED strip: one DRGB packet = 902 bytes (well under LAN UDP MTU ~1472 bytes)
-- For a 600-LED strip: two DNRGB packets, start_index 0 and 300
-- Byte 1 in both protocols: timeout seconds before WLED reverts to normal mode — use 2
+## PipelineManager Internal Architecture
 
 ```python
-def _build_drgb_packet(timeout_s: int, rgb: list[tuple[int,int,int]]) -> bytes:
-    return bytes([0x02, timeout_s]) + bytes(v for r,g,b in rgb for v in (r,g,b))
+class PipelineManager:
+    """Lifecycle owner for FFmpeg/scrcpy subprocesses and v4l2loopback devices.
 
-def _build_dnrgb_packet(timeout_s: int, start: int,
-                        rgb: list[tuple[int,int,int]]) -> bytes:
-    return bytes([0x04, timeout_s, (start >> 8) & 0xFF, start & 0xFF]) \
-           + bytes(v for r,g,b in rgb for v in (r,g,b))
+    Each wireless session owns:
+      - One v4l2loopback device (/dev/videoN)
+      - One subprocess (FFmpeg or scrcpy)
+      - One health monitor asyncio.Task
+    """
+
+    # session_id -> WirelessSessionState
+    _sessions: dict[str, WirelessSessionState]
+
+    async def start_miracast(self, device_nr: int) -> WirelessSessionState:
+        """Create v4l2loopback device + spawn FFmpeg -> RTSP pipeline."""
+
+    async def start_android(self, device_ip: str, device_nr: int) -> WirelessSessionState:
+        """Create v4l2loopback device + spawn scrcpy --v4l2-sink."""
+
+    async def stop_session(self, session_id: str) -> None:
+        """Kill subprocess -> destroy v4l2loopback device -> update DB."""
+
+    async def stop_all(self) -> None:
+        """Called at app shutdown. Kills all processes and destroys all devices."""
+
+    async def _monitor_process(self, session_id: str) -> None:
+        """asyncio.Task: watches process.returncode.
+           On unexpected exit: update DB status to 'crashed', log stderr."""
 ```
 
-### WLED Device Discovery and Configuration
+### Process Spawning Pattern
 
-```
-Frontend WledPage mounts
-  -> GET /api/wled/devices
-  <- [{id, name, ip, port, led_count, mac, segments: [...]}]
+Use `asyncio.create_subprocess_exec` with `stderr=asyncio.subprocess.PIPE` to capture FFmpeg/scrcpy output for health monitoring and logging. Do not use stdout pipe for FFmpeg — it outputs to the v4l2 device, not stdout.
 
-User adds device (types IP):
-  -> POST /api/wled/devices {ip: "192.168.1.x"}
-  Backend: GET http://{ip}/json/info
-    extracts: name (device "name" field), led_count ("leds.count"), mac ("mac")
-  <- 201 {id, name, ip, port:21324, led_count, mac}
-
-User opens StripPainter for a device:
-  -> GET /api/wled/devices/{id}/segments
-  <- [{id, region_id, led_start, led_end, region_name}]
-  StripPainter renders horizontal bar (2-4px per LED, scrollable)
-  User drags to select LED range, clicks region name to assign
-  -> PUT /api/wled/devices/{id}/segments [{led_start, led_end, region_id}, ...]
-  <- 200 [{id, ...}]
+```python
+proc = await asyncio.create_subprocess_exec(
+    "ffmpeg", *args,
+    stderr=asyncio.subprocess.PIPE,
+    # stdout NOT piped — FFmpeg writes to /dev/videoN directly
+)
+# Spawn background task to drain stderr and detect crash
+asyncio.create_task(_drain_stderr(session_id, proc))
 ```
 
-### Home Assistant Control
+`proc.returncode is None` means the process is still running. When it exits non-zero, update session status to `"crashed"` and optionally auto-restart (not required for MVP).
 
-```
-HA automation fires:
-  POST /api/ha/start
-  body: {"config_id": "...", "target_hz": 25}
-  -> app.state.coordinator.start(config_id, target_hz)
-  <- 200 {"status": "starting"}
+### v4l2loopback Device Management
 
-  POST /api/ha/stop
-  -> app.state.coordinator.stop()
-  <- 200 {"status": "stopping"}
+```python
+# Create device (requires sudo or CAP_SYS_ADMIN):
+subprocess.run(
+    ["v4l2loopback-ctl", "add", "-n", card_label, f"/dev/video{device_nr}"],
+    check=True
+)
 
-  POST /api/ha/camera
-  body: {"entertainment_config_id": "...", "camera_stable_id": "..."}
-  -> DB UPSERT camera_assignments
-  <- 200 {"status": "ok"}
-
-  POST /api/ha/zone
-  body: {"config_id": "..."}
-  -> DB UPSERT selected_configs (id=1, config_id=?)
-  <- 200 {"status": "ok"}
+# Delete device on session stop:
+subprocess.run(
+    ["v4l2loopback-ctl", "delete", f"/dev/video{device_nr}"],
+    check=True
+)
 ```
 
-HA uses `rest_command` in `configuration.yaml`. No auth header required (this API has no auth). All four endpoints are write-only — HA does not need to read state back, it drives state changes.
+Use fixed `video_nr` in range 10-19 to avoid colliding with physical capture cards (typically video0, video1). Reserve one device slot per session type (e.g., video10 = Miracast, video11 = Android scrcpy). Do not dynamically allocate — static assignment prevents race conditions during startup.
 
-### Zone Persistence Fix
+**Kernel module requirement:** The v4l2loopback kernel module must be loaded before any device can be created. Check on startup:
 
-The bug: entertainment config selection lives only in React local state, lost on page reload; the Start/Stop button does not reflect actual streaming state on first render.
-
-```
-Current (broken):
-  user selects config -> useState('') in component -> lost on reload
-  streaming state unknown until WS connects
-
-Fixed:
-  Config selection:
-    user selects config
-    -> PUT /api/capture/selected-config {"config_id": "..."}
-    -> DB UPSERT selected_configs SET config_id=? WHERE id=1
-
-  Page load:
-    -> GET /api/capture/selected-config
-    <- {"config_id": "..." | null}
-    -> GET /ws/status (existing) -> {state: "streaming"|"idle"|...}
-    dropdown pre-populated, button state correct before any user action
-```
-
-New DB table (single-row pattern, same as `bridge_config`):
-```sql
-CREATE TABLE IF NOT EXISTS selected_configs (
-    id INTEGER PRIMARY KEY,
-    config_id TEXT NOT NULL
-);
+```python
+def ensure_module_loaded() -> bool:
+    result = subprocess.run(["lsmod"], capture_output=True, text=True)
+    if "v4l2loopback" not in result.stdout:
+        try:
+            subprocess.run(["modprobe", "v4l2loopback"], check=True)
+            return True
+        except subprocess.CalledProcessError:
+            return False  # Module not installed — wireless unavailable
+    return True
 ```
 
 ---
 
-## Recommended File Structure (New Files Only)
-
-```
-Backend/
-+-- routers/
-|   +-- wled.py              GET/POST/DELETE /api/wled/devices + segments
-|   +-- ha.py                POST /api/ha/start|stop|camera|zone
-|   +-- capture.py           ADD: GET/PUT /api/capture/selected-config
-+-- services/
-|   +-- wled_service.py      WledService: UDP sockets, DRGB builder, process_frame()
-|   +-- streaming_coordinator.py  Thin fan-out: StreamingService + WledService
-+-- models/
-    +-- wled.py              Pydantic: WledDevice, WledSegment, WledSegmentAssignment
-
-Frontend/src/
-+-- components/
-|   +-- WledPage.tsx         WLED tab: device list, add/remove
-|   +-- StripPainter.tsx     1D LED range assignment canvas
-+-- store/
-|   +-- useWledStore.ts      devices, segments, selected device
-+-- api/
-    +-- wled.ts              HTTP client for /api/wled/*
-```
-
-**main.py changes:** Replace `app.state.streaming` (StreamingService) with `app.state.coordinator` (StreamingCoordinator). The coordinator owns the StreamingService instance. Update `routers/capture.py` to call `app.state.coordinator.start/stop` instead of `app.state.streaming.start/stop`.
-
----
-
-## Architectural Patterns
-
-### Pattern 1: Coordinator as Thin Fan-out, Services as Pure Sinks
-
-**What:** `StreamingCoordinator` owns the single frame loop (moved out of `StreamingService`). On each iteration it builds the per-region color cache once, then calls `hue_service.send(color_cache)` and `wled_service.send(frame, color_cache)`. Neither sub-service runs its own loop.
-
-**Why:** Avoids two competing `wait_for_new_frame()` callers on the same CaptureBackend (the threading model does not support concurrent waiters — the event is cleared before waiting). Single loop also ensures Hue and WLED updates are always in sync within one frame.
-
-**Tradeoff:** `StreamingService` must be refactored to expose a `send(color_cache)` method rather than running its own loop. This is a moderate change to an existing service with 167+ tests — plan for test updates.
-
-**Alternative if refactor is too risky:** Keep `StreamingService._frame_loop` intact and add a callback hook (`on_frame: Callable[[frame, color_cache], None]`) that the coordinator sets. WLED processing runs inside this callback. Looser coupling, no test changes, but slightly less clean.
-
-### Pattern 2: WledService as Stateless Packet Builder with Persistent Sockets
-
-**What:** `WledService.__init__` opens one `socket.AF_INET, socket.SOCK_DGRAM` socket per WLED device and stores them in `_sockets: dict[str, socket.socket]`. `process_frame()` builds packets and calls `socket.sendto()` synchronously — no thread, no asyncio. Sockets are closed in `WledService.stop()`.
-
-**Why persistent sockets:** Socket creation is ~10µs on Linux. At 50 Hz with 3 devices that is 1.5ms/s of pure overhead. More importantly, the OS can optimize the send buffer for a long-lived socket.
-
-**Why synchronous sendto:** UDP `sendto()` for a ~900 byte packet to a LAN address returns in under 50µs. The asyncio overhead of `loop.sock_sendto()` or `asyncio.to_thread()` exceeds the send time. Synchronous is correct here.
-
-### Pattern 3: StripPainter as a Plain Canvas (Not Konva)
-
-**What:** `StripPainter` renders a horizontal scrollable `<canvas>` element. Each LED is a 2-4px wide column. Pointer events handle drag-to-select a range. A sidebar lists all canvas regions — clicking assigns the selected LED range to that region and colors the strip segment accordingly.
-
-**Why not Konva:** StripPainter is a 1D range selector, not a 2D polygon editor. Konva's scene graph and event model are designed for 2D — the overhead (hit detection, layers, transformers) is entirely wasted on a linear strip. A plain canvas is 10x simpler to implement and performs better for 300-600 LED columns.
-
-**Scrolling:** 600 LEDs at 3px each = 1800px — render the full strip in a horizontally scrollable div. At 1200 LEDs (WLED max) = 3600px, still tractable. No virtualization needed.
-
-### Pattern 4: HA Router as a Thin Adapter
-
-**What:** `routers/ha.py` translates HA-friendly endpoint shapes into calls on `app.state.coordinator` and the DB. Zero business logic. Each handler is 5-10 lines.
-
-**Why a separate router:** HA's `rest_command` configuration needs stable, descriptive URLs (`/api/ha/start` vs `/api/capture/start`). Keeping HA endpoints in a dedicated file also makes them easy to find, document, and eventually add HA-specific auth if needed. The existing `capture.py` router is not modified.
-
----
-
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Embedding WLED Logic in StreamingService
-
-**What people do:** Add UDP send calls inside `streaming_service.py`'s `_frame_loop`.
-
-**Why it's wrong:** `streaming_service.py` is Hue-specific — it imports `hue_entertainment_pykit`, manages DTLS reconnect, and handles Hue entertainment config activation. Mixing WLED logic couples two completely independent output devices. The 167+ existing tests would need WLED mocks.
-
-**Do this instead:** Introduce `StreamingCoordinator`. `streaming_service.py` stays unchanged (or gains only a `send()` method).
-
-### Anti-Pattern 2: Two Separate Frame Loops for Hue and WLED
-
-**What people do:** Give WLED its own `asyncio.Task` that calls `wait_for_new_frame()` independently.
-
-**Why it's wrong:** `CaptureBackend.wait_for_new_frame()` clears the internal `threading.Event` before waiting. Two concurrent callers will race: one will see no event and time out, creating frame drops. The existing backend threading model is explicitly single-consumer.
-
-**Do this instead:** One frame loop in the coordinator; pass the decoded frame reference to both sinks.
-
-### Anti-Pattern 3: Per-Frame UDP Socket Creation
-
-**What people do:** `socket.socket(AF_INET, SOCK_DGRAM).sendto(...)` inside `process_frame()`.
-
-**Why it's wrong:** See Pattern 2 rationale — ~10µs overhead per call, no OS send-buffer optimization.
-
-**Do this instead:** Persistent sockets keyed by device IP in `WledService._sockets`.
-
-### Anti-Pattern 4: WLED Data Columns in the `regions` Table
-
-**What people do:** Add `wled_device_id`, `led_start`, `led_end` columns to `regions`.
-
-**Why it's wrong:** A canvas region is abstract. One region can map to a Hue channel AND a WLED LED range simultaneously. Embedding device-specific columns in `regions` makes this many-to-many relationship impossible and conflates the canvas model with output device models.
-
-**Do this instead:** The `wled_strip_assignments` join table with explicit foreign keys to both `wled_devices` and `regions`.
-
-### Anti-Pattern 5: Polling for Zone Persistence
-
-**What people do:** Frontend polls `GET /ws/status` every second to check if the selected config is still valid.
-
-**Why it's wrong:** The WebSocket connection already delivers state changes. Polling is redundant. The persistence fix needs only one additional REST call at page load (`GET /api/capture/selected-config`), not ongoing polling.
-
-**Do this instead:** `GET /api/capture/selected-config` on mount (once), then rely on the existing `/ws/status` WebSocket for live streaming state.
-
----
-
-## Database Schema Additions
+## Database Schema Addition
 
 ```sql
--- WLED device registry
-CREATE TABLE IF NOT EXISTS wled_devices (
-    id TEXT PRIMARY KEY,           -- UUID generated by backend
-    name TEXT NOT NULL,            -- from /json/info "name"
-    ip TEXT NOT NULL UNIQUE,
-    port INTEGER NOT NULL DEFAULT 21324,
-    led_count INTEGER NOT NULL,    -- from /json/info "leds.count"
-    mac TEXT,                      -- from /json/info "mac"
-    added_at TEXT NOT NULL         -- ISO8601 timestamp
-);
-
--- LED range -> canvas region mappings (join table)
-CREATE TABLE IF NOT EXISTS wled_strip_assignments (
-    id TEXT PRIMARY KEY,
-    wled_device_id TEXT NOT NULL REFERENCES wled_devices(id) ON DELETE CASCADE,
-    region_id TEXT NOT NULL REFERENCES regions(id) ON DELETE CASCADE,
-    led_start INTEGER NOT NULL,
-    led_end INTEGER NOT NULL       -- inclusive
-);
-
--- Persisted entertainment config selection (zone persistence fix)
--- Single-row pattern, same as bridge_config (id always = 1)
-CREATE TABLE IF NOT EXISTS selected_configs (
-    id INTEGER PRIMARY KEY,
-    config_id TEXT NOT NULL
+-- Active wireless streaming sessions
+-- Cleared on app startup (sessions don't survive restarts)
+CREATE TABLE IF NOT EXISTS wireless_sessions (
+    id TEXT PRIMARY KEY,               -- UUID
+    session_type TEXT NOT NULL,        -- "miracast" | "android_scrcpy"
+    device_path TEXT NOT NULL,         -- "/dev/video10"
+    device_nr INTEGER NOT NULL,        -- 10
+    card_label TEXT NOT NULL,          -- "Miracast Input"
+    status TEXT NOT NULL DEFAULT 'starting',  -- starting | running | crashed | stopped
+    source_ip TEXT,                    -- Android IP for scrcpy, NULL for Miracast
+    pid INTEGER,                       -- OS process ID of FFmpeg or scrcpy
+    started_at TEXT NOT NULL,          -- ISO8601
+    stopped_at TEXT                    -- NULL while running
 );
 ```
 
-All three tables are additive — no existing tables are modified.
+Cleared on startup because subprocesses don't survive app restarts. On `lifespan` startup, run `DELETE FROM wireless_sessions` then call `pipeline_manager.stop_all()` (defensive cleanup of any zombie processes from previous run).
 
 ---
 
@@ -393,66 +269,175 @@ All three tables are additive — no existing tables are modified.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/wled/devices` | List all WLED devices with led_count and segment assignments |
-| POST | `/api/wled/devices` | Add device by IP (probes `/json/info` for name, led_count, mac) |
-| DELETE | `/api/wled/devices/{id}` | Remove device and all its strip assignments (CASCADE) |
-| GET | `/api/wled/devices/{id}/segments` | Get strip assignments for one device |
-| PUT | `/api/wled/devices/{id}/segments` | Replace all strip assignments for one device |
-| POST | `/api/ha/start` | Start streaming — body: `{config_id, target_hz?}` |
-| POST | `/api/ha/stop` | Stop streaming |
-| POST | `/api/ha/camera` | Assign camera — body: `{entertainment_config_id, camera_stable_id}` |
-| POST | `/api/ha/zone` | Set selected config — body: `{config_id}` |
-| GET | `/api/capture/selected-config` | Get persisted selected `config_id` |
-| PUT | `/api/capture/selected-config` | Persist selected `config_id` — body: `{config_id}` |
+| GET | `/api/wireless/sessions` | List all sessions with status and device_path |
+| POST | `/api/wireless/sessions` | Start a new session — body: `{type: "miracast" \| "android_scrcpy", source_ip?: "..."}` |
+| DELETE | `/api/wireless/sessions/{id}` | Stop session, kill process, destroy v4l2 device |
+| GET | `/api/wireless/nic/status` | Check if WiFi NIC supports P2P (required for Miracast) |
+
+### NIC Capability Check
+
+For Miracast (WiFi Direct), the NIC must support P2P mode. Check via `iw list` output:
+
+```python
+async def check_p2p_support() -> dict:
+    proc = await asyncio.create_subprocess_exec(
+        "iw", "list",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode()
+    p2p_supported = "P2P-client" in output and "P2P-GO" in output
+    return {"p2p_supported": p2p_supported, "raw": output[:2000]}
+```
+
+---
+
+## Frontend Changes
+
+### New WirelessPage Component
+
+New tab: "Wireless Input". Contains:
+
+1. **NIC Status Banner** — shows `GET /api/wireless/nic/status` result. "P2P supported" or "Miracast unavailable — NIC does not support WiFi Direct".
+2. **Session List** — cards for each active session with type, status badge, device_path, stop button.
+3. **Start Miracast** button — enabled only when `p2p_supported: true`. One click starts the session.
+4. **Start Android (scrcpy)** form — IP address input field + connect button. No P2P NIC required.
+
+### Camera Selector (No Changes Required)
+
+The camera selector dropdown in `EditorPage` already calls `GET /api/cameras` which scans all `/dev/video*`. Virtual devices created by v4l2loopback appear automatically with their `card_label` as the `display_name`. No frontend code changes to the camera selector.
+
+**One edge case:** The stable_id for a v4l2loopback device comes from `get_stable_id()` which reads `/sys/class/video4linux/video10/device/idVendor`. v4l2loopback devices are virtual and have no USB sysfs path, so `get_stable_id()` falls back to the degraded `"{card}@{bus_info}"` format (e.g., `"Miracast Input@platform:v4l2loopback-000"`). This stable_id is deterministic across restarts as long as the `card_label` and device number stay constant — the static device number assignment (video10 = Miracast) ensures this.
+
+---
+
+## Architectural Patterns
+
+### Pattern 1: Virtual Device as Integration Boundary
+
+The v4l2loopback device is the interface contract between wireless input and the existing V4L2 pipeline. Everything downstream (CaptureRegistry, V4L2Capture, StreamingService, preview WebSocket) is unchanged because `/dev/video10` is indistinguishable from `/dev/video0` at the V4L2 ioctl level.
+
+This is the correct abstraction. Do not attempt to pipe wireless frames directly into CaptureBackend memory — that would require modifying CaptureBackend to accept frames from sources other than V4L2 ioctls, which would add a new code path, new tests, and new failure modes.
+
+### Pattern 2: PipelineManager as Pure Subprocess Owner
+
+PipelineManager does not understand colors, regions, or Hue lights. It only knows about OS processes, device paths, and session lifecycle. It is a thin wrapper around `asyncio.create_subprocess_exec` and `subprocess.run`.
+
+This keeps the wireless logic isolated from streaming logic. If FFmpeg crashes, PipelineManager handles the restart. If the V4L2 device disappears, the existing `_capture_reconnect_loop` in `StreamingService` handles recovery — same as a disconnected USB capture card.
+
+### Pattern 3: Static Device Number Allocation
+
+Allocate `/dev/video10` = Miracast, `/dev/video11` = Android scrcpy. Do not scan for available device numbers dynamically. Static allocation:
+- Produces deterministic stable_ids (the `card@bus_info` fallback is consistent)
+- Prevents races when two sessions start simultaneously
+- Simplifies camera_assignments: the user assigns once and the device path doesn't change between sessions
+
+### Pattern 4: scrcpy --no-display for Headless Operation
+
+scrcpy normally opens an SDL2 window to display the mirrored screen. In server mode (FastAPI running headlessly), pass `--no-display` to suppress the window. The `--v4l2-sink` output continues unaffected.
+
+```
+scrcpy --tcpip=192.168.x.x --v4l2-sink=/dev/video11 --no-display --turn-screen-off
+```
+
+`--turn-screen-off` is optional but recommended for the Android device power budget.
+
+---
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Modifying CaptureBackend to Accept Pushed Frames
+
+**What:** Add a method like `CaptureBackend.push_frame(numpy_array)` so wireless sources can inject frames directly.
+
+**Why bad:** Destroys the clean abstraction. `V4L2Capture._reader_loop` uses mmap and ioctls to pull frames from the kernel. Adding a push path creates two competing frame sources, requires locking changes, and breaks the `_last_frame_time` health check.
+
+**Do this instead:** Let v4l2loopback create a real kernel buffer. FFmpeg or scrcpy writes into it. `V4L2Capture` reads from it via normal ioctls. No code changes anywhere downstream.
+
+### Anti-Pattern 2: Long-lived subprocess.run() Calls in Async Code
+
+**What:** Blocking subprocess calls (e.g., `subprocess.run(["ffmpeg", ...])`) inside a FastAPI async route handler.
+
+**Why bad:** Blocks the event loop until the process exits. For a long-lived FFmpeg pipeline, this never returns.
+
+**Do this instead:** `asyncio.create_subprocess_exec()` for long-lived processes (returns immediately, process runs in background). `asyncio.to_thread(subprocess.run, ...)` only for short-lived one-shot commands like `v4l2loopback-ctl add`.
+
+### Anti-Pattern 3: Running v4l2loopback-ctl as a Blocking Call Inside Route Handler
+
+**What:** Directly calling `subprocess.run(["v4l2loopback-ctl", ...])` in a FastAPI route.
+
+**Why bad:** `subprocess.run` is synchronous and blocks the event loop, even for a fast command. The startup time of `v4l2loopback-ctl` is unpredictable (~50-200ms).
+
+**Do this instead:** `await asyncio.to_thread(subprocess.run, ["v4l2loopback-ctl", ...])`.
+
+### Anti-Pattern 4: Dynamically Scanning for Available Device Numbers
+
+**What:** Scan `/dev/video*` to find the first unoccupied number before creating a v4l2loopback device.
+
+**Why bad:** Race condition — another process could claim the same number between the scan and the `v4l2loopback-ctl add` call. Produces non-deterministic device paths, breaking stable_id consistency.
+
+**Do this instead:** Static device numbers in config (video10, video11). Fixed allocation means the stable_id `"Miracast Input@platform:v4l2loopback-000"` is always the same.
+
+### Anti-Pattern 5: Treating Miracast and scrcpy as Equivalent Pipelines
+
+**What:** Abstracting both into a single generic `start_pipeline(source_type, ...)` that builds different ffmpeg/scrcpy args.
+
+**Why bad:** The two have fundamentally different runtime concerns. Miracast requires: (a) NIC P2P capability check, (b) miracled daemon running, (c) WiFi Direct peer discovery, (d) RTSP endpoint appearing at a known port. scrcpy requires: (a) adb connectivity check, (b) TCP connection to device IP. The failure modes and reconnect logic are completely different.
+
+**Do this instead:** `start_miracast()` and `start_android_scrcpy()` as separate PipelineManager methods. Common infrastructure (v4l2 device creation, process monitoring, DB writes) is extracted into private helpers they both call.
 
 ---
 
 ## Build Order (Phase Dependencies)
 
-Three independent tracks with one cross-track dependency:
-
 ```
-Track A — Zone persistence fix (no dependencies, lowest risk, build first)
-  Step A1: DB migration — selected_configs table (database.py)
-  Step A2: GET/PUT /api/capture/selected-config (capture.py)
-  Step A3: Frontend — load on mount, pre-populate dropdown, reflect WS state
+Phase 1: Infrastructure (no dependencies)
+  Step 1a: Install v4l2loopback-dkms on host. Verify with: sudo modprobe v4l2loopback
+  Step 1b: Install miraclecast (or lazycast) on host. Verify RTSP endpoint appears.
+  Step 1c: Add wireless_sessions table to database.py
+  Step 1d: Add PipelineManager scaffold (empty start/stop methods) + wire into main.py
 
-Track B — WLED streaming
-  Step B1: DB migrations — wled_devices + wled_strip_assignments tables
-  Step B2: services/wled_service.py — UDP socket, DRGB builder, process_frame()
-  Step B3: routers/wled.py — device CRUD + segment endpoints
-  Step B4: services/streaming_coordinator.py
-           Wire into main.py: app.state.coordinator (replaces app.state.streaming)
-           Update routers/capture.py to call coordinator
-  Step B5: Frontend — api/wled.ts, useWledStore, WledPage, StripPainter
+Phase 2: Android scrcpy path (lower risk — no NIC requirement)
+  Step 2a: PipelineManager.start_android_scrcpy(device_ip, device_nr=11)
+            creates /dev/video11 via v4l2loopback-ctl
+            spawns scrcpy --tcpip=IP --v4l2-sink=/dev/video11 --no-display
+  Step 2b: WirelessRouter /api/wireless/sessions POST (android_scrcpy type)
+  Step 2c: Test: GET /api/cameras shows "Android Mirror" device
+  Step 2d: Test: assign /dev/video11 to entertainment config, start streaming
 
-Track C — HA router (depends on B4: coordinator must exist)
-  Step C1: routers/ha.py — 4 thin adapter endpoints
+Phase 3: Miracast path (requires WiFi Direct NIC, higher risk)
+  Step 3a: GET /api/wireless/nic/status — iw list P2P check
+  Step 3b: PipelineManager.start_miracast(device_nr=10)
+            spawns miracled / sets up WiFi Direct
+            FFmpeg RTSP -> v4l2loopback pipeline
+  Step 3c: Integration test with Windows source
+
+Phase 4: Frontend
+  Step 4a: WirelessPage (session list, start forms, NIC status)
+  Step 4b: Wire into App.tsx tab structure
 ```
 
-Recommended order: A1-A3 → B1-B3 → B4 → C1 → B5
+**Why Android first:** scrcpy requires only `adb connect IP` — testable with any Android device over LAN without P2P NIC. Miracast requires WiFi Direct hardware support and a Windows sender. Android path validates the entire v4l2loopback + V4L2Capture integration before the higher-risk Miracast path.
 
-**Why Track A first:** It is a self-contained bug fix with zero risk of breaking existing streaming. Completing it first provides a working persistence layer before the streaming refactor.
-
-**Why B4 before C1:** `ha.py` calls `app.state.coordinator` — the coordinator must be wired in before HA routes can be tested.
-
-**Why B5 last:** The StripPainter UI is the most novel component with no existing UI pattern in the codebase. Keeping it last allows the backend API to stabilize before the frontend is built against it.
+**Why frontend last:** The backend API (`/api/wireless/sessions`, `/api/cameras`) must be stable and tested before building the UI against it.
 
 ---
 
-## Integration Points with Existing Modules
+## Integration Points Summary
 
-| New Component | Existing Module | Integration |
-|---------------|----------------|-------------|
-| `StreamingCoordinator` | `streaming_service.py` | Owns a `StreamingService` instance; delegates Hue-specific logic entirely to it |
-| `StreamingCoordinator` | `capture_service.CaptureRegistry` | Receives registry in constructor; acquires/releases via the same pattern as current `StreamingService` |
-| `StreamingCoordinator` | `status_broadcaster.py` | Passes broadcaster to sub-services; coordinator emits unified state via same push_state interface |
-| `WledService` | `color_math.py` | Calls `extract_region_color(frame, mask)` — no changes to color_math needed |
-| `WledService` | `database.py` | Reads `wled_strip_assignments` at stream start to build segment-to-mask map |
-| `routers/ha.py` | `routers/capture.py` | Both call the coordinator; `capture.py` is modified only to swap `app.state.streaming` to `app.state.coordinator` |
-| `routers/wled.py` | `database.py` | Reads/writes `wled_devices` and `wled_strip_assignments` |
-| `WledPage.tsx` | `App.tsx` | Add `'wled'` to `Page` type union; add nav tab button |
-| `StripPainter.tsx` | `useRegionStore` | Reads `regions` (existing store, no changes) to render zone name list |
+| New Component | Existing Module | Integration Method |
+|--------------|----------------|-------------------|
+| `PipelineManager` | `main.py` lifespan | Created at startup; `stop_all()` called at shutdown |
+| `PipelineManager` | `database.py` | Writes `wireless_sessions` table rows on start/stop |
+| `WirelessRouter` | `PipelineManager` | Calls `start_*/stop_session` via `app.state.pipeline_manager` |
+| v4l2loopback `/dev/video10` | `capture_v4l2.enumerate_capture_devices()` | No integration needed — enumerate scans all `/dev/video*` automatically |
+| v4l2loopback `/dev/video10` | `CaptureRegistry.acquire("/dev/video10")` | No integration needed — registry works by path |
+| v4l2loopback `/dev/video10` | `V4L2Capture.open("/dev/video10")` | No integration needed — VIDIOC_QUERYCAP works on virtual devices |
+| v4l2loopback `/dev/video10` | `StreamingService._resolve_device_path()` | No integration needed — returns path from DB, hands to registry |
+| v4l2loopback `/dev/video10` | `preview_ws.py /ws/preview?device=` | No integration needed — already routes by path |
+| `WirelessPage.tsx` | `App.tsx` | Add `'wireless'` to `Page` type union; add nav tab |
+| `WirelessPage.tsx` | Camera selector dropdown | No change — virtual device appears automatically in `GET /api/cameras` |
 
 ---
 
@@ -460,45 +445,38 @@ Recommended order: A1-A3 → B1-B3 → B4 → C1 → B5
 
 | Area | Confidence | Source |
 |------|------------|--------|
-| WLED DRGB/DNRGB packet format | HIGH | kno.wled.ge/interfaces/udp-realtime/ (verified 2026-04) |
-| WLED port 21324 default | HIGH | Official WLED docs |
-| WLED DRGB 490 LED limit per packet | HIGH | Official WLED docs — DNRGB required for >490 LEDs |
-| WLED /json/info field names | HIGH | kno.wled.ge/interfaces/json-api/ (verified 2026-04) |
-| WLED DDP port 4048 | HIGH | kno.wled.ge/interfaces/ddp/ (verified 2026-04) — but DRGB recommended for this use case |
-| HA REST /api/services/{domain}/{service} | HIGH | developers.home-assistant.io (verified 2026-04) |
-| HA auth requirement | HIGH | Bearer token required — but this project has no auth, so HA must store no-auth URLs |
-| StreamingCoordinator fan-out pattern | MEDIUM | Derived from codebase structure; no direct prior art |
-| StripPainter canvas approach | MEDIUM | Standard 1D range selector pattern; WLED-specific UI varies across projects |
+| v4l2loopback virtual devices pass VIDIOC_QUERYCAP | HIGH | v4l2loopback README, ArchWiki — module specifically designed to appear as V4L2_CAP_VIDEO_CAPTURE |
+| scrcpy --v4l2-sink flag exists and is Linux-only | HIGH | Genymobile/scrcpy GitHub, official docs |
+| scrcpy WiFi via --tcpip=IP adb TCP connection | HIGH | Genymobile/scrcpy connection.md, verified multiple sources |
+| scrcpy --no-display suppresses SDL window | HIGH | scrcpy docs — confirmed flag exists |
+| v4l2loopback-ctl add/delete for runtime device management | HIGH | v4l2loopback README (confirmed dynamic management tool exists) |
+| FFmpeg -f v4l2 output to loopback device | HIGH | Standard FFmpeg v4l2 output, multiple tutorials confirmed |
+| Miracast receiver via MiracleCast RTSP on port 7236 | MEDIUM | MiracleCast GitHub — mentions mplayer rtsp://localhost:7236/wfd1.0 |
+| v4l2loopback stable_id degrades to card@bus_info | HIGH | Direct code inspection of device_identity.py — sysfs absent for virtual devices |
+| miracled daemon reliability on non-RPi hardware | LOW | MiracleCast last active commit 2021; community reports mixed results on non-RPi hosts |
 
----
-
-## Preserved: v1.1 Architecture (for reference)
-
-The v1.1 multi-camera architecture document covers:
-- `CaptureRegistry` (already shipped)
-- Per-zone camera dispatch in `streaming_service.py` (already shipped)
-- `camera_assignments` DB table (already shipped)
-- `known_cameras` DB table (already shipped)
-
-These are not repeated here. The v1.3 architecture builds on top of v1.1 without modifying any of its components.
+**LOW confidence flag for Miracast:** MiracleCast (the primary Linux Miracast sink) has limited recent maintenance and community reports indicate reliability issues on non-Raspberry Pi hardware. lazycast is also RPi-targeted. Phase 3 (Miracast) should begin with a feasibility spike on the specific host hardware before building the PipelineManager integration. The scrcpy/Android path (Phase 2) is well-supported and should be built first regardless.
 
 ---
 
 ## Sources
 
-- Direct code inspection: `Backend/services/streaming_service.py` — frame loop, channel map, coordinator integration point
-- Direct code inspection: `Backend/services/capture_service.py` — CaptureRegistry, CaptureBackend, wait_for_new_frame threading model
-- Direct code inspection: `Backend/services/color_math.py` — extract_region_color, build_polygon_mask (shared abstraction)
-- Direct code inspection: `Backend/main.py` — app.state layout, lifespan pattern
-- Direct code inspection: `Backend/database.py` — existing schema, ALTER TABLE migration pattern
-- Direct code inspection: `Frontend/src/App.tsx` — Page type, tab structure
-- Direct code inspection: `Frontend/src/store/useRegionStore.ts` — Region model
-- [WLED UDP Realtime docs](https://kno.wled.ge/interfaces/udp-realtime/) — DRGB/DNRGB packet format, port 21324, 490 LED limit — HIGH confidence
-- [WLED DDP docs](https://kno.wled.ge/interfaces/ddp/) — port 4048, no timecode support — HIGH confidence
-- [WLED JSON API docs](https://kno.wled.ge/interfaces/json-api/) — /json/info fields: name, leds.count, ip, mac — HIGH confidence
-- [HA REST API developer docs](https://developers.home-assistant.io/docs/api/rest/) — /api/services endpoint format, auth — HIGH confidence
+- Direct code inspection: `Backend/services/capture_service.py` — CaptureRegistry, V4L2Capture, CaptureBackend interface
+- Direct code inspection: `Backend/services/capture_v4l2.py` — V4L2 ioctl implementation, VIDIOC_QUERYCAP, mmap setup
+- Direct code inspection: `Backend/services/device_identity.py` — stable_id sysfs fallback for virtual devices
+- Direct code inspection: `Backend/services/streaming_service.py` — `_resolve_device_path`, `_capture_reconnect_loop`
+- Direct code inspection: `Backend/routers/cameras.py` — `enumerate_capture_devices` scan pattern
+- Direct code inspection: `Backend/routers/preview_ws.py` — `?device=` routing, `registry.get()` pattern
+- Direct code inspection: `Backend/main.py` — `app.state` layout, lifespan pattern
+- Direct code inspection: `Backend/database.py` — schema, ALTER TABLE migration pattern
+- [v4l2loopback GitHub](https://github.com/v4l2loopback/v4l2loopback) — dynamic device creation via v4l2loopback-ctl, modprobe parameters — HIGH confidence
+- [scrcpy GitHub](https://github.com/Genymobile/scrcpy) — `--v4l2-sink`, `--no-display`, `--tcpip` flags — HIGH confidence
+- [scrcpy connection docs](https://github.com/Genymobile/scrcpy/blob/master/doc/connection.md) — WiFi TCP/IP connection procedure — HIGH confidence
+- [MiracleCast GitHub](https://github.com/albfan/miraclecast) — miracled daemon, RTSP output, wpa_supplicant P2P — MEDIUM confidence
+- [lazycast GitHub](https://github.com/homeworkc/lazycast) — Miracast RPi receiver, RTSP + H.264 decode, system deps — MEDIUM confidence (RPi-specific)
+- [Python asyncio subprocess docs](https://docs.python.org/3.12/library/asyncio-subprocess.html) — `create_subprocess_exec`, process lifecycle, returncode — HIGH confidence
 
 ---
 
-*Architecture research for: HuePictureControl v1.3 WLED Support, HA Control, Zone Persistence Fix*
+*Architecture research for: HuePictureControl v1.2 Wireless Input*
 *Researched: 2026-04-14*

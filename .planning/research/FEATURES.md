@@ -1,225 +1,221 @@
-# Feature Research
+# Feature Landscape: Wireless Input (v1.2)
 
-**Domain:** Real-time ambient lighting — WLED ESP32 LED strip support, Home Assistant control, entertainment zone persistence
+**Domain:** Wireless screen mirroring as virtual camera input for ambient lighting
 **Researched:** 2026-04-14
-**Confidence:** HIGH (WLED protocols from official docs), MEDIUM (HA integration patterns from community), HIGH (persistence patterns from Zustand ecosystem)
+**Confidence:** HIGH (scrcpy --v4l2-sink from official docs), MEDIUM (Miracast receiver on Linux from community), HIGH (v4l2loopback/FFmpeg from Arch Wiki + official repo), MEDIUM (FFmpeg watchdog patterns from real-world implementations)
 
 ## Context: What This Milestone Adds
 
-This is a subsequent milestone on top of a working Hue Entertainment API system. The existing system has:
-- Canvas-based freeform region editor (Konva.js + Zustand)
-- Multi-camera per-zone support
-- Live preview and streaming metrics WebSockets
-- `POST /api/capture/start` and `POST /api/capture/stop` endpoints
-
-New additions: WLED device support, Home Assistant control endpoints, entertainment zone persistence fix.
+HuePictureControl v1.1 has a working multi-camera pipeline: physical UVC devices, `CaptureRegistry` ref-counted pool, per-zone camera selector, live preview WebSocket. v1.2 makes wireless sources (Miracast from Windows, scrcpy from Android) appear in the existing camera selector as if they were physical UVC devices. The mechanism is: wireless receiver → FFmpeg → v4l2loopback device node → existing V4L2 capture path. No changes to the capture pipeline itself; only a new layer above it that creates and feeds virtual devices.
 
 ---
 
-## Feature Landscape
+## Table Stakes
 
-### Table Stakes (Users Expect These)
+Features users expect. Missing = the wireless input feels broken or alien compared to the physical capture card experience.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Manual WLED device add by IP | Discovery fails on complex networks; power users always need manual fallback | LOW | `POST /api/wled/devices` with `{ip, name}` body; validate by hitting `/json/info` before saving |
-| Fetch LED count from device | Without this, the paint-on-strip UI cannot render the strip at all | LOW | `GET /json/info` returns `leds.count` (1-1200); call on add and on refresh |
-| Persist WLED device list | Devices disappear on restart otherwise | LOW | Add `wled_devices` table with `id, ip, name, led_count, created_at` |
-| DDP UDP streaming to WLED | DDP is the dominant realtime protocol for WLED ambilight; users expect it by default | MEDIUM | Port 4048 UDP; one 1440-byte datagram = 480 RGB pixels; protocol ID 0x41 + data offset + RGB payload |
-| Timeout/fallback behavior | Without a timeout byte, WLED freezes on last color when streaming stops | LOW | DDP header includes timeout; WLED reverts to effect mode after timeout |
-| Stop streaming clears WLED | When the user stops streaming, lights should return to WLED's own effects | LOW | On stop(), rely on DDP timeout (1-2 seconds) OR send final all-zeros packet |
-| Zone-to-LED-range assignment | Core purpose of WLED support; each canvas zone drives a contiguous LED range | HIGH | Paint-on-strip UI; store `{zone_id, wled_device_id, led_start, led_end}` per zone |
-| HA start/stop streaming endpoints | HA users need unauthenticated HTTP calls to trigger ambilight from automations | LOW | `POST /api/ha/start` and `POST /api/ha/stop`; thin wrappers over existing capture service |
-| HA select camera endpoint | HA automations switch input source (e.g., on HDMI input change event) | LOW | `PUT /api/ha/camera` with `{device_path}` — wraps existing camera assignment logic |
-| HA select entertainment config | HA needs to switch Hue configs (e.g., room-specific presets) | LOW | `PUT /api/ha/config` with `{config_id}` — wraps existing Hue config selection |
-| Persist selected entertainment config | Bug fix: config selection lost on page reload; users reconfigure every session | LOW | Zustand persist middleware writing to localStorage; key: selected-config-per-camera |
-| Dropdown reflects streaming state on reload | Bug fix: dropdown shows wrong config when backend is already streaming | LOW | On mount, fetch streaming status to rehydrate; add `GET /api/capture/status` if needed |
+| Wireless source appears in camera dropdown automatically | Users expect zero extra steps after connecting — the same dropdown they use for physical devices should show it | LOW | v4l2loopback device node creation must happen before or at service startup; `linuxpy` device enumeration already finds `/dev/videoN` nodes |
+| Miracast: discoverable via Win+K without any app on the Windows side | Standard Windows 11 UX — Win+K is the only flow users know | HIGH | Requires Linux Miracast receiver (miraclecast or compatible) listening as WiFi Direct sink; this is the hard part |
+| scrcpy: connect by typing Android device IP | Users expect "type an IP, click Connect" — ADB pairing is a one-time step they accept | MEDIUM | First-time Android 11+ requires QR/code pairing; Android <=10 requires USB-first `adb tcpip 5555`; subsequent connections are IP-only |
+| Connected wireless source streams immediately | After pairing/connection, color processing starts without a separate UI action | MEDIUM | FFmpeg must start piping to v4l2loopback as soon as the receiver accepts the connection |
+| Disconnecting a wireless source stops its stream gracefully | Abrupt WiFi drop or the user closing the cast session must clean up the virtual device and stop FFmpeg | MEDIUM | Process watchdog detects exit; v4l2loopback device can remain registered but will produce no frames |
+| Status visible in UI (connected / disconnected / idle) | Users need to know whether their wireless source is active before starting color sync | LOW | WebSocket or poll endpoint with per-source state machine: `idle → connecting → streaming → disconnected` |
+| Resolution and framerate controls | Users coming from 4K capture cards expect to tune the wireless input down for latency | LOW | scrcpy: `--max-size=1920` and `--max-fps=30/60`; Miracast: negotiated but can be capped via FFmpeg decode side |
+| NIC capability check before attempting Miracast | Users must know whether their WiFi adapter supports WiFi Direct before setup fails silently | LOW | `netsh wlan show drivers` (done from backend via subprocess) surfaces `Wireless Display Supported: Yes` or `No` |
+| FFmpeg auto-restart on crash | WiFi drops, device sleeps, encoder hiccups — FFmpeg will die; users expect the stream to recover | MEDIUM | Watchdog task monitors process returncode; exponential backoff restart loop, max attempts configurable |
+| Virtual device node stays stable across sessions | Users expect `/dev/video10` to always be the Miracast input, not a random number that changes on restart | LOW | `v4l2loopback-ctl add` with fixed device number; or `modprobe v4l2loopback video_nr=10,11` on module load |
 
-### Differentiators (Competitive Advantage)
+---
+
+## Differentiators
+
+Features that would set this wireless input above comparable solutions (Hyperion wireless grabbers, Scrcpy standalone, etc.)
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Paint-on-strip visual editor | Hyperion uses numeric inputs (count per side, offsets); visual drag-on-strip is far more intuitive for irregular layouts | HIGH | Horizontal scrollable strip visualization; drag to define start/end of each zone's range; 300+ LEDs requires zoom/pan |
-| Multi-device WLED streaming | Drive separate WLED strips independently from the same canvas (e.g., TV strip + bias light strip) | MEDIUM | Multiple wled_device_id per zone; streaming_service.py needs WLED send path alongside Hue DTLS path |
-| Shared channel abstraction | Zones can drive Hue channels AND WLED LED ranges simultaneously | HIGH | Abstraction layer where a zone has N outputs: `{type: "hue", channel_id}` or `{type: "wled", device_id, led_start, led_end}` |
-| mDNS auto-discovery | Users with WLED on simple networks see devices appear automatically | MEDIUM | zeroconf library; service type `_wled._tcp.local.`; populate suggestion list (not auto-add) |
-| Per-device LED count validation | Warn if zone assignments exceed device LED count | LOW | Client-side + server-side check before save |
-| WLED segment state restore on stop | On stop, restore WLED to its pre-streaming segment/effect state | MEDIUM | Before streaming: GET `/json/state`, cache; on stop: POST cached state back |
+| Wireless and wired sources in the same per-zone selector | No other ambilight tool mixes a capture card zone and a wireless mirror zone in the same session — e.g., left half of screen from HDMI, right half from Android mirror | LOW | Consequence of transparent v4l2loopback design; no special work if virtual device appears in `linuxpy` enumeration |
+| scrcpy orientation lock preserved in pipeline | Other solutions output rotated frames when phone switches orientation; ambient lighting breaks on portrait content | LOW | `--lock-video-orientation=0` (landscape lock) is a single scrcpy flag; prevents aspect ratio chaos in region mapping |
+| Per-source latency target display | Showing measured capture-to-light latency per wireless source lets users tune settings with feedback | MEDIUM | Extend existing streaming metrics WebSocket with per-device frame-arrival timestamps |
+| One-click re-pair for scrcpy sessions | After Android reboots, reconnect without going through pairing again if device already trusted | LOW | Store `device_ip` + `adb_port` in DB; attempt `adb connect IP:PORT`; surface "re-pair needed" only if it fails |
+| Miracast over Infrastructure (MS-MICE) support | Most Linux Miracast implementations require WiFi Direct P2P; MS-MICE works over the existing LAN without P2P hardware support | HIGH | MS-MICE requires TCP port 7250 and DNS resolution; supported since Win 10 1703; opens the feature to Ethernet-only NICs — investigate feasibility in phase research |
 
-### Anti-Features (Commonly Requested, Often Problematic)
+---
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| WLED segment API control (POST `/json/state`) for streaming | Seems natural since WLED has a segment API | REST POST rate is limited and adds 10-30ms round-trip; DDP UDP is purpose-built for realtime at 40+ fps with single-datagram delivery | Use DDP UDP for streaming; only use JSON API for device config and state save/restore |
-| Auto-add all discovered mDNS devices | Reduces clicks | Pollutes device list with neighbor ESP32s not intended for ambilight; `_wled._tcp` service name is generic | Show discovery suggestions in UI; require explicit user confirmation to add |
-| HA webhook authentication tokens | Some users request token-based HA security | HuePictureControl is explicitly unauthenticated (local network tool); adding token validation creates inconsistency and maintenance surface | Document that HA integration assumes LAN-only and firewall isolation |
-| WLED effect passthrough (trigger WLED effects from HPC) | Users ask for full WLED control from HPC UI | Duplicates WLED's own web UI and goes outside HPC's core value (color sync from video) | Link out to WLED device's own web UI from the device row |
-| E1.31 / sACN streaming | Some ambilight setups use E1.31 | Adds significant protocol complexity for no gain vs DDP; DDP handles 480 LEDs/datagram with simpler framing | DDP only for v1.3; E1.31 deferred |
-| DNRGB multi-packet spanning | DNRGB protocol supports >490 LEDs via start-index | Adds fragmentation logic for minimal gain; typical TV strip is 300 LEDs which fits in DRGB | Use DRGB (protocol 2) for <=490 LEDs; add DNRGB only if a user has >490 LED strip |
+## Anti-Features
+
+Features commonly requested in wireless mirroring setups that should be explicitly excluded.
+
+| Anti-Feature | Why Problematic | What to Do Instead |
+|--------------|-----------------|-------------------|
+| AirPlay receiver | User explicitly scoped to Windows and Android only; AirPlay on Linux (RPiPlay, UxPlay) is poorly maintained and adds significant system dependencies | Out of scope per PROJECT.md; document this in UI |
+| Google Cast / Chromecast receiver | Google Cast is proprietary and requires a licensed receiver SDK; no open-source Linux implementation exists | Not feasible without licensing; scrcpy covers the Android use case |
+| Simultaneous multi-device Miracast sources | The WiFi Direct P2P group topology only supports one concurrent session per NIC | Physical limit; document max one Miracast source |
+| H.264 stdout pipe from scrcpy | scrcpy >=3.3 removed raw H.264 stdout output; using `--v4l2-sink` directly is the supported path | Use `--v4l2-sink=/dev/videoN` — native support, no pipe needed |
+| WARLS/DNRGB streaming protocol for wireless sources | Unrelated — those are WLED protocols, not wireless input protocols | WLED is v1.3 scope |
+| Storing Android device credentials / screen content | Logs or screenshots of mirrored screens create privacy risk | Never persist frame data; only persist device IP + ADB port for reconnect |
+| Always-on Miracast receiver daemon at system startup | Consumes WiFi resources and wpa_supplicant state even when no cast is happening | Start receiver only on user-initiated "Enable Miracast" toggle; auto-stop on timeout |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[WLED device table in DB]
-    └──enables──> [Manual device add by IP]
-    └──enables──> [mDNS discovery suggestions]
-                       └──both enable──> [Zone-to-LED-range assignment]
-                                             └──requires──> [Paint-on-strip editor]
-                                             └──requires──> [DDP UDP streaming]
+[v4l2loopback module loaded with fixed device numbers]
+    └──enables──> [Virtual device nodes at /dev/video10, /dev/video11, ...]
+                       └──required by──> [linuxpy enumeration finds virtual devices]
+                                             └──enables──> [Wireless sources in camera dropdown]
 
-[DDP UDP streaming]
-    └──requires──> [WLED device list with IP + LED count]
-    └──integrates into──> [Existing streaming_service.py 50-60 Hz loop]
+[Miracast receiver process (miraclecast / wifid daemon)]
+    └──requires──> [WiFi Direct capable NIC (NDIS >= 6.3)]
+    └──requires──> [wpa_supplicant P2P mode or systemd-networkd support]
+    └──on connect──> [FFmpeg -i rtsp://... -vf format=yuv420p -f v4l2 /dev/video10]
+                         └──fills──> [v4l2loopback device node]
 
-[Shared channel abstraction]
-    └──requires──> [DDP UDP streaming]
-    └──requires──> [Existing Hue DTLS streaming]
+[scrcpy --v4l2-sink=/dev/videoN]
+    └──requires──> [ADB connection to Android device (USB first-time OR Android 11 wireless pair)]
+    └──directly fills──> [v4l2loopback device node — no FFmpeg step needed]
+    └──requires lock──> [--lock-video-orientation=0 (landscape)]
 
-[HA start/stop endpoints]
-    └──wraps──> [Existing POST /api/capture/start + stop]
+[FFmpeg pipeline (Miracast path only)]
+    └──watched by──> [Python asyncio watchdog task]
+                         └──on death──> [exponential backoff restart]
+                         └──reports to──> [status WebSocket]
 
-[HA camera select]
-    └──wraps──> [Existing PUT /api/cameras/assignments]
+[NIC capability check]
+    └──gates──> [Miracast receiver start]
+    └──informs──> [UI: "WiFi Direct not supported" warning]
 
-[Persist entertainment config]
-    └──uses──> [Zustand persist middleware (already available in project)]
-    └──fixes bug in──> [Existing EditorPage config dropdown]
-
-[Dropdown reflects streaming state on reload]
-    └──requires──> [Persist entertainment config]
-    └──requires──> [Streaming state on mount — GET /api/capture/status or WS hydration]
+[Per-source status state machine]
+    └──feeds──> [Existing /ws/status WebSocket (extend with wireless_sources field)]
 ```
 
 ### Dependency Notes
 
-- **Zone-to-LED-range assignment requires device table first.** The paint editor needs to know which device to render (LED count determines strip length). Device CRUD must ship before the editor.
-- **DDP streaming integrates into the existing loop.** `streaming_service.py` already runs a 50-60 Hz asyncio loop. WLED UDP sends can be appended to the same loop iteration with no second task needed.
-- **HA endpoints are thin wrappers.** No new business logic. They exist purely so HA's `rest_command` integration can call them without knowing internal config IDs at call time.
-- **Persist fix is independent of WLED.** Zustand `persist` middleware is already available. This is a 1-file change; no backend changes required.
-- **Streaming state rehydration depends on a status endpoint.** The existing `/ws/status` WebSocket provides streaming state but requires active connection. A synchronous `GET /api/capture/status` returning current state simplifies on-mount rehydration.
+- **scrcpy is the simpler path.** It outputs directly to v4l2loopback via `--v4l2-sink`; no separate FFmpeg process required for Android. The watchdog only needs to restart `scrcpy`, not a two-stage pipeline.
+- **Miracast needs FFmpeg as a second stage.** miraclecast's `miracle-gst` or `miracle-sinkctl` outputs RTSP or GStreamer pipeline; FFmpeg decodes this and writes raw YUV to v4l2loopback.
+- **v4l2loopback module must be loaded with a fixed device number** before enumeration. Otherwise the virtual node gets a random index and disappears from the UI. The API must provision specific numbers at startup.
+- **Orientation lock is mandatory for scrcpy + v4l2loopback.** Without `--lock-video-orientation`, rotating the phone produces different frame dimensions mid-stream, which crashes the V4L2 write (v4l2loopback cannot change frame size while a reader is attached). This is confirmed in scrcpy issue #3795.
+- **FFmpeg watchdog is a new service.** No equivalent exists in the current codebase. It is a long-running asyncio task launched alongside a streaming session, not a top-level daemon.
+- **Virtual devices are transparent to CaptureRegistry.** The existing ref-counted pool calls `linuxpy` for enumeration. If v4l2loopback nodes exist at that path, they appear alongside physical devices with no code changes needed in `capture_registry.py` or `capture_v4l2.py`.
 
 ---
 
-## MVP Definition
+## Miracast-Specific Expectations
 
-### Launch With (v1.3)
+| User Action | Expected System Behavior | Technical Reality |
+|-------------|--------------------------|-------------------|
+| Press Win+K on Windows 11 | See "HuePictureControl" or hostname in the cast target list within 5 seconds | miraclecast must be broadcasting P2P service via wpa_supplicant; discovery is mDNS/P2P probe — can be slow |
+| Select the receiver in Win+K | Connection handshake and video stream starts within 3-5 seconds | RTSP negotiation + MPEG2-TS/H.264 decode + FFmpeg startup chain; realistic time is 3-8 seconds |
+| Windows changes display resolution | Stream continues at new resolution | FFmpeg re-negotiate needed; v4l2loopback device size is fixed at creation — mismatch causes pipe failure |
+| Windows user closes cast session | Virtual device stays registered but produces no frames; HPC shows "disconnected" status | miraclecast session teardown triggers FFmpeg stdin EOF or process death |
+| Miracast over existing LAN (no P2P) | Same Win+K flow, but NIC does not need WiFi Direct | Requires MS-MICE implementation; miraclecast does not currently support this; HIGH RISK area |
 
-- [ ] Manual WLED device add/delete by IP with LED count fetched from `/json/info` — without this, nothing else works
-- [ ] WLED device list persisted in `wled_devices` DB table — required for survival across restarts
-- [ ] Zone-to-LED-range assignments stored per zone — the core data model
-- [ ] Paint-on-strip editor (scrollable strip with draggable zone handles) — users cannot map without visual feedback
-- [ ] DDP UDP streaming (DRGB protocol, <=490 LEDs) — the delivery mechanism
-- [ ] DDP integrated into existing 50-60 Hz streaming loop — same loop, parallel Hue + WLED sends
-- [ ] HA endpoints: `POST /api/ha/start`, `POST /api/ha/stop`, `PUT /api/ha/camera`, `PUT /api/ha/config` — all thin wrappers, low cost
-- [ ] Fix: entertainment config persisted to localStorage via Zustand persist — single store change
-- [ ] Fix: streaming state rehydrated on reload via `GET /api/capture/status` — mount hook reads current state
+---
 
-### Add After Validation (v1.x)
+## scrcpy-Specific Expectations
 
-- [ ] mDNS auto-discovery suggestions — useful but not blocking; manual IP entry is sufficient for v1.3
-- [ ] Multi-device WLED (multiple strips from one zone) — complex data model change; validate single-device first
-- [ ] Shared channel abstraction (zone drives Hue AND WLED simultaneously) — depends on multi-device validation
-- [ ] WLED segment state save/restore on stop — polish; not correctness-critical
+| User Action | Expected System Behavior | Technical Reality |
+|-------------|--------------------------|-------------------|
+| First-time setup, Android 11+ | Scan QR code in Developer Options → Wireless Debugging → Pair with QR Code | `adb pair IP:PORT CODE` then `adb connect IP:PORT`; one-time per device |
+| First-time setup, Android <=10 | Connect USB once, run `adb tcpip 5555`, then WiFi-only forever | USB required once; after that `adb connect IP:5555` works wirelessly |
+| Type IP in HPC UI, click Connect | scrcpy starts, Android screen appears in camera dropdown within 2 seconds | `subprocess.run(['scrcpy', '--v4l2-sink=/dev/videoN', '--lock-video-orientation=0', '--no-video-playback', '--tcpip=IP'])` |
+| Phone rotates to portrait | No impact on video in pipeline | `--lock-video-orientation=0` prevents dimension change |
+| Phone goes to sleep / screen off | scrcpy exits; watchdog restarts connection attempt | `--stay-awake` flag prevents screen-off during active scrcpy session |
+| High-latency WiFi | Expect 50-150ms additional pipeline latency vs wired capture | scrcpy WiFi latency is 50-100ms baseline; adds to existing capture→light pipeline; total budget <200ms is achievable |
+| User stops wireless input | scrcpy process killed; device node becomes idle | `SIGTERM` to scrcpy subprocess; v4l2loopback continues to exist but produces no new frames |
+
+---
+
+## v4l2loopback-Specific Expectations
+
+| Scenario | User Expectation | Implementation Approach |
+|----------|-----------------|------------------------|
+| Service starts | Virtual devices already exist at predictable paths | `modprobe v4l2loopback video_nr=10,11 card_label="Miracast,Android-Mirror"` at service startup; or `v4l2loopback-ctl add` per device on demand |
+| Module not installed | Friendly error in UI, not a crash | Check `modinfo v4l2loopback` on startup; surface "v4l2loopback not installed" warning if absent |
+| Physical device also at /dev/video10 | Conflict: v4l2loopback creation fails | Use high device numbers (10+); enumerate existing nodes first; detect collision and pick next available |
+| Application reading device while module reloads | Reader (CaptureRegistry) sees device disappear | Never unload the module while streaming; only `rmmod` on explicit teardown when no readers present |
+| Exclusive caps for WebRTC apps | Not required for HuePictureControl's V4L2 reader | `exclusive_caps=0` is fine; only needed for browser-based WebRTC consumers |
+
+---
+
+## FFmpeg Pipeline Health — Expectations
+
+| Failure Scenario | Expected Recovery | Implementation |
+|-----------------|------------------|----------------|
+| FFmpeg crashes (SIGSEGV, OOM) | Restart within 2 seconds | `asyncio.create_subprocess_exec`; `await proc.wait()` detects death; restart loop with 2s initial backoff |
+| WiFi connection drops mid-stream | FFmpeg stalls, then times out and exits | `reconnect` and `reconnect_streamed` flags on FFmpeg RTSP input; also set `-timeout 5000000` (microseconds) |
+| RTSP source not available at startup | FFmpeg fails immediately; watchdog backs off | Exponential backoff: 2s, 4s, 8s, max 30s; log each attempt |
+| v4l2loopback device not present | FFmpeg exits with device open error | Pre-check device node existence before starting FFmpeg; surface error to UI |
+| FFmpeg restart loop (repeated failures) | Give up after N attempts; surface "Wireless input unavailable" | Max 5 consecutive failures before marking source as `error` state; require user to manually retry |
+| scrcpy ADB connection refused | scrcpy exits; watchdog retries | Same backoff as FFmpeg; ADB connection refused = device not reachable, not a hard error |
+
+---
+
+## MVP for v1.2
+
+### Must Ship (v1.2.0)
+
+- [ ] `v4l2loopback` module load at service startup with fixed device numbers — without this, nothing else works
+- [ ] scrcpy `--v4l2-sink` integration: connect by Android IP, lock orientation, suppress display window
+- [ ] scrcpy watchdog: asyncio subprocess monitor, restart on crash, exponential backoff
+- [ ] Wireless source appears in existing camera dropdown (no new UI element needed beyond source management panel)
+- [ ] Per-source status: `idle / connecting / streaming / error` surfaced via `/ws/status` extension
+- [ ] NIC capability check endpoint: `GET /api/wireless/capabilities` returns WiFi Direct supported: true/false
+- [ ] Basic Miracast receiver wiring (miraclecast `miracle-wifid` + `miracle-sinkctl` + FFmpeg decode to v4l2loopback) — even if reliability is experimental
+- [ ] FFmpeg watchdog for Miracast path (same pattern as scrcpy watchdog, different process graph)
+- [ ] API: `POST /api/wireless/miracast/start`, `POST /api/wireless/miracast/stop`, `POST /api/wireless/scrcpy/connect`, `POST /api/wireless/scrcpy/disconnect`
+
+### Add After Validation (v1.2.x)
+
+- [ ] Miracast over Infrastructure (MS-MICE) — high value for users without WiFi Direct NIC, but high complexity; defer until Miracast P2P is stable
+- [ ] Per-source latency display in metrics WebSocket
+- [ ] Stored Android device history (IP + port) for one-click reconnect
+- [ ] Resolution/framerate controls exposed in UI (scrcpy `--max-size`, `--max-fps`)
 
 ### Future Consideration (v2+)
 
-- [ ] DNRGB multi-packet support for >490 LED strips
-- [ ] E1.31/sACN protocol support
-- [ ] WLED effect passthrough from HPC UI
+- [ ] Multi-device simultaneous scrcpy (two phones simultaneously as two camera inputs)
+- [ ] Miracast audio passthrough (out of scope for ambient lighting)
+- [ ] Android 10 first-time USB pairing wizard in the UI
 
 ---
 
-## Feature Prioritization Matrix
+## Complexity Assessment vs Existing Pipeline
 
-| Feature | User Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| WLED device add/persist | HIGH | LOW | P1 |
-| DDP UDP streaming | HIGH | MEDIUM | P1 |
-| Paint-on-strip editor | HIGH | HIGH | P1 |
-| Zone-to-LED-range storage | HIGH | LOW | P1 |
-| HA start/stop endpoints | MEDIUM | LOW | P1 |
-| HA camera/config select | MEDIUM | LOW | P1 |
-| Entertainment config persistence fix | HIGH | LOW | P1 |
-| Streaming state on reload fix | MEDIUM | LOW | P1 |
-| mDNS device discovery | MEDIUM | MEDIUM | P2 |
-| Multi-device WLED | MEDIUM | HIGH | P2 |
-| Shared Hue+WLED channel abstraction | HIGH | HIGH | P2 |
-| WLED segment state restore on stop | LOW | MEDIUM | P3 |
-
----
-
-## Competitor Feature Analysis
-
-| Feature | Hyperion | HyperHDR | HuePictureControl Approach |
-|---------|----------|----------|---------------------------|
-| WLED streaming protocol | DDP (since Hyperion v2.0.13, requires WLED 0.13.3+) | DDP | DDP UDP (DRGB) — same as current best practice |
-| LED layout editor | Numeric: count per side + offset; no visual strip editor | Numeric similar to Hyperion | Visual paint-on-strip — differentiator |
-| WLED discovery | mDNS auto-add | mDNS auto-add | mDNS suggestions + manual IP — manual is MVP |
-| Segment support | Yes, maps regions to segments | Yes | LED ranges (start/end) stored per zone — equivalent |
-| Gradient Hue devices | Not supported | Not supported | Already supported — existing advantage |
-| HA integration | External HA community component | External HA community component | Native REST endpoints — lower friction |
-| Persistence | Config file on disk | Config file on disk | DB + localStorage — survives restart and reload |
-
----
-
-## Protocol Technical Reference (for Implementation)
-
-### DRGB (WLED port 21324 UDP) — HIGH confidence
-Simpler, purpose-built WLED protocol for sequential RGB. Supports 490 LEDs max. Recommended for v1.3:
-- Byte 0: `0x02` (DRGB protocol ID)
-- Byte 1: timeout in seconds (1-2 recommended; 255 = no timeout)
-- Bytes 2+: sequential RGB values (LED 0 R, G, B; LED 1 R, G, B; ...)
-
-### DDP (WLED port 4048 UDP) — HIGH confidence
-More general protocol. One datagram carries up to 480 RGB pixels (1440 bytes):
-- Byte 0: flags `0x41` (standard push)
-- Byte 1: sequence number (0 = no sequence)
-- Bytes 2-3: data type (`0x0001` = RGB)
-- Bytes 4-7: data offset (0 for strips <=480 LEDs)
-- Bytes 8-9: data length (N * 3 bytes)
-- Bytes 10+: RGB payload
-
-**Recommendation:** Use DRGB for simplicity (native WLED timeout handling, fewer header bytes). Upgrade to DDP if user has >490 LEDs.
-
-### WLED JSON API for device config — HIGH confidence
-- `GET /json/info` returns `leds.count`, device name, firmware version
-- `GET /json/state` returns current state (save before streaming for restore on stop)
-- `POST /json/state` sets state — not for realtime use; only for config operations
-
-### Home Assistant rest_command pattern — MEDIUM confidence
-Example HA `configuration.yaml` entry for HPC control:
-```yaml
-rest_command:
-  hpc_start:
-    url: "http://192.168.x.y:8000/api/ha/start"
-    method: POST
-  hpc_stop:
-    url: "http://192.168.x.y:8000/api/ha/stop"
-    method: POST
-  hpc_set_camera:
-    url: "http://192.168.x.y:8000/api/ha/camera"
-    method: PUT
-    content_type: "application/json"
-    payload: '{"device_path": "{{ device_path }}"}'
-```
-HA calls these as `rest_command.hpc_start` actions from automations. No auth token needed (LAN-only deployment).
+| Component | Existing Pattern to Reuse | New Work |
+|-----------|--------------------------|----------|
+| Virtual device enumeration | `linuxpy` scan already runs; virtual nodes appear automatically | Only need device nodes to exist at startup |
+| V4L2 frame capture from virtual device | Zero changes — `capture_v4l2.py` reads any V4L2 node | None |
+| CaptureRegistry ref-counting | Zero changes — pool works by device path | None |
+| Per-zone camera selection UI | Zero changes — dropdown already handles N cameras | Only need virtual device names to be descriptive |
+| scrcpy subprocess | New asyncio subprocess wrapper + watchdog | ~100 lines Python |
+| FFmpeg subprocess (Miracast) | Same subprocess pattern as scrcpy watchdog | ~80 lines Python |
+| miraclecast daemon management | No existing pattern | Highest complexity; requires wpa_supplicant P2P config, systemd or manual daemon lifecycle |
+| v4l2loopback module management | No existing pattern | `modprobe` at startup, `v4l2loopback-ctl add` on demand; ~40 lines |
+| NIC capability check | No existing pattern | `subprocess(['netsh', 'wlan', 'show', 'drivers'])` ... wait: this is a **Linux** backend, not Windows. On Linux: `iw list` + `iw phy phyN info \| grep -i "P2P"` or check `wpa_cli p2p_find`; ~30 lines |
+| Status WebSocket extension | Existing `/ws/status` broadcasts `StreamingStatus` object | Add `wireless_sources: list[WirelessSourceStatus]` field |
 
 ---
 
 ## Sources
 
-- [WLED UDP Realtime / DRGB docs](https://kno.wled.ge/interfaces/udp-realtime/) — protocol byte layout, port 21324, timeout behavior, HIGH confidence
-- [WLED DDP protocol docs](https://kno.wled.ge/interfaces/ddp/) — DDP port 4048, packet structure, HIGH confidence
-- [WLED JSON API](https://kno.wled.ge/interfaces/json-api/) — `/json/info`, `/json/state`, segment objects, HIGH confidence
-- [WLED Home Automation guide](https://kno.wled.ge/advanced/home-automation/) — mDNS service type, HA integration patterns, HIGH confidence
-- [Hyperion WLED device docs](https://docs.hyperion-project.org/user/leddevices/network/wled.html) — Hyperion uses DDP since v2.0.13; segment streaming requires WLED 0.13.3+, MEDIUM confidence
-- [python-wled async client](https://github.com/frenck/python-wled) — async Python library, Python 3.11+, experimental status, MEDIUM confidence
-- [wled-mdns-scanner](https://github.com/sanyvrbovec/wled-mdns-scanner) — mDNS discovery via zeroconf, `_wled._tcp.local.` service type, MEDIUM confidence
-- [HA rest_command integration](https://www.home-assistant.io/integrations/rest_command/) — GET/POST/PUT/DELETE support, payload templating, HIGH confidence
-- [Zustand persistence](https://react.alexey-dc.com/zustand_persistence) — persist middleware for localStorage, HIGH confidence
+- [scrcpy v4l2.md official docs](https://github.com/Genymobile/scrcpy/blob/master/doc/v4l2.md) — `--v4l2-sink`, `--lock-video-orientation` requirement, v4l2loopback-dkms install, HIGH confidence
+- [scrcpy connection.md](https://github.com/Genymobile/scrcpy/blob/master/doc/connection.md) — wireless ADB pairing flows for Android 11+ and <=10, `--tcpip` flag, HIGH confidence
+- [scrcpy issue #3795](https://github.com/Genymobile/scrcpy/issues/3795) — v4l2 sink empty on Android 13, confirms `--lock-video-orientation` requirement, HIGH confidence
+- [v4l2loopback ArchWiki](https://wiki.archlinux.org/title/V4l2loopback) — modprobe options, `video_nr`, `card_label`, dynamic `v4l2loopback-ctl add`, MEDIUM confidence
+- [v4l2loopback GitHub](https://github.com/v4l2loopback/v4l2loopback) — official repo, device lifecycle, exclusive_caps, HIGH confidence
+- [miraclecast GitHub (albfan)](https://github.com/albfan/miraclecast) — wifid + sinkctl + gst-sink architecture; video streaming described as "highly experimental", MEDIUM confidence
+- [miraclecast issue #471 — Windows as WFD_Sink](https://github.com/albfan/miraclecast/issues/471) — confirms Windows→Linux Miracast connection attempts have known failures, MEDIUM confidence
+- [MS-MICE: Miracast over Infrastructure](https://learn.microsoft.com/en-us/surface-hub/miracast-over-infrastructure) — TCP port 7250, requires same LAN, supported Win 10 1703+, MEDIUM confidence
+- [netsh wlan show drivers — Miracast check](https://cyberraiden.wordpress.com/2025/04/16/check-the-hardware-and-driver-capabilities-of-the-wi-fi-network-adapter-using-netsh-tool/) — `Wireless Display Supported` field, NDIS >= 6.3, MEDIUM confidence (note: this is Windows-side check for sender, not Linux receiver)
+- [ffmpeg-watchdog](https://github.com/rrymm/ffmpeg-watchdog) — monitor FFmpeg process, respawn on exit, retry/wait/reset options, MEDIUM confidence
+- [Frigate FFmpeg watchdog implementation](https://deepwiki.com/blakeblackshear/frigate/4.1-camera-capture-and-ffmpeg-integration) — production watchdog with "no frames in 20s" detection, MEDIUM confidence
+- [FFmpeg reconnect flags](https://ffmpeg.org/ffmpeg-protocols.html) — `-reconnect 1 -reconnect_streamed 1 -timeout 5000000` for RTSP resilience, HIGH confidence
+- [scrcpy wireless latency](https://howisolve.com/fix-lag-scrcpy/) — WiFi baseline 50-100ms, HIGH confidence
+- [Wireless display latency for ambient lighting context](https://us.lemorele.com/blogs/blog/is-wireless-screen-mirroring-latency-noticeable-in-everyday-use) — consumer expectation <100ms for video, MEDIUM confidence
 
 ---
-*Feature research for: HuePictureControl v1.3 — WLED + HA + persistence*
+*Feature research for: HuePictureControl v1.2 — Wireless Input (Miracast + scrcpy + v4l2loopback + FFmpeg)*
 *Researched: 2026-04-14*
