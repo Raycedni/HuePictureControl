@@ -1,23 +1,18 @@
 # Feature Research
 
-**Domain:** Multi-camera device management for ambient lighting capture application
-**Researched:** 2026-04-03
-**Confidence:** HIGH (based on direct codebase analysis + verified patterns)
+**Domain:** Real-time ambient lighting — WLED ESP32 LED strip support, Home Assistant control, entertainment zone persistence
+**Researched:** 2026-04-14
+**Confidence:** HIGH (WLED protocols from official docs), MEDIUM (HA integration patterns from community), HIGH (persistence patterns from Zustand ecosystem)
 
----
+## Context: What This Milestone Adds
 
-## Context: What Already Exists
+This is a subsequent milestone on top of a working Hue Entertainment API system. The existing system has:
+- Canvas-based freeform region editor (Konva.js + Zustand)
+- Multi-camera per-zone support
+- Live preview and streaming metrics WebSockets
+- `POST /api/capture/start` and `POST /api/capture/stop` endpoints
 
-This is a subsequent milestone on a working system. The following are already built and out of scope:
-
-- Single capture device at `/dev/video0` via V4L2 mmap backend
-- `PUT /api/capture/device` endpoint (device path switching already exists)
-- `CaptureBackend.open(device_path)` (already accepts a new path)
-- Freeform region drawing per entertainment zone
-- Live preview WebSocket stream (`/ws/preview`)
-- Start/stop streaming controls with per-zone channel maps
-
-The existing `PUT /api/capture/device` endpoint switches the single global capture device. The v1.1 milestone replaces this single global device model with a per-zone camera assignment.
+New additions: WLED device support, Home Assistant control endpoints, entertainment zone persistence fix.
 
 ---
 
@@ -25,95 +20,114 @@ The existing `PUT /api/capture/device` endpoint switches the single global captu
 
 ### Table Stakes (Users Expect These)
 
-Features required for "multi-camera support" to be meaningful. Without these, the feature is incomplete.
-
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Enumerate available /dev/video* devices | Without device list, user must know device paths manually — unusable | LOW | Glob `/dev/video*`, open each, call `VIDIOC_QUERYCAP`, filter for `V4L2_CAP_VIDEO_CAPTURE`. Filter out metadata/subdevice nodes (which also appear as `/dev/video*` but have no capture capability). Already have the ioctl infrastructure in `capture_v4l2.py`. |
-| Return device label alongside path | `/dev/video0` is meaningless; user needs "USB Capture Card" not a path | LOW | `VIDIOC_QUERYCAP` returns `card` field (up to 32 bytes) — already parsed in existing V4L2 backend struct. Expose as `{"path": "/dev/video0", "name": "USB Capture Card"}`. |
-| `GET /api/capture/devices` endpoint | Frontend needs to populate device dropdowns | LOW | New router endpoint. Calls the enumerate function, returns JSON list. Should be callable at any time, including during active streaming. |
-| Per-zone camera assignment in the DB | System needs to persist which camera each zone uses | MEDIUM | Schema change: add `camera_device` column to `regions` table (nullable string, defaults to global device). Or a separate `zone_camera_assignments` table keyed by entertainment config + channel group. |
-| Camera dropdown in the Editor/Preview UI per zone or config | User must be able to set the camera without editing config files | MEDIUM | A `<select>` populated from `GET /api/capture/devices`. The scope question (per-zone vs per-config) drives complexity — see Anti-Features section. |
-| Multi-device capture pool in the backend | Streaming service currently holds a single `CaptureBackend`; must hold N | HIGH | `StreamingService` and `app.state.capture` are tightly coupled to one instance. Need a `CapturePool` or dict of `device_path -> CaptureBackend`. Each device runs its own reader thread. Frame lookup in `_frame_loop` must resolve the correct backend per channel. |
-| Live preview reflects selected camera | Preview WebSocket (`/ws/preview`) currently streams from the single global capture; must stream from the zone's assigned camera | MEDIUM | Either make preview device-selectable via query param (e.g. `?device=/dev/video0`), or tie preview to the currently selected config's primary device. |
+| Manual WLED device add by IP | Discovery fails on complex networks; power users always need manual fallback | LOW | `POST /api/wled/devices` with `{ip, name}` body; validate by hitting `/json/info` before saving |
+| Fetch LED count from device | Without this, the paint-on-strip UI cannot render the strip at all | LOW | `GET /json/info` returns `leds.count` (1-1200); call on add and on refresh |
+| Persist WLED device list | Devices disappear on restart otherwise | LOW | Add `wled_devices` table with `id, ip, name, led_count, created_at` |
+| DDP UDP streaming to WLED | DDP is the dominant realtime protocol for WLED ambilight; users expect it by default | MEDIUM | Port 4048 UDP; one 1440-byte datagram = 480 RGB pixels; protocol ID 0x41 + data offset + RGB payload |
+| Timeout/fallback behavior | Without a timeout byte, WLED freezes on last color when streaming stops | LOW | DDP header includes timeout; WLED reverts to effect mode after timeout |
+| Stop streaming clears WLED | When the user stops streaming, lights should return to WLED's own effects | LOW | On stop(), rely on DDP timeout (1-2 seconds) OR send final all-zeros packet |
+| Zone-to-LED-range assignment | Core purpose of WLED support; each canvas zone drives a contiguous LED range | HIGH | Paint-on-strip UI; store `{zone_id, wled_device_id, led_start, led_end}` per zone |
+| HA start/stop streaming endpoints | HA users need unauthenticated HTTP calls to trigger ambilight from automations | LOW | `POST /api/ha/start` and `POST /api/ha/stop`; thin wrappers over existing capture service |
+| HA select camera endpoint | HA automations switch input source (e.g., on HDMI input change event) | LOW | `PUT /api/ha/camera` with `{device_path}` — wraps existing camera assignment logic |
+| HA select entertainment config | HA needs to switch Hue configs (e.g., room-specific presets) | LOW | `PUT /api/ha/config` with `{config_id}` — wraps existing Hue config selection |
+| Persist selected entertainment config | Bug fix: config selection lost on page reload; users reconfigure every session | LOW | Zustand persist middleware writing to localStorage; key: selected-config-per-camera |
+| Dropdown reflects streaming state on reload | Bug fix: dropdown shows wrong config when backend is already streaming | LOW | On mount, fetch streaming status to rehydrate; add `GET /api/capture/status` if needed |
 
 ### Differentiators (Competitive Advantage)
 
-Features that go beyond the table stakes but would meaningfully improve the experience.
-
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Device health indicator in the dropdown | Shows which devices are currently open/streaming vs disconnected; avoids selecting a dead device | LOW | `CapturePool` already knows open state per device. Return `{"path": ..., "name": ..., "available": bool}` from the enumerate endpoint. |
-| Hot-reload on USB re-attach | Device path can change on USB re-insert (e.g., `/dev/video0` becomes `/dev/video2`); reconnect by name/USB ID | HIGH | Requires udev monitoring inside Docker, which is non-trivial. The existing reconnect loop retries the same path. Could poll enumerate periodically and attempt re-open on first device with matching name. Memory note: feedback_docker_native.md documents this exact problem. |
-| Per-device preview thumbnails in the selector | Small static snapshots showing what each camera is seeing | MEDIUM | Grab one JPEG from each device on enumerate, return as data URL. Useful when user has multiple capture cards doing different sources. |
-| "Test capture" button for a device | User can preview a specific device without reassigning it | LOW | Frontend-only: open a temp modal with a `<img>` pointing to `/api/capture/snapshot?device=/dev/video0`. Backend needs device param on the snapshot endpoint. |
+| Paint-on-strip visual editor | Hyperion uses numeric inputs (count per side, offsets); visual drag-on-strip is far more intuitive for irregular layouts | HIGH | Horizontal scrollable strip visualization; drag to define start/end of each zone's range; 300+ LEDs requires zoom/pan |
+| Multi-device WLED streaming | Drive separate WLED strips independently from the same canvas (e.g., TV strip + bias light strip) | MEDIUM | Multiple wled_device_id per zone; streaming_service.py needs WLED send path alongside Hue DTLS path |
+| Shared channel abstraction | Zones can drive Hue channels AND WLED LED ranges simultaneously | HIGH | Abstraction layer where a zone has N outputs: `{type: "hue", channel_id}` or `{type: "wled", device_id, led_start, led_end}` |
+| mDNS auto-discovery | Users with WLED on simple networks see devices appear automatically | MEDIUM | zeroconf library; service type `_wled._tcp.local.`; populate suggestion list (not auto-add) |
+| Per-device LED count validation | Warn if zone assignments exceed device LED count | LOW | Client-side + server-side check before save |
+| WLED segment state restore on stop | On stop, restore WLED to its pre-streaming segment/effect state | MEDIUM | Before streaming: GET `/json/state`, cache; on stop: POST cached state back |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
-Features that seem natural but are wrong for this use case.
-
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Per-region (polygon) camera assignment | "Each polygon could capture from a different camera" | A single entertainment zone has one streaming session to the bridge. Regions within a zone all contribute to a single color computation cycle. Splitting at region granularity means one capture device per frame per region — N devices * M regions = unbounded open handles. Adds massive complexity for zero real-world gain (no real setup has more polygons than cameras). | Per-entertainment-config (or per-zone-group) assignment: all regions in a config share one camera. This is what the PROJECT.md specifies. |
-| Global device fallback hierarchy (primary/secondary) | "If camera 0 fails, fall back to camera 1 automatically" | Ambiguous per-zone behavior — which zone gets which fallback? Creates invisible state that's hard to debug. The existing reconnect loop (exponential backoff on the same device) is the right model. | Keep single-device reconnect per zone. Surface the error clearly in the UI. Let the user manually switch devices if needed. |
-| Automatic device-to-zone matching by USB position | "Auto-assign USB port 1 to zone 1" | USB port topology is opaque inside Docker; `/dev/video*` numbers are not stable (CLAUDE.md memory: feedback_docker_native.md). Silent auto-assignment breaks when hardware changes. | Enumerate + show a one-time assignment prompt in the UI. Persist the assignment explicitly. |
-| Video format / resolution selection per device | "Let me pick 4K vs 720p per camera" | The V4L2 backend hardcodes 640x480 MJPEG. Changing this requires resizing all precomputed polygon masks. Adds configuration surface for no ambient-lighting benefit — region colors are sampled, not displayed. | Keep 640x480 MJPEG fixed. The existing backend is tuned for this. |
-| Multiple preview streams simultaneously | "Show all cameras at once in a grid" | Would require one WebSocket per device, all streaming at ~30fps JPEG — enormous bandwidth overhead for a local web UI. The preview is diagnostic, not a monitoring panel. | Single-device preview, switchable via query param or config selection. |
+| WLED segment API control (POST `/json/state`) for streaming | Seems natural since WLED has a segment API | REST POST rate is limited and adds 10-30ms round-trip; DDP UDP is purpose-built for realtime at 40+ fps with single-datagram delivery | Use DDP UDP for streaming; only use JSON API for device config and state save/restore |
+| Auto-add all discovered mDNS devices | Reduces clicks | Pollutes device list with neighbor ESP32s not intended for ambilight; `_wled._tcp` service name is generic | Show discovery suggestions in UI; require explicit user confirmation to add |
+| HA webhook authentication tokens | Some users request token-based HA security | HuePictureControl is explicitly unauthenticated (local network tool); adding token validation creates inconsistency and maintenance surface | Document that HA integration assumes LAN-only and firewall isolation |
+| WLED effect passthrough (trigger WLED effects from HPC) | Users ask for full WLED control from HPC UI | Duplicates WLED's own web UI and goes outside HPC's core value (color sync from video) | Link out to WLED device's own web UI from the device row |
+| E1.31 / sACN streaming | Some ambilight setups use E1.31 | Adds significant protocol complexity for no gain vs DDP; DDP handles 480 LEDs/datagram with simpler framing | DDP only for v1.3; E1.31 deferred |
+| DNRGB multi-packet spanning | DNRGB protocol supports >490 LEDs via start-index | Adds fragmentation logic for minimal gain; typical TV strip is 300 LEDs which fits in DRGB | Use DRGB (protocol 2) for <=490 LEDs; add DNRGB only if a user has >490 LED strip |
 
 ---
 
 ## Feature Dependencies
 
 ```
-GET /api/capture/devices (enumerate + label)
-    └──required by──> Camera dropdown in UI
-    └──required by──> Device health indicator
-    └──required by──> Per-device preview thumbnails
+[WLED device table in DB]
+    └──enables──> [Manual device add by IP]
+    └──enables──> [mDNS discovery suggestions]
+                       └──both enable──> [Zone-to-LED-range assignment]
+                                             └──requires──> [Paint-on-strip editor]
+                                             └──requires──> [DDP UDP streaming]
 
-Per-zone camera assignment in DB
-    └──required by──> Camera dropdown in UI (to persist selection)
-    └──required by──> Multi-device capture pool (to know which pool entries to open)
+[DDP UDP streaming]
+    └──requires──> [WLED device list with IP + LED count]
+    └──integrates into──> [Existing streaming_service.py 50-60 Hz loop]
 
-Multi-device capture pool
-    └──required by──> Per-zone streaming (frame loop must look up device by zone)
-    └──required by──> Per-zone preview (preview WebSocket must resolve device by config)
-    └──enhances──> Hot-reload on USB re-attach (pool can manage re-open per device)
+[Shared channel abstraction]
+    └──requires──> [DDP UDP streaming]
+    └──requires──> [Existing Hue DTLS streaming]
 
-Live preview reflects selected camera
-    └──requires──> GET /api/capture/devices
-    └──requires──> Per-zone camera assignment in DB
+[HA start/stop endpoints]
+    └──wraps──> [Existing POST /api/capture/start + stop]
+
+[HA camera select]
+    └──wraps──> [Existing PUT /api/cameras/assignments]
+
+[Persist entertainment config]
+    └──uses──> [Zustand persist middleware (already available in project)]
+    └──fixes bug in──> [Existing EditorPage config dropdown]
+
+[Dropdown reflects streaming state on reload]
+    └──requires──> [Persist entertainment config]
+    └──requires──> [Streaming state on mount — GET /api/capture/status or WS hydration]
 ```
 
 ### Dependency Notes
 
-- **Enumerate requires DB assignment for persistence:** The enumerate endpoint is read-only (stateless), but camera assignments must be saved to DB so they survive container restart.
-- **Capture pool is the critical structural change:** It touches `StreamingService._frame_loop` (must look up device per channel_id/config), `app.state.capture` (currently a single object), and `preview_ws.py` (currently calls `app.state.capture.get_jpeg()`). Everything downstream of a device read depends on this pool existing.
-- **Preview device selection enhances but doesn't block:** Preview can initially default to the config's assigned device without a query param. Query param is an enhancement.
+- **Zone-to-LED-range assignment requires device table first.** The paint editor needs to know which device to render (LED count determines strip length). Device CRUD must ship before the editor.
+- **DDP streaming integrates into the existing loop.** `streaming_service.py` already runs a 50-60 Hz asyncio loop. WLED UDP sends can be appended to the same loop iteration with no second task needed.
+- **HA endpoints are thin wrappers.** No new business logic. They exist purely so HA's `rest_command` integration can call them without knowing internal config IDs at call time.
+- **Persist fix is independent of WLED.** Zustand `persist` middleware is already available. This is a 1-file change; no backend changes required.
+- **Streaming state rehydration depends on a status endpoint.** The existing `/ws/status` WebSocket provides streaming state but requires active connection. A synchronous `GET /api/capture/status` returning current state simplifies on-mount rehydration.
 
 ---
 
 ## MVP Definition
 
-### Launch With (v1.1)
+### Launch With (v1.3)
 
-Minimum viable multi-camera support — what's needed to actually use two cameras.
+- [ ] Manual WLED device add/delete by IP with LED count fetched from `/json/info` — without this, nothing else works
+- [ ] WLED device list persisted in `wled_devices` DB table — required for survival across restarts
+- [ ] Zone-to-LED-range assignments stored per zone — the core data model
+- [ ] Paint-on-strip editor (scrollable strip with draggable zone handles) — users cannot map without visual feedback
+- [ ] DDP UDP streaming (DRGB protocol, <=490 LEDs) — the delivery mechanism
+- [ ] DDP integrated into existing 50-60 Hz streaming loop — same loop, parallel Hue + WLED sends
+- [ ] HA endpoints: `POST /api/ha/start`, `POST /api/ha/stop`, `PUT /api/ha/camera`, `PUT /api/ha/config` — all thin wrappers, low cost
+- [ ] Fix: entertainment config persisted to localStorage via Zustand persist — single store change
+- [ ] Fix: streaming state rehydrated on reload via `GET /api/capture/status` — mount hook reads current state
 
-- [ ] `GET /api/capture/devices` — enumerate `/dev/video*` nodes, filter capture-capable, return path + name
-- [ ] Per-config camera assignment stored in DB — new column or table; default to current global `CAPTURE_DEVICE`
-- [ ] Camera `<select>` dropdown in the Preview page UI, scoped per entertainment config
-- [ ] `CapturePool` in backend — dict of `device_path -> CaptureBackend`; opens devices on demand, releases unused ones
-- [ ] `StreamingService._frame_loop` uses the pool to look up the per-config device when grabbing frames
-- [ ] Preview WebSocket resolves device from config assignment (not global `app.state.capture`)
+### Add After Validation (v1.x)
 
-### Add After Validation (v1.1.x)
-
-- [ ] Device health/availability field on the enumerate endpoint — add when pool exists and device state is trackable
-- [ ] "Test capture" button — add once users report confusion about which device is which
+- [ ] mDNS auto-discovery suggestions — useful but not blocking; manual IP entry is sufficient for v1.3
+- [ ] Multi-device WLED (multiple strips from one zone) — complex data model change; validate single-device first
+- [ ] Shared channel abstraction (zone drives Hue AND WLED simultaneously) — depends on multi-device validation
+- [ ] WLED segment state save/restore on stop — polish; not correctness-critical
 
 ### Future Consideration (v2+)
 
-- [ ] Per-device preview thumbnails in the selector — defer; needs snapshot bandwidth analysis
-- [ ] Hot-reload on USB re-attach by device name matching — defer; requires udev monitoring or polling, Docker-specific complications
+- [ ] DNRGB multi-packet support for >490 LED strips
+- [ ] E1.31/sACN protocol support
+- [ ] WLED effect passthrough from HPC UI
 
 ---
 
@@ -121,47 +135,91 @@ Minimum viable multi-camera support — what's needed to actually use two camera
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| GET /api/capture/devices | HIGH | LOW | P1 |
-| Per-config camera assignment in DB | HIGH | LOW | P1 |
-| Camera dropdown in UI | HIGH | LOW | P1 |
-| CapturePool (multi-device backend) | HIGH | HIGH | P1 |
-| Per-config device in frame loop | HIGH | MEDIUM | P1 |
-| Preview resolves per-config device | MEDIUM | MEDIUM | P1 |
-| Device health indicator | MEDIUM | LOW | P2 |
-| Test capture button | LOW | LOW | P2 |
-| Per-device preview thumbnails | LOW | MEDIUM | P3 |
-| Hot-reload on USB re-attach | MEDIUM | HIGH | P3 |
-
-**Priority key:**
-- P1: Must have for launch (v1.1 ships with these or it's not "multi-camera")
-- P2: Should have, add when possible
-- P3: Nice to have, future consideration
+| WLED device add/persist | HIGH | LOW | P1 |
+| DDP UDP streaming | HIGH | MEDIUM | P1 |
+| Paint-on-strip editor | HIGH | HIGH | P1 |
+| Zone-to-LED-range storage | HIGH | LOW | P1 |
+| HA start/stop endpoints | MEDIUM | LOW | P1 |
+| HA camera/config select | MEDIUM | LOW | P1 |
+| Entertainment config persistence fix | HIGH | LOW | P1 |
+| Streaming state on reload fix | MEDIUM | LOW | P1 |
+| mDNS device discovery | MEDIUM | MEDIUM | P2 |
+| Multi-device WLED | MEDIUM | HIGH | P2 |
+| Shared Hue+WLED channel abstraction | HIGH | HIGH | P2 |
+| WLED segment state restore on stop | LOW | MEDIUM | P3 |
 
 ---
 
 ## Competitor Feature Analysis
 
-| Feature | Hyperion | OBS/vMix | HuePictureControl v1.1 |
-|---------|----------|----------|----------------------|
-| Device enumeration | v4l2-ctl list-devices, shows all nodes | OS-level device picker in Add Input dialog | GET /api/capture/devices returning name + path |
-| Per-source device assignment | Per-grabber config (one grabber = one device) | Per-scene input (any input can have any device) | Per entertainment config (one config = one device) |
-| Device label display | Uses kernel card name | Uses DirectShow friendly name / v4l2 card name | VIDIOC_QUERYCAP card field |
-| Live preview during selection | No (static config) | Yes (preview pane per input) | Single WebSocket, switched per config selection |
-| Hot-plug detection | Supported via udev integration | Supported (OS-level) | Not planned for v1.1 |
+| Feature | Hyperion | HyperHDR | HuePictureControl Approach |
+|---------|----------|----------|---------------------------|
+| WLED streaming protocol | DDP (since Hyperion v2.0.13, requires WLED 0.13.3+) | DDP | DDP UDP (DRGB) — same as current best practice |
+| LED layout editor | Numeric: count per side + offset; no visual strip editor | Numeric similar to Hyperion | Visual paint-on-strip — differentiator |
+| WLED discovery | mDNS auto-add | mDNS auto-add | mDNS suggestions + manual IP — manual is MVP |
+| Segment support | Yes, maps regions to segments | Yes | LED ranges (start/end) stored per zone — equivalent |
+| Gradient Hue devices | Not supported | Not supported | Already supported — existing advantage |
+| HA integration | External HA community component | External HA community component | Native REST endpoints — lower friction |
+| Persistence | Config file on disk | Config file on disk | DB + localStorage — survives restart and reload |
 
-**Key design choice vs competitors:** Scope camera assignment to entertainment configs, not individual regions. This matches the architecture (one streaming session per config) and keeps UI simple — one dropdown, not per-polygon camera selection. Hyperion and OBS both scope camera assignment at the "grabber/input" level, not at the per-zone level.
+---
+
+## Protocol Technical Reference (for Implementation)
+
+### DRGB (WLED port 21324 UDP) — HIGH confidence
+Simpler, purpose-built WLED protocol for sequential RGB. Supports 490 LEDs max. Recommended for v1.3:
+- Byte 0: `0x02` (DRGB protocol ID)
+- Byte 1: timeout in seconds (1-2 recommended; 255 = no timeout)
+- Bytes 2+: sequential RGB values (LED 0 R, G, B; LED 1 R, G, B; ...)
+
+### DDP (WLED port 4048 UDP) — HIGH confidence
+More general protocol. One datagram carries up to 480 RGB pixels (1440 bytes):
+- Byte 0: flags `0x41` (standard push)
+- Byte 1: sequence number (0 = no sequence)
+- Bytes 2-3: data type (`0x0001` = RGB)
+- Bytes 4-7: data offset (0 for strips <=480 LEDs)
+- Bytes 8-9: data length (N * 3 bytes)
+- Bytes 10+: RGB payload
+
+**Recommendation:** Use DRGB for simplicity (native WLED timeout handling, fewer header bytes). Upgrade to DDP if user has >490 LEDs.
+
+### WLED JSON API for device config — HIGH confidence
+- `GET /json/info` returns `leds.count`, device name, firmware version
+- `GET /json/state` returns current state (save before streaming for restore on stop)
+- `POST /json/state` sets state — not for realtime use; only for config operations
+
+### Home Assistant rest_command pattern — MEDIUM confidence
+Example HA `configuration.yaml` entry for HPC control:
+```yaml
+rest_command:
+  hpc_start:
+    url: "http://192.168.x.y:8000/api/ha/start"
+    method: POST
+  hpc_stop:
+    url: "http://192.168.x.y:8000/api/ha/stop"
+    method: POST
+  hpc_set_camera:
+    url: "http://192.168.x.y:8000/api/ha/camera"
+    method: PUT
+    content_type: "application/json"
+    payload: '{"device_path": "{{ device_path }}"}'
+```
+HA calls these as `rest_command.hpc_start` actions from automations. No auth token needed (LAN-only deployment).
 
 ---
 
 ## Sources
 
-- Direct codebase analysis: `capture_service.py`, `capture_v4l2.py`, `streaming_service.py`, `main.py`, `docker-compose.yaml`
-- V4L2 device enumeration: [VIDIOC_QUERYCAP kernel docs](https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/vidioc-querycap.html)
-- V4L2 multi-device Python patterns: [v4l2py on PyPI](https://pypi.org/project/v4l2py/)
-- Docker multi-device passthrough: [Docker community thread](https://forums.docker.com/t/accessing-a-usb-camera-from-a-docker-container-in-linux/125361)
-- Competitor reference: [Hyperion project](https://github.com/hyperion-project/hyperion), [vMix camera setup](https://www.vmix.com/help25/Capture.html)
-- Project memory: `/home/lukas/.claude/projects/-mnt-c-Users-Lukas-IdeaProjects-HuePictureControl/memory/feedback_docker_native.md` (device path instability on USB re-attach)
+- [WLED UDP Realtime / DRGB docs](https://kno.wled.ge/interfaces/udp-realtime/) — protocol byte layout, port 21324, timeout behavior, HIGH confidence
+- [WLED DDP protocol docs](https://kno.wled.ge/interfaces/ddp/) — DDP port 4048, packet structure, HIGH confidence
+- [WLED JSON API](https://kno.wled.ge/interfaces/json-api/) — `/json/info`, `/json/state`, segment objects, HIGH confidence
+- [WLED Home Automation guide](https://kno.wled.ge/advanced/home-automation/) — mDNS service type, HA integration patterns, HIGH confidence
+- [Hyperion WLED device docs](https://docs.hyperion-project.org/user/leddevices/network/wled.html) — Hyperion uses DDP since v2.0.13; segment streaming requires WLED 0.13.3+, MEDIUM confidence
+- [python-wled async client](https://github.com/frenck/python-wled) — async Python library, Python 3.11+, experimental status, MEDIUM confidence
+- [wled-mdns-scanner](https://github.com/sanyvrbovec/wled-mdns-scanner) — mDNS discovery via zeroconf, `_wled._tcp.local.` service type, MEDIUM confidence
+- [HA rest_command integration](https://www.home-assistant.io/integrations/rest_command/) — GET/POST/PUT/DELETE support, payload templating, HIGH confidence
+- [Zustand persistence](https://react.alexey-dc.com/zustand_persistence) — persist middleware for localStorage, HIGH confidence
 
 ---
-*Feature research for: multi-camera device management in ambient lighting capture*
-*Researched: 2026-04-03*
+*Feature research for: HuePictureControl v1.3 — WLED + HA + persistence*
+*Researched: 2026-04-14*

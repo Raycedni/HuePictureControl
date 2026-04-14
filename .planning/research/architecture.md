@@ -1,544 +1,504 @@
 # Architecture Research
 
-**Domain:** Multi-camera device management integrated into an existing single-capture ambient lighting system
-**Researched:** 2026-04-03
-**Confidence:** HIGH — based on direct code inspection of the existing implementation, no speculative claims
+**Domain:** Real-time ambient lighting — WLED UDP streaming, Home Assistant control endpoints, entertainment zone persistence
+**Researched:** 2026-04-14
+**Confidence:** HIGH — based on direct code inspection of the existing implementation and verified WLED/HA protocol documentation
 
-> This document supersedes the 2026-03-23 architecture.md for v1.1 milestone planning.
-> It focuses entirely on the integration question: what changes vs what stays for multi-camera support.
+> This document covers v1.3 additions only. For the existing v1.0/v1.1 architecture see the sections preserved at the bottom.
+> v1.3 adds three independent concerns: WLED streaming, HA control endpoints, zone persistence fix.
 
 ---
 
-## Standard Architecture
+## What Already Exists (Do Not Re-Research)
 
-### System Overview (Current State — v1.0)
+The existing backend has a well-established layered architecture:
+
+```
+FastAPI main.py
+  app.state: db, capture_registry, broadcaster, streaming (StreamingService)
+
+Services:
+  capture_service.py    CaptureRegistry + CaptureBackend ABC (V4L2/DirectShow)
+  streaming_service.py  Hue-specific loop: CaptureRegistry -> color_math -> DTLS
+  hue_client.py         REST + Entertainment config activation/deactivation
+  color_math.py         RGB->CIE xy, build_polygon_mask, extract_region_color
+  status_broadcaster.py WebSocket fan-out
+
+Routers: capture.py, hue.py, regions.py, cameras.py
+WebSockets: streaming_ws.py (/ws/status), preview_ws.py (/ws/preview)
+
+Database tables: bridge_config, entertainment_configs, regions,
+  light_assignments, known_cameras, camera_assignments
+```
+
+---
+
+## System Overview (v1.3 additions)
 
 ```
 +------------------------------------------------------------------+
-|  FastAPI Application (single process, asyncio event loop)        |
-|                                                                   |
-|  +---------------+  +--------------+  +----------------------+   |
-|  | REST Routers  |  |  WebSockets  |  |  StreamingService    |   |
-|  | /api/capture  |  | /ws/preview  |  |  (asyncio.Task)      |   |
-|  | /api/regions  |  | /ws/status   |  |  50 Hz frame loop    |   |
-|  +-------+-------+  +------+-------+  +-----------+----------+   |
-|          |                 |                       |              |
-|          +-----------------+-----------------------+              |
-|                            |                                      |
-|                  +---------+----------+                           |
-|                  |  app.state         |                           |
-|                  |  .capture  --------+---> single CaptureBackend |
-|                  |  .streaming        |     (V4L2 or DirectShow)  |
-|                  |  .broadcaster      |                           |
-|                  |  .db               |                           |
-|                  +--------------------+                           |
+|  Frontend (React 19)                                             |
+|                                                                  |
+|  App.tsx                                                         |
+|  tabs: Setup | Preview | Editor | WLED (new)                     |
+|                                                                  |
+|  +------------+  +------------+  +---------------------------+   |
+|  | EditorPage |  | WledPage   |  | PairingFlow / Setup       |   |
+|  | (Konva.js  |  | (device    |  | entertainment config      |   |
+|  |  canvas)   |  |  list +    |  | dropdown with persistence |   |
+|  | unchanged  |  |  StripPainter) | fix (new)                |   |
+|  +------------+  +------------+  +---------------------------+   |
+|                                                                  |
+|  Stores: useRegionStore  useStatusStore  useWledStore (new)      |
+|  API:    regions.ts  hue.ts  cameras.ts  wled.ts (new)           |
++---------------------------+--------------------------------------+
+                            | HTTP / WebSocket
++---------------------------v--------------------------------------+
+|  FastAPI Backend                                                 |
+|                                                                  |
+|  Existing routers (unchanged):                                   |
+|  /api/hue  /api/cameras  /api/regions  /ws/status  /ws/preview  |
+|                                                                  |
+|  New routers:                                                    |
+|  +---------------+   +-------------------+                      |
+|  | /api/wled     |   | /api/ha           |                      |
+|  | (CRUD devices |   | (inbound control  |                      |
+|  |  + segments)  |   |  from HA)         |                      |
+|  +-------+-------+   +---------+---------+                      |
+|          |                     |                                 |
+|  Modified router:              |                                 |
+|  +--------------------------------------------------+           |
+|  | /api/capture (add selected-config GET/PUT)       |           |
+|  +-------------------------------+------------------+           |
+|                                  |                              |
+|  New service:                    |                              |
+|  +--------------------------------------------------+           |
+|  | streaming_coordinator.py                         |           |
+|  |  .start(config_id) -> fans out to both services  |           |
+|  |  .stop() -> stops both services                  |           |
+|  |  owns the one frame loop                         |           |
+|  +----------------+-----------------+---------------+           |
+|                   |                 |                            |
+|  +----------------v---+  +----------v---------+                 |
+|  | streaming_service  |  | wled_service (new) |                 |
+|  | (Hue DTLS)         |  | (UDP socket send)  |                 |
+|  | unchanged          |  |                    |                 |
+|  +--------+-----------+  +----------+---------+                 |
+|           |                         |                            |
+|  +--------v-------------------------v---------+                  |
+|  | color_math.py (shared, unchanged)          |                  |
+|  | extract_region_color, build_polygon_mask   |                  |
+|  +--------------------------------------------+                  |
+|                                                                  |
+|  Database (aiosqlite):                                           |
+|  existing tables + wled_devices + wled_strip_assignments         |
+|  + selected_configs (zone persistence fix)                       |
 +------------------------------------------------------------------+
-         |                                        |
-  +------+------+                        +--------+--------+
-  |  SQLite DB  |                        |  Hue Bridge     |
-  | bridge_cfg  |                        |  REST CLIP v2   |
-  | regions     |                        |  Entertainment  |
-  | light_asgn  |                        |  API (DTLS/UDP) |
-  +-------------+                        +-----------------+
-```
-
-**Current single-capture coupling points (exact lines that must change):**
-
-| Location | Coupling |
-|----------|---------|
-| `main.py` lifespan | `capture = create_capture(CAPTURE_DEVICE)` — one backend at startup |
-| `main.py` lifespan | `StreamingService(db, capture, broadcaster)` — single capture injected |
-| `StreamingService._frame_loop` | `frame = await self._capture.get_frame()` — all channels share one frame |
-| `preview_ws.py` | `capture = websocket.app.state.capture` — single capture for all previews |
-| `capture.py` `/snapshot` | `capture_service = request.app.state.capture` — single capture for snapshot |
-| `docker-compose.yaml` | `devices: [/dev/video0]` — single device passthrough |
-| `database.py` `regions` table | no `camera_device` column — regions have no camera association |
-
----
-
-### Target Architecture (v1.1 Multi-Camera)
-
-```
-+------------------------------------------------------------------+
-|  FastAPI Application                                             |
-|                                                                   |
-|  +---------------+  +--------------+  +----------------------+   |
-|  | REST Routers  |  |  WebSockets  |  |  StreamingService    |   |
-|  | + /api/cameras|  | /ws/preview  |  |  (asyncio.Task)      |   |
-|  |   enumerate   |  | ?device=N    |  |  per-zone dispatch   |   |
-|  +-------+-------+  +------+-------+  +-----------+----------+   |
-|          |                 |                       |              |
-|          +-----------------+-----------------------+              |
-|                            |                                      |
-|                  +---------+--------------------+                 |
-|                  |  app.state                   |                 |
-|                  |  .capture_registry -----------+-> CaptureRegistry
-|                  |  .streaming                  |   {path: Backend}
-|                  |  .broadcaster                |   lazy open     |
-|                  |  .db                         |                 |
-|                  +------------------------------+                 |
-+------------------------------------------------------------------+
-         |                                        |
-  +------+------+                        +--------+--------+
-  |  SQLite DB  |                        |  Hue Bridge     |
-  | + regions   |                        |  (unchanged)    |
-  |   camera_   |                        |                 |
-  |   device col|                        |                 |
-  +-------------+                        +-----------------+
 ```
 
 ---
 
-## Component Responsibilities
+## New Component Boundaries
 
-### Existing Components — Keep vs Modify
+### Backend
 
-| Component | Status | What Changes |
-|-----------|--------|--------------|
-| `CaptureBackend` (abstract base) | Keep as-is | Interface already accepts `device_path` argument — no change needed |
-| `V4L2Capture` | Keep as-is | Already parameterized by device path |
-| `DirectShowCapture` | Keep as-is | Already parameterized by device index |
-| `create_capture()` factory | Keep as-is | Already accepts `device_path` argument |
-| `StreamingService` | Modify | Replace `self._capture` with per-zone dispatch through registry (see frame loop section) |
-| `preview_ws.py` | Modify | Accept optional `?device=` query param to preview a specific camera |
-| `capture.py` router | Modify | `/snapshot` needs optional device param; existing `/device` PUT stays but targets registry |
-| `main.py` lifespan | Modify | Replace single `create_capture` with `CaptureRegistry` initialization |
-| `database.py` | Modify | Add `camera_device` column migration to `regions` table |
-| `docker-compose.yaml` | Modify | Enumerate and add all available video device entries |
+| Component | File | Responsibility | Communicates With |
+|-----------|------|----------------|-------------------|
+| WledService | `services/wled_service.py` | Per-device UDP socket; builds DRGB/DNRGB packets; `process_frame(frame, segment_map)` | `color_math.extract_region_color`, DB (reads strip assignments at startup) |
+| StreamingCoordinator | `services/streaming_coordinator.py` | Unified `start()/stop()` that owns the one frame loop and fans out to Hue and WLED sinks | `StreamingService`, `WledService`, `CaptureRegistry`, `StatusBroadcaster` |
+| WledRouter | `routers/wled.py` | CRUD for WLED devices; read/write strip segment assignments | `wled_service.py`, DB |
+| HaRouter | `routers/ha.py` | Inbound REST endpoints for HA automations (`start`, `stop`, `camera`, `zone`) | `app.state.coordinator` (the StreamingCoordinator) |
 
-### New Components — Must Be Added
+### Frontend
 
-| Component | Location | Responsibility |
-|-----------|----------|---------------|
-| `CaptureRegistry` | `services/capture_registry.py` | Pool of `CaptureBackend` instances keyed by device path. Lazy-opens on first request, tracks reference counts, releases when no longer needed. |
-| `CameraEnumerator` | `services/camera_enumerator.py` | Probes `/dev/video0`..`/dev/video31` with `VIDIOC_QUERYCAP` on Linux (or `cv2.VideoCapture` index loop on Windows). Returns `[{path, name, index}]`. |
-| `/api/cameras` router | `routers/cameras.py` | `GET /api/cameras` — thin wrapper over `CameraEnumerator`. Runs enumeration in `asyncio.to_thread`. |
-| `CameraSelector` component | `Frontend/src/components/CameraSelector.tsx` | Dropdown per zone or per region. Calls `PUT /api/regions/{id}` with `camera_device` field. |
-| Camera API client | `Frontend/src/api/cameras.ts` | `fetchCameras()` and optional `setRegionCamera(regionId, devicePath)` helper. |
-
----
-
-## Data Flow Changes
-
-### Frame Loop: Current vs Target
-
-**Current** — single capture, all channels share one frame:
-
-```
-capture.get_frame()
-    |
-    +---> for each channel_id in channel_map:
-              extract_region_color(frame, mask) -> color
-              send to bridge
-```
-
-**Target** — per-zone camera, frames fetched per unique device:
-
-```
-group channel_map by camera_device
-    |
-    +-- device /dev/video0 -> [channel_1, channel_3]
-    |       capture_registry.get(/dev/video0).get_frame()
-    |           +-> for channel_1: extract_region_color(frame, mask_1)
-    |           +-> for channel_3: extract_region_color(frame, mask_3)
-    |
-    +-- device /dev/video2 -> [channel_2]
-            capture_registry.get(/dev/video2).get_frame()
-                +-> for channel_2: extract_region_color(frame, mask_2)
-
-asyncio.gather() all device reads concurrently, then send all colors to bridge
-```
-
-Both `get_frame()` calls run concurrently via `asyncio.gather` since each backend has its own reader thread and `get_frame()` is non-blocking.
-
-### Channel Map Loading: Required SQL Change
-
-`StreamingService._load_channel_map()` currently returns:
-```python
-{channel_id: mask_ndarray}
-```
-
-Must be extended to:
-```python
-{channel_id: (mask_ndarray, camera_device_path)}
-```
-
-The SQL query in `_load_channel_map` must JOIN `regions.camera_device` so the streaming loop knows which device to read for each channel. NULL values fall back to `CAPTURE_DEVICE` env var default.
-
-### Preview WebSocket: Change Details
-
-Currently `ws_preview` reads `app.state.capture` (single backend). Target:
-
-```
-ws://backend/ws/preview?device=/dev/video2
-```
-
-`preview_ws.py` reads the `device` query param, calls `capture_registry.get_or_open(device)`, streams from that backend. Falls back to the first available device if param is absent (backward compatibility).
-
----
-
-## Database Schema Changes
-
-### Migration: Add `camera_device` to `regions`
-
-```sql
--- Follows the existing migration pattern already in database.py
-ALTER TABLE regions ADD COLUMN camera_device TEXT;
-```
-
-- NULL means "use the system default device" — backward compatible with all existing regions
-- Non-NULL is an absolute device path (e.g., `/dev/video0`, `/dev/video2`)
-
-No new table is needed. Camera assignment is a property of the region, parallel to `light_id`.
-
-### Updated `regions` Schema
-
-```sql
-CREATE TABLE IF NOT EXISTS regions (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    polygon TEXT NOT NULL,
-    order_index INTEGER DEFAULT 0,
-    light_id TEXT,
-    camera_device TEXT      -- NULL = default device, else /dev/videoN
-);
-```
-
-### No Changes Required
-
-- `bridge_config` — unchanged, bridge is shared across all cameras
-- `light_assignments` — unchanged, channel-to-region mapping is camera-independent
-- `entertainment_configs` — unchanged
-
----
-
-## Recommended Project Structure (Changes Only)
-
-```
-Backend/
-+-- services/
-|   +-- capture_service.py      UNCHANGED — abstract base + factory
-|   +-- capture_v4l2.py         UNCHANGED
-|   +-- capture_dshow.py        UNCHANGED
-|   +-- capture_registry.py     NEW — pool of CaptureBackend instances
-|   +-- camera_enumerator.py    NEW — /dev/videoN discovery via VIDIOC_QUERYCAP
-|   +-- streaming_service.py    MODIFY — per-zone camera dispatch
-+-- routers/
-|   +-- cameras.py              NEW — GET /api/cameras
-|   +-- capture.py              MODIFY — snapshot + device param
-|   +-- preview_ws.py           MODIFY — ?device= query param support
-|   +-- regions.py              MODIFY — camera_device in CRUD responses
-+-- database.py                 MODIFY — camera_device migration
-+-- main.py                     MODIFY — CaptureRegistry in lifespan
-
-Frontend/src/
-+-- api/
-|   +-- cameras.ts              NEW — fetchCameras()
-|   +-- regions.ts              MODIFY — camera_device in Region type
-+-- components/
-|   +-- CameraSelector.tsx      NEW — per-zone dropdown
-|   +-- LightPanel.tsx          MODIFY — embed or link CameraSelector
-+-- store/
-    +-- useRegionStore.ts       MODIFY — camera_device in Region model
-```
-
----
-
-## Architectural Patterns
-
-### Pattern 1: Lazy-Open Capture Registry
-
-**What:** A dict-keyed pool of `CaptureBackend` instances that opens devices on first request and tracks reference counts to know when to release.
-
-**When to use:** Multiple zones may share the same camera (two regions both mapped to `/dev/video0`). The registry ensures only one backend instance per device path is ever open, preventing `EBUSY` errors from double-opening the same V4L2 device.
-
-**Trade-offs:** Adds one layer of indirection. Reference counting must be managed carefully — decrement on zone removal or camera reassignment, release when count reaches 0. The simplest mitigation: `release_all()` on `streaming.stop()`, acquire fresh on `streaming.start()`.
-
-```python
-class CaptureRegistry:
-    def __init__(self):
-        self._backends: dict[str, CaptureBackend] = {}
-        self._refcounts: dict[str, int] = {}
-
-    def acquire(self, device_path: str) -> CaptureBackend:
-        if device_path not in self._backends:
-            backend = create_capture(device_path)
-            backend.open()
-            self._backends[device_path] = backend
-            self._refcounts[device_path] = 0
-        self._refcounts[device_path] += 1
-        return self._backends[device_path]
-
-    def release(self, device_path: str) -> None:
-        self._refcounts[device_path] -= 1
-        if self._refcounts[device_path] <= 0:
-            self._backends[device_path].release()
-            del self._backends[device_path]
-            del self._refcounts[device_path]
-
-    def release_all(self) -> None:
-        for backend in self._backends.values():
-            backend.release()
-        self._backends.clear()
-        self._refcounts.clear()
-```
-
-### Pattern 2: V4L2 Device Enumeration by QUERYCAP Probe
-
-**What:** Discover available video devices by iterating `/dev/video0` through `/dev/video31` and probing each with `VIDIOC_QUERYCAP` ioctl. Devices that respond and have `V4L2_CAP_VIDEO_CAPTURE` set are valid capture sources.
-
-**When to use:** Linux deployment target. On Windows, use `cv2.VideoCapture(index)` probe loop in `DirectShowCapture`.
-
-**Trade-offs:** Probing 32 indices is fast (microseconds per absent node, a few milliseconds for real devices). `v4l2loopback` virtual devices appear as valid — this is intentional, allows virtual sources. Must be called via `asyncio.to_thread` to avoid blocking the event loop.
-
-```python
-def enumerate_v4l2_devices() -> list[dict]:
-    # Reuses same ioctl approach already proven in capture_v4l2.py
-    devices = []
-    for i in range(32):
-        path = f"/dev/video{i}"
-        if not os.path.exists(path):
-            continue
-        try:
-            fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
-            cap_buf = bytearray(104)
-            fcntl.ioctl(fd, 0x80685600, cap_buf)   # VIDIOC_QUERYCAP
-            caps = struct.unpack_from("<I", cap_buf, 88)[0]
-            if caps & 0x01:                          # V4L2_CAP_VIDEO_CAPTURE
-                card = cap_buf[8:40].rstrip(b'\x00').decode('utf-8', errors='replace')
-                devices.append({"path": path, "name": card, "index": i})
-        except OSError:
-            pass
-        finally:
-            try: os.close(fd)
-            except: pass
-    return devices
-```
-
-### Pattern 3: Null-Safe Camera Device Fallback
-
-**What:** When `region.camera_device` is NULL (existing regions pre-migration, or user has not selected a camera), the streaming loop falls back to the default device rather than erroring.
-
-**When to use:** Always. Ensures backward compatibility for all existing configurations after the schema migration runs.
-
-**Trade-offs:** Implicit fallback may produce surprising behavior if multiple cameras are connected and the user expects a specific one. Log a WARNING when fallback is used. Make the fallback deterministic: `CAPTURE_DEVICE` env var (already used in `main.py`) is the correct default.
+| Component | File | Responsibility | Communicates With |
+|-----------|------|----------------|-------------------|
+| WledPage | `components/WledPage.tsx` | WLED tab: device list, add/remove, open StripPainter | `useWledStore`, `api/wled.ts` |
+| StripPainter | `components/StripPainter.tsx` | 1D LED strip canvas — drag to select LED range, click zone to assign | `useWledStore`, `useRegionStore` |
+| useWledStore | `store/useWledStore.ts` | Devices list, segment assignments, selected device state | `api/wled.ts` |
+| api/wled.ts | `api/wled.ts` | HTTP client for `/api/wled/*` | WledRouter |
 
 ---
 
 ## Data Flow
 
-### Camera Selection Flow (New, Frontend-Initiated)
+### Frame to WLED Strip (new parallel path)
 
 ```
-User opens LightPanel/EditorPage
-    |
-    v
-GET /api/cameras  (on mount)
-    |
-CameraEnumerator.enumerate() via asyncio.to_thread
-    |
-    v  [{path: "/dev/video0", name: "USB3 Capture"}, ...]
-    |
-User selects /dev/video2 for Zone "Left Wall"
-    |
-    v
-PUT /api/regions/{id}  body: {camera_device: "/dev/video2"}
-    |
-SQLite UPDATE regions SET camera_device = ? WHERE id = ?
-    |
-    v
-useRegionStore.updateRegion() refreshes UI state
+CaptureBackend.wait_for_new_frame()
+  |
+  v (frame: BGR ndarray, shared reference — no copy)
+StreamingCoordinator._frame_loop()
+  |
+  +---> StreamingService.process_frame(frame)
+  |       for each channel_id, mask in hue_channel_map:
+  |         r,g,b = extract_region_color(frame, mask)
+  |         x,y = rgb_to_xy(r,g,b)
+  |         streaming.set_input((x, y, bri, channel_id))
+  |
+  +---> WledService.process_frame(frame)
+          for each wled_device in active_devices:
+            rgb_values = []
+            for segment in device.segments:
+              r,g,b = color_cache.get(segment.region_id)
+                      or extract_region_color(frame, segment.mask)
+              fill rgb_values[segment.led_start : segment.led_end+1]
+            packet = _build_packet(device.led_count, rgb_values)
+            device.socket.sendto(packet, (device.ip, device.port))
 ```
 
-### Streaming Loop Flow (Modified)
+**Color cache:** The coordinator maintains a `dict[region_id, (r,g,b)]` populated once per frame. Both Hue and WLED sinks look up this cache before calling `extract_region_color`, so a region shared between Hue and WLED is extracted exactly once per frame.
 
-```
-streaming.start(config_id)
-    |
-    v
-_load_channel_map(config_id)
-    SQL: SELECT la.channel_id, r.polygon, r.camera_device
-         FROM light_assignments la JOIN regions r ON r.id = la.region_id
-         WHERE la.entertainment_config_id = ?
-    returns: {channel_id: (mask, device_path_or_None)}
-    |
-    v
-Group channels by unique device_path (NULL -> CAPTURE_DEVICE default)
-    |
-    v  CaptureRegistry.acquire(device) for each unique device
-    |
-_frame_loop():
-    frames = await asyncio.gather(*(
-        registry.get(device).get_frame()
-        for device in unique_devices
-    ), return_exceptions=True)
-    for each (device, frame) in zip(unique_devices, frames):
-        for channel in channels_for_device:
-            extract_region_color(frame, mask) -> color
-    send all colors to bridge in one batch
-    |
-streaming.stop()
-    |  CaptureRegistry.release_all()
-```
+**WLED packet sizes:**
+- DRGB (byte 0 = 0x02): 2-byte header + 3 bytes/LED, max 490 LEDs per packet
+- DNRGB (byte 0 = 0x04): 4-byte header (includes 2-byte start index) + 3 bytes/LED, no pixel limit across multiple packets
+- For a 300-LED strip: one DRGB packet = 902 bytes (well under LAN UDP MTU ~1472 bytes)
+- For a 600-LED strip: two DNRGB packets, start_index 0 and 300
+- Byte 1 in both protocols: timeout seconds before WLED reverts to normal mode — use 2
 
-### Preview WebSocket Flow (Modified)
-
-```
-Browser connects ws://host/ws/preview?device=/dev/video2
-    |
-preview_ws.py reads ?device= query param
-    |
-    +-- if device param present and valid:
-    |       capture = app.state.capture_registry.acquire(device)
-    +-- else (no param or unknown device):
-            capture = first open backend in registry, or open default
-    |
-stream jpeg frames from that capture backend
-    (same 60fps cap and reconnect logic as current implementation)
-```
-
----
-
-## Scaling Considerations
-
-This is a single-user local tool. The relevant dimension is simultaneous camera count, not user count.
-
-| Camera Count | Behavior |
-|-------------|----------|
-| 1 (current baseline) | Registry manages one backend. Functionally identical to current single-capture path. |
-| 2-4 (target for v1.1) | Registry manages 2-4 open backends, each with its own reader thread. CPU impact is negligible (reader threads sleep between frames). Memory: ~4MB per backend for 4 MJPEG mmap buffers at 640x480. |
-| 5+ (not a goal, but possible) | USB 3.0 bandwidth becomes the limiting factor before the software architecture does. 4 simultaneous 1080p30 MJPEG streams saturate ~80% of USB 3.0. This is a hardware constraint, not an architecture problem. |
-
----
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Opening the Same Device Twice
-
-**What people do:** Call `create_capture(device_path)` and `.open()` per region or per streaming start without checking if the path is already open.
-
-**Why it's wrong:** V4L2 returns `EBUSY` when a second fd opens a device already streaming. The second `open()` raises `RuntimeError` and the streaming loop fails to start.
-
-**Do this instead:** Route all capture access through `CaptureRegistry`. The key-by-path guarantee means one backend per physical device, regardless of how many regions reference it.
-
-### Anti-Pattern 2: Storing Device Assignments as Integer Indices
-
-**What people do:** Store `camera_device` as `0`, `1`, `2` matching `cv2.VideoCapture(0)`.
-
-**Why it's wrong:** Device indices are not stable across reboots or USB re-attach (confirmed in project memory: `feedback_docker_native.md`). `/dev/video0` today may be `/dev/video2` after USB re-plug. An integer index silently points at the wrong camera after any USB event.
-
-**Do this instead:** Store absolute device paths (`/dev/video0`, `/dev/video2`). Display the human-readable name from `VIDIOC_QUERYCAP` (`card` field) in the UI, but persist the path. Detect path-no-longer-valid at `CaptureRegistry.acquire()` time and surface the error to the frontend via the `/api/cameras` endpoint showing the device as unavailable.
-
-### Anti-Pattern 3: Fetching Frames Serially Across Multiple Cameras
-
-**What people do:** `await camera_a.get_frame()` then `await camera_b.get_frame()` sequentially in the frame loop.
-
-**Why it's wrong:** Each `get_frame()` is non-blocking (reader thread runs independently), but if either camera is stale or mid-reconnect, sequential calls compound wait times. With N cameras, N timeouts stack up, blowing the 50Hz frame budget.
-
-**Do this instead:**
 ```python
-frames = await asyncio.gather(*(
-    registry.get(device).get_frame()
-    for device in unique_devices
-), return_exceptions=True)
+def _build_drgb_packet(timeout_s: int, rgb: list[tuple[int,int,int]]) -> bytes:
+    return bytes([0x02, timeout_s]) + bytes(v for r,g,b in rgb for v in (r,g,b))
+
+def _build_dnrgb_packet(timeout_s: int, start: int,
+                        rgb: list[tuple[int,int,int]]) -> bytes:
+    return bytes([0x04, timeout_s, (start >> 8) & 0xFF, start & 0xFF]) \
+           + bytes(v for r,g,b in rgb for v in (r,g,b))
 ```
-Handle `RuntimeError` per-device without blocking other cameras.
 
-### Anti-Pattern 4: Blocking the Event Loop in the Enumerator
+### WLED Device Discovery and Configuration
 
-**What people do:** Call `enumerate_v4l2_devices()` directly in a FastAPI route handler.
+```
+Frontend WledPage mounts
+  -> GET /api/wled/devices
+  <- [{id, name, ip, port, led_count, mac, segments: [...]}]
 
-**Why it's wrong:** Probing 32 `/dev/videoN` paths involves syscalls. On slow USB hubs or unresponsive virtual devices, a single probe can block for tens of milliseconds, starving other requests.
+User adds device (types IP):
+  -> POST /api/wled/devices {ip: "192.168.1.x"}
+  Backend: GET http://{ip}/json/info
+    extracts: name (device "name" field), led_count ("leds.count"), mac ("mac")
+  <- 201 {id, name, ip, port:21324, led_count, mac}
 
-**Do this instead:**
-```python
-@router.get("/api/cameras")
-async def list_cameras():
-    devices = await asyncio.to_thread(enumerate_v4l2_devices)
-    return devices
+User opens StripPainter for a device:
+  -> GET /api/wled/devices/{id}/segments
+  <- [{id, region_id, led_start, led_end, region_name}]
+  StripPainter renders horizontal bar (2-4px per LED, scrollable)
+  User drags to select LED range, clicks region name to assign
+  -> PUT /api/wled/devices/{id}/segments [{led_start, led_end, region_id}, ...]
+  <- 200 [{id, ...}]
+```
+
+### Home Assistant Control
+
+```
+HA automation fires:
+  POST /api/ha/start
+  body: {"config_id": "...", "target_hz": 25}
+  -> app.state.coordinator.start(config_id, target_hz)
+  <- 200 {"status": "starting"}
+
+  POST /api/ha/stop
+  -> app.state.coordinator.stop()
+  <- 200 {"status": "stopping"}
+
+  POST /api/ha/camera
+  body: {"entertainment_config_id": "...", "camera_stable_id": "..."}
+  -> DB UPSERT camera_assignments
+  <- 200 {"status": "ok"}
+
+  POST /api/ha/zone
+  body: {"config_id": "..."}
+  -> DB UPSERT selected_configs (id=1, config_id=?)
+  <- 200 {"status": "ok"}
+```
+
+HA uses `rest_command` in `configuration.yaml`. No auth header required (this API has no auth). All four endpoints are write-only — HA does not need to read state back, it drives state changes.
+
+### Zone Persistence Fix
+
+The bug: entertainment config selection lives only in React local state, lost on page reload; the Start/Stop button does not reflect actual streaming state on first render.
+
+```
+Current (broken):
+  user selects config -> useState('') in component -> lost on reload
+  streaming state unknown until WS connects
+
+Fixed:
+  Config selection:
+    user selects config
+    -> PUT /api/capture/selected-config {"config_id": "..."}
+    -> DB UPSERT selected_configs SET config_id=? WHERE id=1
+
+  Page load:
+    -> GET /api/capture/selected-config
+    <- {"config_id": "..." | null}
+    -> GET /ws/status (existing) -> {state: "streaming"|"idle"|...}
+    dropdown pre-populated, button state correct before any user action
+```
+
+New DB table (single-row pattern, same as `bridge_config`):
+```sql
+CREATE TABLE IF NOT EXISTS selected_configs (
+    id INTEGER PRIMARY KEY,
+    config_id TEXT NOT NULL
+);
 ```
 
 ---
 
-## Integration Points
+## Recommended File Structure (New Files Only)
 
-### External Services
+```
+Backend/
++-- routers/
+|   +-- wled.py              GET/POST/DELETE /api/wled/devices + segments
+|   +-- ha.py                POST /api/ha/start|stop|camera|zone
+|   +-- capture.py           ADD: GET/PUT /api/capture/selected-config
++-- services/
+|   +-- wled_service.py      WledService: UDP sockets, DRGB builder, process_frame()
+|   +-- streaming_coordinator.py  Thin fan-out: StreamingService + WledService
++-- models/
+    +-- wled.py              Pydantic: WledDevice, WledSegment, WledSegmentAssignment
 
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| V4L2 kernel subsystem | Direct ioctl via `fcntl.ioctl` — same approach already used in `capture_v4l2.py` | `VIDIOC_QUERYCAP` ioctl constant `0x80685600` and capability flag `0x01` are already proven in the codebase |
-| Docker device passthrough | `devices:` list in `docker-compose.yaml` | Compose does not support wildcards (`/dev/video*`). Must list devices explicitly or use `cgroup_rules` — see pitfalls. |
+Frontend/src/
++-- components/
+|   +-- WledPage.tsx         WLED tab: device list, add/remove
+|   +-- StripPainter.tsx     1D LED range assignment canvas
++-- store/
+|   +-- useWledStore.ts      devices, segments, selected device
++-- api/
+    +-- wled.ts              HTTP client for /api/wled/*
+```
 
-### Internal Boundaries
-
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| `cameras.py` router ↔ `CameraEnumerator` | Direct async call via `to_thread` | Enumerator is stateless, no shared state |
-| `StreamingService` ↔ `CaptureRegistry` | Registry passed in constructor: `StreamingService(db, capture_registry, broadcaster)` — replaces current single `capture` arg | `StreamingService` acquires needed backends at `start()` time, releases all at `stop()` |
-| `preview_ws.py` ↔ `CaptureRegistry` | `app.state.capture_registry` — same pattern as current `app.state.capture` | Preview WS must not hold registry references between requests — acquire and release per connection |
-| Frontend `CameraSelector` ↔ `/api/cameras` | REST GET on component mount | Camera list fetched once, refreshed on user request (no polling needed) |
-| Frontend `CameraSelector` ↔ `regions.ts` | `updateRegion(id, {camera_device})` — reuses existing PUT `/api/regions/{id}` | Only adds `camera_device` field to the already-existing `UpdateRegionRequest` Pydantic model |
+**main.py changes:** Replace `app.state.streaming` (StreamingService) with `app.state.coordinator` (StreamingCoordinator). The coordinator owns the StreamingService instance. Update `routers/capture.py` to call `app.state.coordinator.start/stop` instead of `app.state.streaming.start/stop`.
 
 ---
 
-## Build Order
+## Architectural Patterns
 
-Dependencies between components determine implementation sequence:
+### Pattern 1: Coordinator as Thin Fan-out, Services as Pure Sinks
+
+**What:** `StreamingCoordinator` owns the single frame loop (moved out of `StreamingService`). On each iteration it builds the per-region color cache once, then calls `hue_service.send(color_cache)` and `wled_service.send(frame, color_cache)`. Neither sub-service runs its own loop.
+
+**Why:** Avoids two competing `wait_for_new_frame()` callers on the same CaptureBackend (the threading model does not support concurrent waiters — the event is cleared before waiting). Single loop also ensures Hue and WLED updates are always in sync within one frame.
+
+**Tradeoff:** `StreamingService` must be refactored to expose a `send(color_cache)` method rather than running its own loop. This is a moderate change to an existing service with 167+ tests — plan for test updates.
+
+**Alternative if refactor is too risky:** Keep `StreamingService._frame_loop` intact and add a callback hook (`on_frame: Callable[[frame, color_cache], None]`) that the coordinator sets. WLED processing runs inside this callback. Looser coupling, no test changes, but slightly less clean.
+
+### Pattern 2: WledService as Stateless Packet Builder with Persistent Sockets
+
+**What:** `WledService.__init__` opens one `socket.AF_INET, socket.SOCK_DGRAM` socket per WLED device and stores them in `_sockets: dict[str, socket.socket]`. `process_frame()` builds packets and calls `socket.sendto()` synchronously — no thread, no asyncio. Sockets are closed in `WledService.stop()`.
+
+**Why persistent sockets:** Socket creation is ~10µs on Linux. At 50 Hz with 3 devices that is 1.5ms/s of pure overhead. More importantly, the OS can optimize the send buffer for a long-lived socket.
+
+**Why synchronous sendto:** UDP `sendto()` for a ~900 byte packet to a LAN address returns in under 50µs. The asyncio overhead of `loop.sock_sendto()` or `asyncio.to_thread()` exceeds the send time. Synchronous is correct here.
+
+### Pattern 3: StripPainter as a Plain Canvas (Not Konva)
+
+**What:** `StripPainter` renders a horizontal scrollable `<canvas>` element. Each LED is a 2-4px wide column. Pointer events handle drag-to-select a range. A sidebar lists all canvas regions — clicking assigns the selected LED range to that region and colors the strip segment accordingly.
+
+**Why not Konva:** StripPainter is a 1D range selector, not a 2D polygon editor. Konva's scene graph and event model are designed for 2D — the overhead (hit detection, layers, transformers) is entirely wasted on a linear strip. A plain canvas is 10x simpler to implement and performs better for 300-600 LED columns.
+
+**Scrolling:** 600 LEDs at 3px each = 1800px — render the full strip in a horizontally scrollable div. At 1200 LEDs (WLED max) = 3600px, still tractable. No virtualization needed.
+
+### Pattern 4: HA Router as a Thin Adapter
+
+**What:** `routers/ha.py` translates HA-friendly endpoint shapes into calls on `app.state.coordinator` and the DB. Zero business logic. Each handler is 5-10 lines.
+
+**Why a separate router:** HA's `rest_command` configuration needs stable, descriptive URLs (`/api/ha/start` vs `/api/capture/start`). Keeping HA endpoints in a dedicated file also makes them easy to find, document, and eventually add HA-specific auth if needed. The existing `capture.py` router is not modified.
+
+---
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Embedding WLED Logic in StreamingService
+
+**What people do:** Add UDP send calls inside `streaming_service.py`'s `_frame_loop`.
+
+**Why it's wrong:** `streaming_service.py` is Hue-specific — it imports `hue_entertainment_pykit`, manages DTLS reconnect, and handles Hue entertainment config activation. Mixing WLED logic couples two completely independent output devices. The 167+ existing tests would need WLED mocks.
+
+**Do this instead:** Introduce `StreamingCoordinator`. `streaming_service.py` stays unchanged (or gains only a `send()` method).
+
+### Anti-Pattern 2: Two Separate Frame Loops for Hue and WLED
+
+**What people do:** Give WLED its own `asyncio.Task` that calls `wait_for_new_frame()` independently.
+
+**Why it's wrong:** `CaptureBackend.wait_for_new_frame()` clears the internal `threading.Event` before waiting. Two concurrent callers will race: one will see no event and time out, creating frame drops. The existing backend threading model is explicitly single-consumer.
+
+**Do this instead:** One frame loop in the coordinator; pass the decoded frame reference to both sinks.
+
+### Anti-Pattern 3: Per-Frame UDP Socket Creation
+
+**What people do:** `socket.socket(AF_INET, SOCK_DGRAM).sendto(...)` inside `process_frame()`.
+
+**Why it's wrong:** See Pattern 2 rationale — ~10µs overhead per call, no OS send-buffer optimization.
+
+**Do this instead:** Persistent sockets keyed by device IP in `WledService._sockets`.
+
+### Anti-Pattern 4: WLED Data Columns in the `regions` Table
+
+**What people do:** Add `wled_device_id`, `led_start`, `led_end` columns to `regions`.
+
+**Why it's wrong:** A canvas region is abstract. One region can map to a Hue channel AND a WLED LED range simultaneously. Embedding device-specific columns in `regions` makes this many-to-many relationship impossible and conflates the canvas model with output device models.
+
+**Do this instead:** The `wled_strip_assignments` join table with explicit foreign keys to both `wled_devices` and `regions`.
+
+### Anti-Pattern 5: Polling for Zone Persistence
+
+**What people do:** Frontend polls `GET /ws/status` every second to check if the selected config is still valid.
+
+**Why it's wrong:** The WebSocket connection already delivers state changes. Polling is redundant. The persistence fix needs only one additional REST call at page load (`GET /api/capture/selected-config`), not ongoing polling.
+
+**Do this instead:** `GET /api/capture/selected-config` on mount (once), then rely on the existing `/ws/status` WebSocket for live streaming state.
+
+---
+
+## Database Schema Additions
+
+```sql
+-- WLED device registry
+CREATE TABLE IF NOT EXISTS wled_devices (
+    id TEXT PRIMARY KEY,           -- UUID generated by backend
+    name TEXT NOT NULL,            -- from /json/info "name"
+    ip TEXT NOT NULL UNIQUE,
+    port INTEGER NOT NULL DEFAULT 21324,
+    led_count INTEGER NOT NULL,    -- from /json/info "leds.count"
+    mac TEXT,                      -- from /json/info "mac"
+    added_at TEXT NOT NULL         -- ISO8601 timestamp
+);
+
+-- LED range -> canvas region mappings (join table)
+CREATE TABLE IF NOT EXISTS wled_strip_assignments (
+    id TEXT PRIMARY KEY,
+    wled_device_id TEXT NOT NULL REFERENCES wled_devices(id) ON DELETE CASCADE,
+    region_id TEXT NOT NULL REFERENCES regions(id) ON DELETE CASCADE,
+    led_start INTEGER NOT NULL,
+    led_end INTEGER NOT NULL       -- inclusive
+);
+
+-- Persisted entertainment config selection (zone persistence fix)
+-- Single-row pattern, same as bridge_config (id always = 1)
+CREATE TABLE IF NOT EXISTS selected_configs (
+    id INTEGER PRIMARY KEY,
+    config_id TEXT NOT NULL
+);
+```
+
+All three tables are additive — no existing tables are modified.
+
+---
+
+## New API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/wled/devices` | List all WLED devices with led_count and segment assignments |
+| POST | `/api/wled/devices` | Add device by IP (probes `/json/info` for name, led_count, mac) |
+| DELETE | `/api/wled/devices/{id}` | Remove device and all its strip assignments (CASCADE) |
+| GET | `/api/wled/devices/{id}/segments` | Get strip assignments for one device |
+| PUT | `/api/wled/devices/{id}/segments` | Replace all strip assignments for one device |
+| POST | `/api/ha/start` | Start streaming — body: `{config_id, target_hz?}` |
+| POST | `/api/ha/stop` | Stop streaming |
+| POST | `/api/ha/camera` | Assign camera — body: `{entertainment_config_id, camera_stable_id}` |
+| POST | `/api/ha/zone` | Set selected config — body: `{config_id}` |
+| GET | `/api/capture/selected-config` | Get persisted selected `config_id` |
+| PUT | `/api/capture/selected-config` | Persist selected `config_id` — body: `{config_id}` |
+
+---
+
+## Build Order (Phase Dependencies)
+
+Three independent tracks with one cross-track dependency:
 
 ```
-Step 1: DB migration (camera_device column)
-            |
-            v  (required by all backend changes)
-Step 2: CameraEnumerator service
-        /api/cameras router
-            |
-            v  (required by streaming + preview changes)
-Step 3: CaptureRegistry service
-            |
-            +-------------------------------+
-            v                               v
-Step 4a: StreamingService modification    Step 4b: preview_ws.py modification
-         (per-zone camera dispatch)                 (?device= query param)
-         regions.py CRUD update
-            |
-            +-------------------------------+
-            v
-Step 5: Frontend cameras.ts API client
-        Region type update (camera_device field)
-            |
-            v
-Step 6: CameraSelector component
-        LightPanel integration
-            |
-            v
-Step 7: docker-compose.yaml device list expansion
-        (can be done anytime after step 3, listed last because
-         it only matters at container startup)
+Track A — Zone persistence fix (no dependencies, lowest risk, build first)
+  Step A1: DB migration — selected_configs table (database.py)
+  Step A2: GET/PUT /api/capture/selected-config (capture.py)
+  Step A3: Frontend — load on mount, pre-populate dropdown, reflect WS state
+
+Track B — WLED streaming
+  Step B1: DB migrations — wled_devices + wled_strip_assignments tables
+  Step B2: services/wled_service.py — UDP socket, DRGB builder, process_frame()
+  Step B3: routers/wled.py — device CRUD + segment endpoints
+  Step B4: services/streaming_coordinator.py
+           Wire into main.py: app.state.coordinator (replaces app.state.streaming)
+           Update routers/capture.py to call coordinator
+  Step B5: Frontend — api/wled.ts, useWledStore, WledPage, StripPainter
+
+Track C — HA router (depends on B4: coordinator must exist)
+  Step C1: routers/ha.py — 4 thin adapter endpoints
 ```
 
-Steps 4a and 4b are independent of each other and can be developed in parallel.
-Steps 5-6 (frontend) are independent of 4a/4b (backend) and can be developed in parallel once step 1-3 are complete.
+Recommended order: A1-A3 → B1-B3 → B4 → C1 → B5
 
-**Natural phase boundary:** Steps 1-3 (infrastructure: migration + enumerator + registry) form a unit that can be tested independently — `GET /api/cameras` should return device list before any streaming changes are made. Steps 4-7 are the integration phase.
+**Why Track A first:** It is a self-contained bug fix with zero risk of breaking existing streaming. Completing it first provides a working persistence layer before the streaming refactor.
+
+**Why B4 before C1:** `ha.py` calls `app.state.coordinator` — the coordinator must be wired in before HA routes can be tested.
+
+**Why B5 last:** The StripPainter UI is the most novel component with no existing UI pattern in the codebase. Keeping it last allows the backend API to stabilize before the frontend is built against it.
+
+---
+
+## Integration Points with Existing Modules
+
+| New Component | Existing Module | Integration |
+|---------------|----------------|-------------|
+| `StreamingCoordinator` | `streaming_service.py` | Owns a `StreamingService` instance; delegates Hue-specific logic entirely to it |
+| `StreamingCoordinator` | `capture_service.CaptureRegistry` | Receives registry in constructor; acquires/releases via the same pattern as current `StreamingService` |
+| `StreamingCoordinator` | `status_broadcaster.py` | Passes broadcaster to sub-services; coordinator emits unified state via same push_state interface |
+| `WledService` | `color_math.py` | Calls `extract_region_color(frame, mask)` — no changes to color_math needed |
+| `WledService` | `database.py` | Reads `wled_strip_assignments` at stream start to build segment-to-mask map |
+| `routers/ha.py` | `routers/capture.py` | Both call the coordinator; `capture.py` is modified only to swap `app.state.streaming` to `app.state.coordinator` |
+| `routers/wled.py` | `database.py` | Reads/writes `wled_devices` and `wled_strip_assignments` |
+| `WledPage.tsx` | `App.tsx` | Add `'wled'` to `Page` type union; add nav tab button |
+| `StripPainter.tsx` | `useRegionStore` | Reads `regions` (existing store, no changes) to render zone name list |
+
+---
+
+## Confidence Assessment
+
+| Area | Confidence | Source |
+|------|------------|--------|
+| WLED DRGB/DNRGB packet format | HIGH | kno.wled.ge/interfaces/udp-realtime/ (verified 2026-04) |
+| WLED port 21324 default | HIGH | Official WLED docs |
+| WLED DRGB 490 LED limit per packet | HIGH | Official WLED docs — DNRGB required for >490 LEDs |
+| WLED /json/info field names | HIGH | kno.wled.ge/interfaces/json-api/ (verified 2026-04) |
+| WLED DDP port 4048 | HIGH | kno.wled.ge/interfaces/ddp/ (verified 2026-04) — but DRGB recommended for this use case |
+| HA REST /api/services/{domain}/{service} | HIGH | developers.home-assistant.io (verified 2026-04) |
+| HA auth requirement | HIGH | Bearer token required — but this project has no auth, so HA must store no-auth URLs |
+| StreamingCoordinator fan-out pattern | MEDIUM | Derived from codebase structure; no direct prior art |
+| StripPainter canvas approach | MEDIUM | Standard 1D range selector pattern; WLED-specific UI varies across projects |
+
+---
+
+## Preserved: v1.1 Architecture (for reference)
+
+The v1.1 multi-camera architecture document covers:
+- `CaptureRegistry` (already shipped)
+- Per-zone camera dispatch in `streaming_service.py` (already shipped)
+- `camera_assignments` DB table (already shipped)
+- `known_cameras` DB table (already shipped)
+
+These are not repeated here. The v1.3 architecture builds on top of v1.1 without modifying any of its components.
 
 ---
 
 ## Sources
 
-- Direct code inspection: `Backend/services/capture_service.py` — abstract base, `create_capture` factory
-- Direct code inspection: `Backend/services/capture_v4l2.py` — ioctl constants, QUERYCAP pattern already established
-- Direct code inspection: `Backend/services/streaming_service.py` — `_frame_loop`, `_load_channel_map`, reconnect logic
-- Direct code inspection: `Backend/main.py` — lifespan, single `capture` instantiation, `app.state` layout
-- Direct code inspection: `Backend/routers/capture.py` — capture router endpoints
-- Direct code inspection: `Backend/routers/preview_ws.py` — WebSocket preview, single `app.state.capture` reference
-- Direct code inspection: `Backend/database.py` — schema, existing `ALTER TABLE` migration pattern
-- Direct code inspection: `Frontend/src/api/regions.ts` — Region type, `updateRegion` signature
-- Direct code inspection: `Frontend/src/store/useRegionStore.ts` — Region model in store
-- Direct code inspection: `Frontend/src/components/LightPanel.tsx` — current UI integration point
-- Prior v1.0 architecture research: `.planning/research/architecture.md` (2026-03-23)
-- Project memory: `feedback_docker_native.md` — device path instability on USB re-attach (informs anti-pattern 2)
+- Direct code inspection: `Backend/services/streaming_service.py` — frame loop, channel map, coordinator integration point
+- Direct code inspection: `Backend/services/capture_service.py` — CaptureRegistry, CaptureBackend, wait_for_new_frame threading model
+- Direct code inspection: `Backend/services/color_math.py` — extract_region_color, build_polygon_mask (shared abstraction)
+- Direct code inspection: `Backend/main.py` — app.state layout, lifespan pattern
+- Direct code inspection: `Backend/database.py` — existing schema, ALTER TABLE migration pattern
+- Direct code inspection: `Frontend/src/App.tsx` — Page type, tab structure
+- Direct code inspection: `Frontend/src/store/useRegionStore.ts` — Region model
+- [WLED UDP Realtime docs](https://kno.wled.ge/interfaces/udp-realtime/) — DRGB/DNRGB packet format, port 21324, 490 LED limit — HIGH confidence
+- [WLED DDP docs](https://kno.wled.ge/interfaces/ddp/) — port 4048, no timecode support — HIGH confidence
+- [WLED JSON API docs](https://kno.wled.ge/interfaces/json-api/) — /json/info fields: name, leds.count, ip, mac — HIGH confidence
+- [HA REST API developer docs](https://developers.home-assistant.io/docs/api/rest/) — /api/services endpoint format, auth — HIGH confidence
 
 ---
 
-*Architecture research for: HuePictureControl v1.1 Multi-Camera Support*
-*Researched: 2026-04-03*
+*Architecture research for: HuePictureControl v1.3 WLED Support, HA Control, Zone Persistence Fix*
+*Researched: 2026-04-14*
