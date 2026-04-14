@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
-status: planning
-stopped_at: v1.1 milestone archived — ready for v1.2
+status: active
+stopped_at: roadmap created — ready for Phase 12
 last_updated: "2026-04-14T22:00:00.000Z"
 last_activity: 2026-04-14
 progress:
@@ -21,14 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Planning next milestone (v1.2 Wireless Input)
+**Current focus:** Phase 12 — Virtual Device Infrastructure
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 12 — Virtual Device Infrastructure
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-14 — Milestone v1.2 started
+Status: Not started
+Last activity: 2026-04-14 — v1.2 roadmap created (research-informed)
+
+```
+v1.2 Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4 phases)
+```
 
 ## Performance Metrics
 
@@ -58,6 +62,12 @@ Last activity: 2026-04-14 — Milestone v1.2 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [v1.2 roadmap]: Docker dropped — native Linux deployment; no containerization phases
+- [v1.2 roadmap]: Static device numbering: video10 = Miracast, video11 = scrcpy — deterministic, no race conditions
+- [v1.2 roadmap]: scrcpy writes directly to v4l2loopback via --v4l2-sink; FFmpeg only on Miracast path (RTSP transcode)
+- [v1.2 roadmap]: producer_ready gate mandatory — CaptureRegistry.acquire() must not open virtual device until first frame written
+- [v1.2 roadmap]: FFmpeg stderr=DEVNULL + -loglevel quiet is production default to avoid pipe deadlock
+- [v1.2 roadmap]: Phase 14 (Miracast) is hardware-gated — NIC P2P support must be verified via iw before implementation
 - [v1.3 roadmap]: WLED streaming uses stdlib socket (UDP) — no new library; DRGB for <=490 LEDs, DNRGB for >490 (auto-selected by WledService)
 - [v1.3 roadmap]: WLED device registration uses existing httpx to fetch /json/info from device IP before persisting
 - [v1.3 roadmap]: WLED channels use shared channel abstraction — painted ranges appear in light panel alongside Hue segments, same drag-drop assignment
@@ -73,13 +83,14 @@ None yet.
 - Phase 3.1 inserted after Phase 3: Auto-Mapping from Entertainment Config — auto-generate screen regions from channel positions before building manual canvas editor (user decision 2026-03-24)
 - v1.3 Phases 16-19 added 2026-04-14: Zone persistence fixes, WLED backend+streaming, HA control endpoints, WLED strip paint UI
 - v1.1 archived 2026-04-14: 5 phases, 10 plans, 7 requirements left unchecked (known gaps)
+- v1.2 Phases 12-15 replaced 2026-04-14: pre-research placeholders removed; research-informed phases written; Docker phase (old Phase 15) removed entirely
 
 ### Blockers/Concerns
 
-(None for current milestone — cleared at v1.1 close)
+- Phase 14 (Miracast) is hardware-gated: host NIC P2P support unknown until `iw list` spike is run. If NIC lacks P2P, Phase 14 scope reduces to "report unsupported" only.
 
 ## Session Continuity
 
 Last session: 2026-04-14T22:00:00.000Z
-Stopped at: v1.1 milestone archived — ready for v1.2
+Stopped at: roadmap created — ready for Phase 12
 Resume file: .planning/ROADMAP.md

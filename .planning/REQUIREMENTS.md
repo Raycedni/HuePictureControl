@@ -83,34 +83,34 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VCAM-01 | TBD | Pending |
-| VCAM-02 | TBD | Pending |
-| VCAM-03 | TBD | Pending |
-| WPIP-01 | TBD | Pending |
-| WPIP-02 | TBD | Pending |
-| WPIP-03 | TBD | Pending |
-| SCPY-01 | TBD | Pending |
-| SCPY-02 | TBD | Pending |
-| SCPY-03 | TBD | Pending |
-| SCPY-04 | TBD | Pending |
-| MIRA-01 | TBD | Pending |
-| MIRA-02 | TBD | Pending |
-| MIRA-03 | TBD | Pending |
-| MIRA-04 | TBD | Pending |
-| WAPI-01 | TBD | Pending |
-| WAPI-02 | TBD | Pending |
-| WAPI-03 | TBD | Pending |
-| WAPI-04 | TBD | Pending |
-| WFNT-01 | TBD | Pending |
-| WFNT-02 | TBD | Pending |
-| WFNT-03 | TBD | Pending |
-| WFNT-04 | TBD | Pending |
+| VCAM-01 | Phase 12 | Pending |
+| VCAM-02 | Phase 12 | Pending |
+| VCAM-03 | Phase 12 | Pending |
+| WPIP-01 | Phase 12 | Pending |
+| WPIP-02 | Phase 12 | Pending |
+| WPIP-03 | Phase 12 | Pending |
+| WAPI-01 | Phase 12 | Pending |
+| WAPI-04 | Phase 12 | Pending |
+| SCPY-01 | Phase 13 | Pending |
+| SCPY-02 | Phase 13 | Pending |
+| SCPY-03 | Phase 13 | Pending |
+| SCPY-04 | Phase 13 | Pending |
+| WAPI-03 | Phase 13 | Pending |
+| MIRA-01 | Phase 14 | Pending |
+| MIRA-02 | Phase 14 | Pending |
+| MIRA-03 | Phase 14 | Pending |
+| MIRA-04 | Phase 14 | Pending |
+| WAPI-02 | Phase 14 | Pending |
+| WFNT-01 | Phase 15 | Pending |
+| WFNT-02 | Phase 15 | Pending |
+| WFNT-03 | Phase 15 | Pending |
+| WFNT-04 | Phase 15 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22 (pending roadmap)
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-14*
-*Last updated: 2026-04-14 after initial definition*
+*Last updated: 2026-04-14 after roadmap creation*

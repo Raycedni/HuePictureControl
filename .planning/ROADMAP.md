@@ -43,66 +43,67 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 **Milestone Goal:** Enable any Windows or Android device to wirelessly mirror its screen to the system, replacing or supplementing the physical HDMI capture card as an input source.
 
-- [ ] **Phase 12: Virtual Camera & Pipeline Infrastructure** - v4l2loopback management, FFmpeg pipeline manager, wireless API skeleton, virtual device integration with camera system
-- [ ] **Phase 13: Miracast Receiver Integration** - MiracleCast WiFi Direct sink, NIC capability detection, Miracast → FFmpeg → v4l2loopback pipeline
-- [ ] **Phase 14: scrcpy Android Fallback & Wireless UI** - ADB wireless management, scrcpy → v4l2loopback pipeline, frontend wireless source controls
-- [ ] **Phase 15: Wireless Docker & Polish** - Docker image with wireless dependencies, container capabilities, WiFi adapter passthrough, documentation
+- [ ] **Phase 12: Virtual Device Infrastructure** - v4l2loopback management, FFmpeg pipeline manager with lifecycle safety, capabilities API, session list endpoint
+- [ ] **Phase 13: scrcpy Android Integration** - ADB WiFi connect, scrcpy --v4l2-sink pipeline, producer_ready gate, supervised watchdog, scrcpy API endpoints
+- [ ] **Phase 14: Miracast Windows Integration** - NIC P2P detection, miraclecast daemon lifecycle, FFmpeg RTSP pipeline, Miracast API endpoints (hardware-gated)
+- [ ] **Phase 15: Wireless Frontend Tab** - Dedicated wireless tab, scrcpy IP form, Miracast section, wireless sources in camera selector
 
 ## Phase Details (v1.2)
 
-### Phase 12: Virtual Camera & Pipeline Infrastructure
-**Goal**: The backend can create and destroy v4l2loopback virtual camera devices on demand and manage FFmpeg subprocesses that pipe arbitrary input streams into them. Virtual cameras appear in the existing camera API alongside physical devices.
-**Depends on**: Phase 11 (v1.1 Docker multi-device complete)
+### Phase 12: Virtual Device Infrastructure
+**Goal**: The backend can create and destroy v4l2loopback virtual camera devices on demand, manage FFmpeg subprocesses with safe lifecycle controls, report system wireless readiness, and list active sessions — ready to host any wireless input without changing downstream pipeline code.
+**Depends on**: Phase 11 (v1.1 complete)
 **Requirements**: VCAM-01, VCAM-02, VCAM-03, WPIP-01, WPIP-02, WPIP-03, WAPI-01, WAPI-04
 **Success Criteria** (what must be TRUE):
-  1. Starting a wireless source creates a virtual V4L2 device (e.g. `/dev/video10`) that is readable by the existing `V4L2Capture` backend
-  2. `GET /api/cameras` returns virtual devices alongside physical ones, each tagged with `source_type: "wireless"`
-  3. Stopping a wireless source kills the FFmpeg pipeline and removes the virtual device within 5 seconds
-  4. `GET /api/wireless/capabilities` reports installed dependency versions and system readiness
-  5. Service shutdown cleanly destroys all virtual devices and kills all FFmpeg subprocesses
+  1. The backend creates a v4l2loopback virtual device at a static node (e.g. `/dev/video10`) on demand and the existing `V4L2Capture` can open it without modification
+  2. Stopping a virtual session destroys the `/dev/videoN` node within 5 seconds; service shutdown destroys all virtual devices and kills all FFmpeg subprocesses cleanly
+  3. An FFmpeg subprocess failure is detected within 3 seconds and triggers a supervised restart with exponential backoff
+  4. `CaptureRegistry.acquire()` blocks until the FFmpeg producer has written its first frame into the virtual device (producer_ready gate prevents blank-frame acquisition)
+  5. `GET /api/wireless/capabilities` returns NIC P2P support status, installed tool versions (ffmpeg, scrcpy, adb, iw), and a ready/not-ready assessment
+  6. `GET /api/wireless/sessions` lists all active wireless sessions with source type and status
 **Plans**: TBD
 
 ---
 
-### Phase 13: Miracast Receiver Integration
-**Goal**: Windows PCs and older Android devices can discover and connect to the system via Miracast (WiFi Direct), and the mirrored display feeds into the existing capture pipeline as a virtual camera.
+### Phase 13: scrcpy Android Integration
+**Goal**: An Android device connected to the same WiFi network can be mirrored to the system via ADB over WiFi and scrcpy, producing a virtual camera that feeds the existing capture-to-lights pipeline.
+**Depends on**: Phase 12
+**Requirements**: SCPY-01, SCPY-02, SCPY-03, SCPY-04, WAPI-03
+**Success Criteria** (what must be TRUE):
+  1. User POSTs an Android device IP; the backend connects via ADB WiFi and starts scrcpy with `--v4l2-sink`, producing a virtual V4L2 device in under 10 seconds
+  2. `GET /api/cameras` includes the scrcpy virtual device tagged as a wireless source, selectable in any entertainment zone
+  3. Assigning the scrcpy virtual camera to an entertainment zone drives Hue lights from the mirrored Android screen — same latency as physical capture
+  4. A brief WiFi interruption (device momentarily unreachable) triggers auto-reconnect; streaming resumes without user intervention
+  5. DELETE to stop a scrcpy session disconnects ADB, kills the scrcpy process, and removes the virtual device node
+**Plans**: TBD
+
+---
+
+### Phase 14: Miracast Windows Integration
+**Goal**: A Windows PC on the same network can project its screen to the system via Miracast (WiFi Direct), and the mirrored display becomes a virtual camera consumable by the lighting pipeline. Gated on NIC P2P capability.
 **Depends on**: Phase 12
 **Requirements**: MIRA-01, MIRA-02, MIRA-03, MIRA-04, WAPI-02
 **Success Criteria** (what must be TRUE):
-  1. A Windows PC on the same network sees "HuePictureControl" (or configured name) in its Cast/Project menu (Win+K)
-  2. Connecting from Windows delivers a live video stream that appears as a virtual V4L2 device consumable by the streaming pipeline
-  3. `GET /api/wireless/capabilities` correctly reports whether the WiFi adapter supports P2P/WiFi Direct mode
-  4. Starting streaming with the Miracast virtual camera assigned to an entertainment zone drives Hue lights from the wirelessly mirrored content
-  5. Disconnecting the Miracast client cleans up the FFmpeg pipeline and virtual device automatically
+  1. `GET /api/wireless/capabilities` correctly reports whether the host NIC supports WiFi Direct P2P mode (parsed from `iw list`)
+  2. When the Miracast receiver is active, a Windows PC on the same network sees the system as a Cast target in the Win+K project menu
+  3. Connecting from Windows delivers a live video stream that appears as a virtual V4L2 device readable by the existing capture pipeline
+  4. Assigning the Miracast virtual camera to an entertainment zone drives Hue lights from the wirelessly mirrored Windows screen
+  5. Disconnecting the Windows client automatically tears down the FFmpeg pipeline and destroys the virtual device node
 **Plans**: TBD
 
 ---
 
-### Phase 14: scrcpy Android Fallback & Wireless UI
-**Goal**: Newer Android devices that lack Miracast can mirror their screen via scrcpy over WiFi, and the frontend provides controls to start/stop all wireless input sources.
-**Depends on**: Phase 12
-**Requirements**: SCPY-01, SCPY-02, SCPY-03, WAPI-03, WFNT-01, WFNT-02
+### Phase 15: Wireless Frontend Tab
+**Goal**: The web UI has a dedicated wireless tab where users can see NIC status, start and stop wireless sessions, and wireless sources appear in the camera selector alongside physical devices.
+**Depends on**: Phase 13, Phase 14
+**Requirements**: WFNT-01, WFNT-02, WFNT-03, WFNT-04
 **Success Criteria** (what must be TRUE):
-  1. User provides an Android device IP via the API; the backend connects via ADB and starts scrcpy, producing a virtual V4L2 device
-  2. The mirrored Android screen drives Hue lights when assigned to an entertainment zone — same pipeline as physical capture
-  3. The frontend camera selector shows wireless sources alongside physical cameras
-  4. The frontend provides start/stop controls for Miracast and scrcpy sessions
-  5. Stopping a scrcpy session disconnects ADB and cleans up the virtual device
+  1. A "Wireless" tab is present in the navigation; it shows NIC P2P capability status and lists all active wireless sessions with their source type
+  2. The scrcpy section has an IP address input field and Connect/Disconnect buttons; submitting starts a session and the tab shows the live session status
+  3. The Miracast section shows P2P availability; the Start/Stop receiver buttons are disabled with an explanatory message when the NIC lacks P2P support
+  4. Virtual cameras from active wireless sessions appear in the per-zone camera selector dropdown alongside physical USB cameras, indistinguishable to the rest of the pipeline
 **Plans**: TBD
 **UI hint**: yes
-
----
-
-### Phase 15: Wireless Docker & Polish
-**Goal**: The Docker Compose configuration includes all wireless dependencies and capabilities so wireless input works out of the box with `docker compose up`.
-**Depends on**: Phase 13, Phase 14
-**Requirements**: WDCK-01, WDCK-02, WDCK-03
-**Success Criteria** (what must be TRUE):
-  1. The Docker image builds successfully with MiracleCast, scrcpy, FFmpeg, ADB, v4l2loopback-dkms, and `iw` installed
-  2. The container starts with `NET_ADMIN` and `SYS_MODULE` capabilities and can load the v4l2loopback kernel module
-  3. A USB WiFi adapter passed through to the container is usable for WiFi Direct / Miracast receiving
-  4. Documentation explains WiFi adapter requirements, NIC compatibility, and how to verify P2P support
-**Plans**: TBD
 
 ---
 
@@ -191,10 +192,10 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete | 2026-04-14 |
-| 12. Virtual Camera & Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
-| 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
-| 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
-| 15. Wireless Docker & Polish | v1.2 | 0/TBD | Not started | - |
+| 12. Virtual Device Infrastructure | v1.2 | 0/TBD | Not started | - |
+| 13. scrcpy Android Integration | v1.2 | 0/TBD | Not started | - |
+| 14. Miracast Windows Integration | v1.2 | 0/TBD | Not started | - |
+| 15. Wireless Frontend Tab | v1.2 | 0/TBD | Not started | - |
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
 | 17. WLED Backend and Streaming | v1.3 | 0/TBD | Not started | - |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
@@ -203,3 +204,4 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 ---
 *Roadmap created: 2026-03-23*
 *v1.1 shipped: 2026-04-14*
+*v1.2 roadmap updated: 2026-04-14 (research-informed, Docker dropped, native Linux)*
