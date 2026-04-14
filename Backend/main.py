@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -14,7 +15,9 @@ from routers.hue import router as hue_router
 from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
+from routers.wireless import router as wireless_router
 from services.capture_service import CaptureRegistry
+from services.pipeline_manager import PipelineManager
 from services.status_broadcaster import StatusBroadcaster
 from services.streaming_service import StreamingService
 
@@ -46,6 +49,10 @@ async def lifespan(app: FastAPI):
     registry = CaptureRegistry()
     app.state.capture_registry = registry
 
+    # Startup: create PipelineManager for wireless sessions
+    pipeline_manager = PipelineManager(capture_registry=registry)
+    app.state.pipeline_manager = pipeline_manager
+
     # Startup: create StatusBroadcaster and StreamingService
     broadcaster = StatusBroadcaster()
     app.state.broadcaster = broadcaster
@@ -58,6 +65,12 @@ async def lifespan(app: FastAPI):
     # Shutdown: stop streaming if active (before releasing capture)
     if streaming.state not in ("idle",):
         await streaming.stop()
+
+    # Shutdown: stop all wireless sessions (before releasing capture registry)
+    try:
+        await asyncio.wait_for(pipeline_manager.stop_all(), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("PipelineManager stop_all timed out after 5s")
 
     # Shutdown: release all capture backends
     registry.shutdown()
@@ -82,6 +95,7 @@ app.include_router(cameras_router)
 app.include_router(regions_router)
 app.include_router(streaming_ws_router)
 app.include_router(preview_ws_router)
+app.include_router(wireless_router)
 
 
 if __name__ == "__main__":
