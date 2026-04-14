@@ -29,6 +29,16 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - [ ] Scale to 16+ simultaneous light segments
 - [ ] No authentication on the web UI
 
+### Active (v1.3)
+
+- [ ] WLED device discovery and management in a dedicated UI tab
+- [ ] UDP realtime protocol (DDP/DRGB) streaming to WLED ESP32 devices
+- [ ] Paint-on-strip UI for assigning LED pixel ranges to canvas zones
+- [ ] Shared channel-per-area mapping abstraction for Hue and WLED
+- [ ] Home Assistant REST endpoints: select camera, select zone, start/stop streaming
+- [ ] Persist selected entertainment config per camera across page reloads
+- [ ] Dropdown reflects actual streaming state on reload
+
 ### Active (v1.2)
 
 - [ ] Wireless screen mirroring from Windows via Miracast (WiFi Direct) as a virtual camera input
@@ -42,7 +52,7 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 
 - User authentication / multi-user support — single-user local tool
 - Mobile app — web UI is the only interface
-- Non-Hue smart lights — Hue ecosystem only
+- Non-Hue, non-WLED smart lights — only Hue and WLED ecosystems supported
 - Audio reactivity — video/color only
 - Cloud connectivity — fully local, Bridge on LAN
 - Apple AirPlay support — user explicitly scoped to Windows and Android only
@@ -84,6 +94,19 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - Wireless sources appear in camera selector alongside physical devices
 - API for starting/stopping wireless receivers and checking NIC capabilities
 
+## Future Milestone: v1.3 WLED Support, HA Control & Bug Fixes
+
+**Goal:** Expand the system beyond Hue to support WLED (ESP32) LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
+
+**Target features:**
+- WLED device discovery and management in a dedicated tab
+- UDP realtime protocol (DDP/DRGB) for low-latency LED streaming to WLED devices
+- Paint-on-strip UI for assigning LED ranges to canvas zones (designed for 300+ LED strips)
+- Shared channel-per-area mapping code between Hue and WLED
+- Home Assistant REST endpoints: select camera, select zone, start/stop streaming (control-only)
+- Fix: persist selected entertainment config per camera across page reloads
+- Fix: dropdown reflects actual streaming state on reload
+
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
@@ -111,4 +134,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — Phase 10 complete: per-zone camera dropdown in editor UI with live preview switching*
+*Last updated: 2026-04-14 — Milestone v1.3 defined: WLED support, HA control endpoints, zone persistence fix*
