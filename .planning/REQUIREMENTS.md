@@ -135,6 +135,44 @@
 - [ ] **WFNT-01**: Wireless input sources appear in the camera selector alongside physical cameras
 - [ ] **WFNT-02**: UI provides controls to start/stop Miracast receiver and scrcpy sessions
 
+## v1.3 Requirements
+
+### WLED Device Management
+
+- [ ] **WLED-01**: User can add a WLED device by entering its IP address
+- [ ] **WLED-02**: User can remove a WLED device
+- [ ] **WLED-03**: User can see device info for each WLED device (name, LED count, firmware version, connection status)
+- [ ] **WLED-04**: WLED devices are managed in a dedicated tab separate from Hue configuration
+- [ ] **WLED-05**: User can enable/disable individual WLED devices without removing them
+
+### WLED Strip Mapping
+
+- [ ] **WMAP-01**: User can paint LED ranges on a visual strip representation to create channels
+- [ ] **WMAP-02**: Each painted zone on the strip appears as an assignable channel in the light panel dropdown
+- [ ] **WMAP-03**: Painted zones are color-coded per channel for visual clarity
+- [ ] **WMAP-04**: User can adjust channel boundaries by dragging handles between zones
+- [ ] **WMAP-05**: WLED channels are assigned to canvas regions via the same drag-drop workflow as Hue segments
+
+### WLED Streaming
+
+- [ ] **WSTR-01**: Backend streams color data to WLED devices via DRGB UDP protocol (port 21324) at 50-60 Hz
+- [ ] **WSTR-02**: Backend automatically uses DNRGB chunked packets for strips with >490 LEDs
+- [ ] **WSTR-03**: WLED and Hue streaming can run concurrently from the same captured frame
+- [ ] **WSTR-04**: UDP timeout byte is set correctly to prevent strips getting stuck on last color when streaming stops
+
+### Home Assistant Control
+
+- [ ] **HASS-01**: HA can start streaming via REST endpoint (POST /api/ha/start)
+- [ ] **HASS-02**: HA can stop streaming via REST endpoint (POST /api/ha/stop)
+- [ ] **HASS-03**: HA can select the active camera via REST endpoint
+- [ ] **HASS-04**: HA can select the entertainment zone via REST endpoint
+- [ ] **HASS-05**: HA can query current streaming status via GET endpoint
+
+### Bug Fixes
+
+- [ ] **BFIX-01**: Selected entertainment config persists per camera across page reloads
+- [ ] **BFIX-02**: Entertainment config dropdown reflects actual streaming state on page reload
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -144,6 +182,10 @@
 | Live thumbnails in dropdown | Nice-to-have deferred; adds bandwidth overhead |
 | Audio capture | Video/color only — out of project scope |
 | Non-V4L2 devices (Windows DirectShow) | Docker deployment targets Linux only |
+| WLED mDNS auto-discovery | Docker bridge mode blocks multicast — defer to v1.4 with host network migration |
+| WLED DDP protocol | DRGB/DNRGB sufficient for <=490+ LEDs; DDP adds complexity with no benefit for typical strips |
+| HA device management endpoints | HA controls streaming only — WLED/Hue config stays in the web UI |
+| WLED firmware updates | Out of scope — user manages firmware via WLED's own web UI |
 
 ## Traceability
 
@@ -224,7 +266,8 @@
 - v1.0 requirements: 30 total — all validated
 - v1.1 requirements: 17 total, mapped: 17, unmapped: 0 ✓
 - v1.2 requirements: 22 total, mapped: 22, unmapped: 0 ✓
+- v1.3 requirements: 21 total, mapped: 0, unmapped: 21 ⚠️ (awaiting roadmap)
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-04-03 after v1.2 milestone creation*
+*Last updated: 2026-04-14 after v1.3 milestone creation*
