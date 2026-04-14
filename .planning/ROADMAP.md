@@ -166,7 +166,7 @@ Plans:
 - [x] **Phase 8: Capture Registry** - Replace the global CaptureBackend singleton with a per-device registry that supports concurrent multi-zone capture (completed 2026-04-09)
 - [x] **Phase 9: Preview Routing and Region API** - Route preview WebSocket to the zone's assigned camera; expose camera_device in region CRUD (completed 2026-04-07)
 - [x] **Phase 10: Frontend Camera Selector** - Per-zone camera dropdown in the editor UI with live preview switching (completed 2026-04-07)
-- [ ] **Phase 11: Docker Multi-Device Infrastructure** - Docker Compose configuration and documentation for multiple video device passthrough
+- [x] **Phase 11: Docker Multi-Device Infrastructure** - Docker Compose configuration and documentation for multiple video device passthrough (completed 2026-04-14)
 
 ## Phase Details
 
@@ -249,7 +249,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 11-01-PLAN.md -- Docker Compose cgroup rules + SETUP.md multi-device documentation
+- [x] 11-01-PLAN.md -- Docker Compose cgroup rules + SETUP.md multi-device documentation
 
 ---
 
@@ -406,7 +406,7 @@ Plans:
 | 8. Capture Registry | v1.1 | 2/2 | Complete   | 2026-04-09 |
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete   | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete    | 2026-04-07 |
-| 11. Docker Multi-Device Infrastructure | v1.1 | 0/1 | Planning | - |
+| 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete   | 2026-04-14 |
 | 12. Virtual Camera & Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
