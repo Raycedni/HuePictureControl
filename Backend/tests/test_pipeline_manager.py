@@ -183,13 +183,18 @@ class TestSessionStart:
         async def fake_wait(session, delay=1.5):
             session.producer_ready.set()
 
-        with patch.object(pm, "_wait_for_producer", side_effect=fake_wait):
+        async def fake_adb_connect(device_ip):
+            return True, None
+
+        with patch.object(pm, "_wait_for_producer", side_effect=fake_wait), \
+             patch.object(pm, "_run_adb_connect", side_effect=fake_adb_connect):
             session_id = await pm.start_android_scrcpy("192.168.1.50")
 
         session = pm.get_session(session_id)
         assert session is not None
         assert session.source_type == "android_scrcpy"
         assert session.device_path == "/dev/video11"
+        assert session.device_ip == "192.168.1.50"
 
 
 # ---------------------------------------------------------------------------

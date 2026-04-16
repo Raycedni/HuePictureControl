@@ -11,6 +11,7 @@ import asyncio
 import ipaddress
 import logging
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,9 +35,12 @@ class WirelessSessionState:
     card_label: str                # "Miracast Input" or "scrcpy Input"
     status: str = "starting"       # starting | active | error | stopped
     error_message: Optional[str] = None
+    error_code: Optional[str] = None      # D-04: structured error codes
+    device_ip: Optional[str] = None       # D-03: stored for restart
     proc: Optional[asyncio.subprocess.Process] = field(default=None, repr=False)
     producer_ready: asyncio.Event = field(default_factory=asyncio.Event)
     supervisor_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    stale_monitor_task: Optional[asyncio.Task] = field(default=None, repr=False)
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -101,6 +105,39 @@ class PipelineManager:
             logger.warning(
                 "Failed to delete v4l2loopback device %s: %s", device_path, exc.stderr
             )
+
+    async def _run_adb_connect(self, device_ip: str) -> tuple[bool, str | None]:
+        """Disconnect stale ADB state then connect. Returns (success, error_code | None).
+
+        Per D-02: always disconnect first to clear stale TCP connection state.
+        Output parsing per Mobly adb.py regex: 'connected to' or 'already connected to' = success.
+        """
+        # Step 1: clear stale state (D-02)
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["adb", "disconnect", f"{device_ip}:5555"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (subprocess.TimeoutExpired, Exception) as exc:
+            logger.warning("ADB disconnect (pre-connect cleanup) failed: %s", exc)
+
+        # Step 2: fresh connect
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["adb", "connect", f"{device_ip}:5555"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "adb_refused"
+
+        output = (result.stdout + result.stderr).lower()
+        if "connected to" in output or "already connected to" in output:
+            return True, None
+        if "unauthorized" in output:
+            return False, "adb_unauthorized"
+        return False, "adb_refused"
 
     # ------------------------------------------------------------------
     # Private helpers — process launch
@@ -192,6 +229,35 @@ class PipelineManager:
             logger.error("Session %s: max retries exceeded, cleaning up", session_id)
             await self._cleanup_session_resources(session_id)
 
+    async def _stale_frame_monitor(self, session_id: str) -> None:
+        """Watch for stale frames on a session's virtual device; trigger restart if none arrive.
+
+        Per D-01: stale-frame monitoring detects WiFi interruptions within ~3 seconds.
+        Polls CaptureBackend.last_frame_time every 1 second.
+        """
+        POLL_INTERVAL = 1.0
+        STALE_THRESHOLD = 3.0
+        while True:
+            await asyncio.sleep(POLL_INTERVAL)
+            session = self._sessions.get(session_id)
+            if session is None or session.status == "stopped":
+                return
+            if session.status == "error":
+                continue  # _supervise_session already handling restart
+            backend = self._capture_registry.get(session.device_path)
+            if backend is None or backend.last_frame_time == 0:
+                continue  # Not yet acquired or no first frame written
+            elapsed = time.monotonic() - backend.last_frame_time
+            if elapsed > STALE_THRESHOLD:
+                logger.warning(
+                    "Session %s: stale frame (%.1fs) -- triggering reconnect",
+                    session_id, elapsed,
+                )
+                session.status = "error"
+                session.error_code = "wifi_timeout"
+                session.error_message = f"No frame for {elapsed:.1f}s -- reconnecting"
+                await self._restart_session(session_id)
+
     async def _restart_session(self, session_id: str) -> None:
         """Re-launch the process for an existing session after a failure."""
         session = self._sessions.get(session_id)
@@ -200,22 +266,46 @@ class PipelineManager:
 
         try:
             if session.source_type == "miracast":
-                # Relaunch FFmpeg — rtsp_url was not stored; error is logged, status remains error
-                # Sessions store their launch params for restart support
                 logger.warning(
                     "Session %s: restart not fully supported without stored rtsp_url", session_id
                 )
                 return
             elif session.source_type == "android_scrcpy":
-                logger.warning(
-                    "Session %s: restart not fully supported without stored device_ip", session_id
+                if not session.device_ip:
+                    logger.error("Session %s: cannot restart -- device_ip not stored", session_id)
+                    return
+                # Kill old proc if still alive
+                if session.proc and session.proc.returncode is None:
+                    try:
+                        session.proc.kill()
+                        await session.proc.wait()
+                    except Exception:
+                        pass
+                # Full ADB cycle (D-02)
+                success, error_code = await self._run_adb_connect(session.device_ip)
+                if not success:
+                    session.status = "error"
+                    session.error_code = error_code
+                    session.error_message = f"ADB reconnect failed: {error_code}"
+                    return
+                # Relaunch scrcpy
+                session.proc = await asyncio.create_subprocess_exec(
+                    "scrcpy",
+                    "--v4l2-sink=/dev/video11",
+                    "--no-video-playback",
+                    f"--tcpip={session.device_ip}",
+                    stderr=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
                 )
+                # Reset producer_ready for the new process
+                session.producer_ready.clear()
+                asyncio.create_task(self._wait_for_producer(session))
+                session.status = "active"
+                session.error_code = None
+                session.error_message = None
+            else:
+                logger.warning("Session %s: unknown source_type %s", session_id, session.source_type)
                 return
-
-            # Reset producer_ready for the new process
-            session.producer_ready.clear()
-            asyncio.create_task(self._wait_for_producer(session))
-            session.status = "active"
         except Exception as exc:
             logger.error("Session %s: restart failed: %s", session_id, exc)
             session.status = "error"
@@ -327,12 +417,23 @@ class PipelineManager:
             card_label="scrcpy Input",
         )
         self._sessions[session_id] = session
+        session.device_ip = device_ip  # D-03: store for restart
 
         try:
             await self._create_v4l2_device(self.DEVICE_NR_SCRCPY, "scrcpy Input")
+
+            # ADB connect before scrcpy launch (SCPY-01, D-02)
+            success, error_code = await self._run_adb_connect(device_ip)
+            if not success:
+                session.status = "error"
+                session.error_code = error_code
+                session.error_message = f"ADB connect failed: {error_code}"
+                raise RuntimeError(session.error_message)
+
             session.proc = await asyncio.create_subprocess_exec(
                 "scrcpy",
                 "--v4l2-sink=/dev/video11",
+                "--no-video-playback",      # Headless server -- no SDL window needed
                 f"--tcpip={device_ip}",
                 stderr=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -344,6 +445,7 @@ class PipelineManager:
                 await asyncio.wait_for(session.producer_ready.wait(), timeout=15.0)
             except asyncio.TimeoutError:
                 session.status = "error"
+                session.error_code = "producer_timeout"   # D-04
                 session.error_message = "Producer did not start within 15s timeout"
                 logger.error("Session %s: producer_ready timeout", session_id)
                 raise RuntimeError(session.error_message)
@@ -354,6 +456,9 @@ class PipelineManager:
 
             session.supervisor_task = asyncio.create_task(
                 self._supervise_session(session_id)
+            )
+            session.stale_monitor_task = asyncio.create_task(
+                self._stale_frame_monitor(session_id)
             )
             logger.info(
                 "Session %s (android_scrcpy) started on %s", session_id, session.device_path
@@ -413,6 +518,27 @@ class PipelineManager:
             except Exception as exc:
                 logger.warning("Session %s: supervisor task error on cancel: %s", session_id, exc)
 
+        # Cancel stale-frame monitor task
+        if session.stale_monitor_task is not None:
+            session.stale_monitor_task.cancel()
+            try:
+                await session.stale_monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("Session %s: stale monitor task error on cancel: %s", session_id, exc)
+
+        # Disconnect ADB for scrcpy sessions (SCPY-03)
+        if session.source_type == "android_scrcpy" and session.device_ip:
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["adb", "disconnect", f"{session.device_ip}:5555"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except Exception as exc:
+                logger.warning("Session %s: adb disconnect failed (best-effort): %s", session_id, exc)
+
         # Release registry and delete device
         await self._cleanup_session_resources(session_id)
 
@@ -441,6 +567,7 @@ class PipelineManager:
                 "device_path": s.device_path,
                 "status": s.status,
                 "error_message": s.error_message,
+                "error_code": s.error_code,
                 "started_at": s.started_at,
             }
             for s in self._sessions.values()
@@ -449,3 +576,10 @@ class PipelineManager:
     def get_session(self, session_id: str) -> Optional[WirelessSessionState]:
         """Return the WirelessSessionState for session_id, or None if not found."""
         return self._sessions.get(session_id)
+
+    def get_session_by_ip(self, device_ip: str) -> Optional[WirelessSessionState]:
+        """Return the session for a given device_ip, or None."""
+        for s in self._sessions.values():
+            if s.device_ip == device_ip:
+                return s
+        return None
