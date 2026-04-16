@@ -79,7 +79,11 @@ Plans:
   3. Assigning the scrcpy virtual camera to an entertainment zone drives Hue lights from the mirrored Android screen — same latency as physical capture
   4. A brief WiFi interruption (device momentarily unreachable) triggers auto-reconnect; streaming resumes without user intervention
   5. DELETE to stop a scrcpy session disconnects ADB, kills the scrcpy process, and removes the virtual device node
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 13-01-PLAN.md — PipelineManager ADB lifecycle, stale-frame monitor, restart fix, and model updates
+- [ ] 13-02-PLAN.md — Scrcpy REST endpoints, wireless camera tagging, and router tests
+- [ ] 13-03-PLAN.md — PipelineManager unit tests for ADB, stale-frame, restart, and stop
 
 ---
 
@@ -197,7 +201,7 @@ Plans:
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete | 2026-04-14 |
 | 12. Virtual Device Infrastructure | v1.2 | 3/3 | Complete   | 2026-04-16 |
-| 13. scrcpy Android Integration | v1.2 | 0/TBD | Not started | - |
+| 13. scrcpy Android Integration | v1.2 | 0/3 | Planned | - |
 | 14. Miracast Windows Integration | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Frontend Tab | v1.2 | 0/TBD | Not started | - |
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
