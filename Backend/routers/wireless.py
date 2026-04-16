@@ -6,11 +6,12 @@ Exports:
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from models.wireless import (
     CapabilitiesResponse,
     NicCapability,
+    ScrcpyStartRequest,
     SessionsResponse,
     ToolInfo,
     WirelessSessionResponse,
@@ -95,3 +96,49 @@ async def list_sessions(request: Request) -> SessionsResponse:
     raw_sessions = pipeline_manager.get_sessions()
     sessions = [WirelessSessionResponse(**s) for s in raw_sessions]
     return SessionsResponse(sessions=sessions)
+
+
+@router.post("/scrcpy", status_code=200)
+async def start_scrcpy(
+    body: ScrcpyStartRequest, request: Request
+) -> WirelessSessionResponse:
+    """Start an Android scrcpy session. Blocks until producer-ready (~15s max).
+
+    Per D-05: synchronous -- returns 200 with session info on success,
+    or 422 with error_code on failure.
+    Per D-06: accepts {"device_ip": "..."} in body.
+    """
+    pipeline_manager = request.app.state.pipeline_manager
+    try:
+        session_id = await pipeline_manager.start_android_scrcpy(body.device_ip)
+    except RuntimeError as exc:
+        # Retrieve the session to get structured error_code (D-04)
+        session = pipeline_manager.get_session_by_ip(body.device_ip)
+        error_code = session.error_code if session else "unknown"
+        raise HTTPException(status_code=422, detail={
+            "error_code": error_code,
+            "message": str(exc),
+        })
+    session = pipeline_manager.get_session(session_id)
+    return WirelessSessionResponse(
+        session_id=session.session_id,
+        source_type=session.source_type,
+        device_path=session.device_path,
+        status=session.status,
+        error_message=session.error_message,
+        error_code=session.error_code,
+        started_at=session.started_at,
+    )
+
+
+@router.delete("/scrcpy/{session_id}", status_code=204)
+async def stop_scrcpy(session_id: str, request: Request) -> None:
+    """Stop a scrcpy session: kill scrcpy, disconnect ADB, destroy device.
+
+    Per D-07: kills scrcpy, runs adb disconnect, destroys v4l2 device.
+    Returns 404 if session_id not found.
+    """
+    pipeline_manager = request.app.state.pipeline_manager
+    if pipeline_manager.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await pipeline_manager.stop_session(session_id)

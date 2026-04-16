@@ -40,6 +40,7 @@ class CameraDevice(BaseModel):
     display_name: str
     connected: bool
     last_seen_at: str | None
+    is_wireless: bool = False
 
 
 class ZoneHealth(BaseModel):
@@ -164,6 +165,14 @@ async def list_cameras(request: Request) -> CamerasResponse:
     # Fresh scan every time — no caching per DEVC-03
     scan_results, any_degraded = await _scan_devices()
 
+    # Cross-reference PipelineManager active sessions for wireless tagging (SCPY-02)
+    pipeline_manager = getattr(request.app.state, "pipeline_manager", None)
+    wireless_paths: set[str] = set()
+    if pipeline_manager:
+        for s in pipeline_manager.get_sessions():
+            if s["status"] in ("active", "starting"):
+                wireless_paths.add(s["device_path"])
+
     # Upsert currently visible devices into known_cameras (D-09)
     if scan_results:
         await _upsert_known_cameras(db, scan_results)
@@ -193,6 +202,7 @@ async def list_cameras(request: Request) -> CamerasResponse:
                 display_name=row["display_name"],
                 connected=connected,
                 last_seen_at=row["last_seen_at"],
+                is_wireless=device_path in wireless_paths,
             )
         )
 
