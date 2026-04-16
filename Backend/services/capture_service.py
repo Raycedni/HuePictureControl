@@ -56,6 +56,11 @@ class CaptureBackend(abc.ABC):
         return self._device_path
 
     @property
+    def last_frame_time(self) -> float:
+        """Monotonic timestamp of last frame received. 0.0 if no frame yet."""
+        return self._last_frame_time
+
+    @property
     @abc.abstractmethod
     def is_open(self) -> bool:
         """Return True if the capture device is currently open."""
