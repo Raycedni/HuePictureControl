@@ -237,3 +237,26 @@ def streaming_ws_client():
     broadcaster = _make_broadcaster_mock()
     with _make_streaming_ws_client(broadcaster) as client:
         yield client
+
+
+# ---------------------------------------------------------------------------
+# PipelineManager mock helpers (Phase 12)
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_manager_mock():
+    """Return a MagicMock PipelineManager with async start/stop methods."""
+    mock_pm = MagicMock()
+    mock_pm.start_miracast = AsyncMock(return_value="mock-session-id")
+    mock_pm.start_android_scrcpy = AsyncMock(return_value="mock-session-id")
+    mock_pm.stop_session = AsyncMock()
+    mock_pm.stop_all = AsyncMock()
+    mock_pm.get_sessions = MagicMock(return_value=[])
+    mock_pm.get_session = MagicMock(return_value=None)
+    return mock_pm
+
+
+@pytest.fixture
+def mock_pipeline_manager():
+    """Pre-built mock PipelineManager for tests that need app.state.pipeline_manager."""
+    return _make_pipeline_manager_mock()
