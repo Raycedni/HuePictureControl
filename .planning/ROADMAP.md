@@ -43,7 +43,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 **Milestone Goal:** Enable any Windows or Android device to wirelessly mirror its screen to the system, replacing or supplementing the physical HDMI capture card as an input source.
 
-- [ ] **Phase 12: Virtual Device Infrastructure** - v4l2loopback management, FFmpeg pipeline manager with lifecycle safety, capabilities API, session list endpoint
+- [x] **Phase 12: Virtual Device Infrastructure** - v4l2loopback management, FFmpeg pipeline manager with lifecycle safety, capabilities API, session list endpoint (completed 2026-04-16)
 - [ ] **Phase 13: scrcpy Android Integration** - ADB WiFi connect, scrcpy --v4l2-sink pipeline, producer_ready gate, supervised watchdog, scrcpy API endpoints
 - [ ] **Phase 14: Miracast Windows Integration** - NIC P2P detection, miraclecast daemon lifecycle, FFmpeg RTSP pipeline, Miracast API endpoints (hardware-gated)
 - [ ] **Phase 15: Wireless Frontend Tab** - Dedicated wireless tab, scrcpy IP form, Miracast section, wireless sources in camera selector
@@ -61,11 +61,11 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   4. `CaptureRegistry.acquire()` blocks until the FFmpeg producer has written its first frame into the virtual device (producer_ready gate prevents blank-frame acquisition)
   5. `GET /api/wireless/capabilities` returns NIC P2P support status, installed tool versions (ffmpeg, scrcpy, adb, iw), and a ready/not-ready assessment
   6. `GET /api/wireless/sessions` lists all active wireless sessions with source type and status
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
-- [ ] 12-01-PLAN.md — Pydantic models and PipelineManager service with full subprocess lifecycle
-- [ ] 12-02-PLAN.md — Wireless router endpoints, main.py integration, and router tests
-- [ ] 12-03-PLAN.md — PipelineManager unit tests and conftest fixtures
+- [x] 12-01-PLAN.md — Pydantic models and PipelineManager service with full subprocess lifecycle
+- [x] 12-02-PLAN.md — Wireless router endpoints, main.py integration, and router tests
+- [x] 12-03-PLAN.md — PipelineManager unit tests and conftest fixtures
 
 ---
 
@@ -196,7 +196,7 @@ Plans:
 | 9. Preview Routing and Region API | v1.1 | 2/2 | Complete | 2026-04-07 |
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete | 2026-04-14 |
-| 12. Virtual Device Infrastructure | v1.2 | 0/3 | Not started | - |
+| 12. Virtual Device Infrastructure | v1.2 | 3/3 | Complete   | 2026-04-16 |
 | 13. scrcpy Android Integration | v1.2 | 0/TBD | Not started | - |
 | 14. Miracast Windows Integration | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Frontend Tab | v1.2 | 0/TBD | Not started | - |
