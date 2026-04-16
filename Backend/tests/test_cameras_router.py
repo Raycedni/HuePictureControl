@@ -451,3 +451,104 @@ def test_zone_health_disconnected(cameras_client_empty):
         assert entry["device_path"] is None
 
     _asyncio.get_event_loop().run_until_complete(db_conn.close())
+
+
+# ---------------------------------------------------------------------------
+# Tests — is_wireless tagging from PipelineManager (SCPY-02)
+# ---------------------------------------------------------------------------
+
+
+class TestWirelessCameraTagging:
+    """Test that GET /api/cameras includes is_wireless flag from PipelineManager (SCPY-02)."""
+
+    @pytest.mark.asyncio
+    async def test_cameras_include_is_wireless_for_active_session(self):
+        """When pipeline_manager has an active scrcpy session, its device appears as is_wireless=True."""
+        db = await _make_db()
+
+        # Pre-seed a known camera that matches the scrcpy virtual device
+        await db.execute(
+            "INSERT INTO known_cameras (stable_id, display_name, last_seen_at, last_device_path) VALUES (?, ?, ?, ?)",
+            ("v4l2:video11:scrcpy", "scrcpy Input", "2026-04-16T12:00:00Z", "/dev/video11"),
+        )
+        await db.commit()
+
+        mock_pm = MagicMock()
+        mock_pm.get_sessions = MagicMock(return_value=[
+            {
+                "session_id": "sess-abc",
+                "source_type": "android_scrcpy",
+                "device_path": "/dev/video11",
+                "status": "active",
+                "error_message": None,
+                "error_code": None,
+                "started_at": "2026-04-16T12:00:00Z",
+            }
+        ])
+
+        mock_enumerate = MagicMock(return_value=[
+            V4L2DeviceInfo(device_path="/dev/video11", card="scrcpy Input", bus_info="platform:v4l2loopback-011"),
+        ])
+        mock_stable_id = MagicMock(return_value=("v4l2:video11:scrcpy", True))
+
+        from routers.cameras import router as cameras_router
+
+        @asynccontextmanager
+        async def test_lifespan(app):
+            app.state.db = db
+            app.state.pipeline_manager = mock_pm
+            yield
+
+        test_app = FastAPI(lifespan=test_lifespan)
+        test_app.include_router(cameras_router)
+
+        with patch("routers.cameras.enumerate_capture_devices", mock_enumerate), \
+             patch("routers.cameras.get_stable_id", mock_stable_id):
+            with TestClient(test_app) as client:
+                resp = client.get("/api/cameras")
+                assert resp.status_code == 200
+                data = resp.json()
+                wireless_devices = [d for d in data["devices"] if d.get("is_wireless")]
+                assert len(wireless_devices) >= 1
+                assert wireless_devices[0]["device_path"] == "/dev/video11"
+                assert wireless_devices[0]["is_wireless"] is True
+
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_cameras_is_wireless_false_when_no_pipeline_manager(self):
+        """When pipeline_manager is not on app.state, all devices have is_wireless=False."""
+        db = await _make_db()
+
+        await db.execute(
+            "INSERT INTO known_cameras (stable_id, display_name, last_seen_at, last_device_path) VALUES (?, ?, ?, ?)",
+            ("usb:cam0", "USB Cam", "2026-04-16T12:00:00Z", "/dev/video0"),
+        )
+        await db.commit()
+
+        mock_enumerate = MagicMock(return_value=[
+            V4L2DeviceInfo(device_path="/dev/video0", card="USB Cam", bus_info="usb-0000:00:14.0-1"),
+        ])
+        mock_stable_id = MagicMock(return_value=("usb:cam0", True))
+
+        from routers.cameras import router as cameras_router
+
+        @asynccontextmanager
+        async def test_lifespan(app):
+            app.state.db = db
+            # Note: no pipeline_manager on app.state
+            yield
+
+        test_app = FastAPI(lifespan=test_lifespan)
+        test_app.include_router(cameras_router)
+
+        with patch("routers.cameras.enumerate_capture_devices", mock_enumerate), \
+             patch("routers.cameras.get_stable_id", mock_stable_id):
+            with TestClient(test_app) as client:
+                resp = client.get("/api/cameras")
+                assert resp.status_code == 200
+                data = resp.json()
+                for device in data["devices"]:
+                    assert device["is_wireless"] is False
+
+        await db.close()
