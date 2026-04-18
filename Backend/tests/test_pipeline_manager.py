@@ -108,20 +108,45 @@ class TestDeviceDeletion:
 
 class TestProducerReadyGate:
     @pytest.mark.asyncio
-    async def test_producer_ready_sets_event_when_alive(self, pm):
+    async def test_producer_ready_sets_event_when_producer_configures_format(self, pm):
+        """Producer-ready fires once the v4l2loopback node reports a non-zero
+        pixelformat — i.e., scrcpy has called VIDIOC_S_FMT on it."""
         session = WirelessSessionState(
             session_id="test",
-            source_type="miracast",
-            device_path="/dev/video10",
-            device_nr=10,
+            source_type="android_scrcpy",
+            device_path="/dev/video11",
+            device_nr=11,
             card_label="Test",
         )
         session.proc = _make_mock_process(returncode=None)
-        await pm._wait_for_producer(session, delay=0.01)
+
+        # Simulate the loopback reporting YU12 1080x2400 after scrcpy configures it.
+        async def fake_probe():
+            return (1080, 2400, 0x32315559)  # YU12
+
+        with patch.object(pm, "_wait_for_producer") as _:
+            pass  # sanity — the symbol exists
+
+        # Patch the inner probe via a lambda bound to asyncio.to_thread's target.
+        # The cleanest hook point: patch `os.open` + `fcntl.ioctl` to succeed with
+        # a well-formed G_FMT buffer. Simpler: monkeypatch to_thread to run our probe.
+        import asyncio as _asyncio
+        original_to_thread = _asyncio.to_thread
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            # If the call is the internal _probe, short-circuit with a valid format.
+            if fn.__name__ == "_probe":
+                return (1080, 2400, 0x32315559)
+            return await original_to_thread(fn, *args, **kwargs)
+
+        with patch("services.pipeline_manager.asyncio.to_thread", side_effect=fake_to_thread):
+            await pm._wait_for_producer(session, delay=0.01, poll_deadline=1.0)
+
         assert session.producer_ready.is_set()
 
     @pytest.mark.asyncio
-    async def test_producer_ready_not_set_when_dead(self, pm):
+    async def test_producer_ready_not_set_when_process_dead(self, pm):
+        """If scrcpy dies before producing, producer_ready stays unset."""
         session = WirelessSessionState(
             session_id="test",
             source_type="miracast",
@@ -130,7 +155,22 @@ class TestProducerReadyGate:
             card_label="Test",
         )
         session.proc = _make_mock_process(returncode=1)
-        await pm._wait_for_producer(session, delay=0.01)
+        await pm._wait_for_producer(session, delay=0.01, poll_deadline=0.2)
+        assert not session.producer_ready.is_set()
+
+    @pytest.mark.asyncio
+    async def test_producer_ready_not_set_when_device_never_configures(self, pm):
+        """If the probe never returns a valid format, the deadline fires and
+        producer_ready stays unset (caller will raise producer_timeout)."""
+        session = WirelessSessionState(
+            session_id="test",
+            source_type="android_scrcpy",
+            device_path="/dev/video11",  # will not exist in test env
+            device_nr=11,
+            card_label="Test",
+        )
+        session.proc = _make_mock_process(returncode=None)
+        await pm._wait_for_producer(session, delay=0.01, poll_deadline=0.3)
         assert not session.producer_ready.is_set()
 
 

@@ -168,18 +168,72 @@ class PipelineManager:
     # ------------------------------------------------------------------
 
     async def _wait_for_producer(
-        self, session: WirelessSessionState, delay: float = 1.5
+        self, session: WirelessSessionState, delay: float = 1.5,
+        poll_deadline: float = 14.0,
     ) -> None:
-        """Set producer_ready after delay if process is still running.
+        """Mark the session producer-ready once the producer has actually
+        configured the v4l2loopback device format.
 
-        Per D-08 and Pattern 2 from RESEARCH.md: simple timed check.
-        Only sets the event if the process is alive (returncode is None).
-        If the process died, the supervisor task handles error reporting.
+        Per D-08 and WPIP-01 the CaptureRegistry must not open the device
+        until the producer has written its first frame. A fixed `delay`
+        sleep is too optimistic for scrcpy on slower devices — at 1.5s the
+        process is alive but has not yet called VIDIOC_S_FMT on the
+        loopback, so the consumer opens a device with width=0/height=0 and
+        mmap'd buffers sized for nothing, and every DQBUF yields empty
+        frames until the stale-frame watchdog fires.
+
+        Poll VIDIOC_G_FMT on the v4l2loopback node every 200ms; treat a
+        non-zero pixelformat with non-zero width/height as "producer
+        configured, ready to acquire". Give up after ~15s (the caller's
+        wait-timeout matches), leaving producer_ready unset so the caller
+        raises producer_timeout. The optional `delay` is kept as a lower
+        bound for backward compatibility with tests that assume a settle
+        window.
         """
+        import os
+        import struct
+
+        # Lower bound: let scrcpy's subprocess actually start.
         await asyncio.sleep(delay)
-        if session.proc is not None and session.proc.returncode is None:
-            session.producer_ready.set()
-        # else: process died — _supervise_session handles the error
+
+        if session.proc is None or session.proc.returncode is not None:
+            return  # Process already died — supervisor reports the error.
+
+        deadline = asyncio.get_running_loop().time() + poll_deadline  # default 14s; caller waits 15s total
+
+        # O_NONBLOCK only exists on POSIX; on Windows tests the probe is
+        # guaranteed to fail at os.open anyway (no /dev/videoN), which the
+        # outer try/except OSError handles gracefully.
+        _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+        def _probe() -> tuple[int, int, int]:
+            fd = os.open(session.device_path, os.O_RDONLY | _O_NONBLOCK)
+            try:
+                gfmt = bytearray(208)
+                struct.pack_into("<I", gfmt, 0, 1)  # V4L2_BUF_TYPE_VIDEO_CAPTURE
+                # VIDIOC_G_FMT ioctl number is the same as used in capture_v4l2.
+                # Inline the constant to avoid an import cycle at class definition time.
+                import fcntl as _fcntl
+                _fcntl.ioctl(fd, 0xC0D05604, gfmt)
+                width = struct.unpack_from("<I", gfmt, 8)[0]
+                height = struct.unpack_from("<I", gfmt, 12)[0]
+                pixfmt = struct.unpack_from("<I", gfmt, 16)[0]
+                return width, height, pixfmt
+            finally:
+                os.close(fd)
+
+        while asyncio.get_running_loop().time() < deadline:
+            if session.proc.returncode is not None:
+                return  # scrcpy died while we were waiting
+            try:
+                width, height, pixfmt = await asyncio.to_thread(_probe)
+            except OSError:
+                width = height = pixfmt = 0
+            if width > 0 and height > 0 and pixfmt != 0:
+                session.producer_ready.set()
+                return
+            await asyncio.sleep(0.2)
+        # Fall through: deadline hit, leave producer_ready unset.
 
     # ------------------------------------------------------------------
     # Private helpers — supervised restart (D-07, VCAM-03)

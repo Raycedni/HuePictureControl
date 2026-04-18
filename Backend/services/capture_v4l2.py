@@ -406,9 +406,25 @@ class V4L2Capture(CaptureBackend):
                     continue
 
                 if frame is not None:
+                    # For raw-YUV paths we need to encode to JPEG for the
+                    # preview WebSocket (which calls get_jpeg). Downscale to
+                    # 480p-equivalent first so encoding a 1080x2400 frame on
+                    # every DQBUF doesn't saturate the CPU.
+                    if jpeg_bytes is None:
+                        h, w = frame.shape[:2]
+                        target_h = 480
+                        if h > target_h:
+                            new_w = max(1, int(w * target_h / h))
+                            preview = cv2.resize(frame, (new_w, target_h), interpolation=cv2.INTER_AREA)
+                        else:
+                            preview = frame
+                        ok, buf = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                        if ok:
+                            jpeg_bytes = buf.tobytes()
+
                     with self._frame_lock:
                         self._latest_frame = frame
-                        self._latest_jpeg = jpeg_bytes  # None for raw-YUV paths (OK -- get_jpeg falls back)
+                        self._latest_jpeg = jpeg_bytes
                         self._last_frame_time = time.monotonic()
                         self._frame_seq += 1
                     self._new_frame_event.set()
