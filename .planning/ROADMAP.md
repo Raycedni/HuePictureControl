@@ -127,7 +127,10 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   1. After selecting an entertainment config and reloading the page, the same config is pre-selected in the dropdown without manual re-selection
   2. If streaming was active when the page was opened in another tab, the dropdown on the new tab shows the streaming state correctly rather than a default/idle state
   3. Selecting different entertainment configs for different cameras persists independently — switching cameras shows the config last used with that camera
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 16-01-PLAN.md — Backend DB schema + PUT /api/cameras/last-zone endpoint + GET last_entertainment_config_id field
+  - [ ] 16-02-PLAN.md — StatusBroadcaster + StreamingService active_config_id/active_device_path wiring
+  - [ ] 16-03-PLAN.md — Frontend API, Zustand store, WS parser, LightPanel 3-tier initial selection + auto-save on zone change
 
 ---
 
