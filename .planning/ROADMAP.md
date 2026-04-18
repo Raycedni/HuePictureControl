@@ -44,7 +44,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 **Milestone Goal:** Enable any Windows or Android device to wirelessly mirror its screen to the system, replacing or supplementing the physical HDMI capture card as an input source.
 
 - [x] **Phase 12: Virtual Device Infrastructure** - v4l2loopback management, FFmpeg pipeline manager with lifecycle safety, capabilities API, session list endpoint (completed 2026-04-16)
-- [ ] **Phase 13: scrcpy Android Integration** - ADB WiFi connect, scrcpy --v4l2-sink pipeline, producer_ready gate, supervised watchdog, scrcpy API endpoints
+- [x] **Phase 13: scrcpy Android Integration** - ADB WiFi connect, scrcpy --v4l2-sink pipeline, producer_ready gate, supervised watchdog, scrcpy API endpoints (completed 2026-04-18)
 - [ ] **Phase 14: Miracast Windows Integration** - NIC P2P detection, miraclecast daemon lifecycle, FFmpeg RTSP pipeline, Miracast API endpoints (hardware-gated)
 - [ ] **Phase 15: Wireless Frontend Tab** - Dedicated wireless tab, scrcpy IP form, Miracast section, wireless sources in camera selector
 
@@ -79,11 +79,11 @@ Plans:
   3. Assigning the scrcpy virtual camera to an entertainment zone drives Hue lights from the mirrored Android screen — same latency as physical capture
   4. A brief WiFi interruption (device momentarily unreachable) triggers auto-reconnect; streaming resumes without user intervention
   5. DELETE to stop a scrcpy session disconnects ADB, kills the scrcpy process, and removes the virtual device node
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 13-01-PLAN.md — PipelineManager ADB lifecycle, stale-frame monitor, restart fix, and model updates
-- [ ] 13-02-PLAN.md — Scrcpy REST endpoints, wireless camera tagging, and router tests
-- [ ] 13-03-PLAN.md — PipelineManager unit tests for ADB, stale-frame, restart, and stop
+- [x] 13-02-PLAN.md — Scrcpy REST endpoints, wireless camera tagging, and router tests
+- [x] 13-03-PLAN.md — PipelineManager unit tests for ADB, stale-frame, restart, and stop
 
 ---
 
@@ -201,7 +201,7 @@ Plans:
 | 10. Frontend Camera Selector | v1.1 | 3/3 | Complete | 2026-04-07 |
 | 11. Docker Multi-Device Infrastructure | v1.1 | 1/1 | Complete | 2026-04-14 |
 | 12. Virtual Device Infrastructure | v1.2 | 3/3 | Complete   | 2026-04-16 |
-| 13. scrcpy Android Integration | v1.2 | 1/3 | In Progress|  |
+| 13. scrcpy Android Integration | v1.2 | 3/3 | Complete   | 2026-04-18 |
 | 14. Miracast Windows Integration | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Frontend Tab | v1.2 | 0/TBD | Not started | - |
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
