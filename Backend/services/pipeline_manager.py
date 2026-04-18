@@ -295,6 +295,7 @@ class PipelineManager:
                     "scrcpy",
                     "--v4l2-sink=/dev/video11",
                     "--no-video-playback",
+                    "--no-audio",
                     f"--tcpip={session.device_ip}:{session.device_port}",
                     stderr=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.DEVNULL,
@@ -443,6 +444,7 @@ class PipelineManager:
                 "scrcpy",
                 "--v4l2-sink=/dev/video11",
                 "--no-video-playback",      # Headless server -- no SDL window needed
+                "--no-audio",               # No audio device on headless VM -- without this, ALSA errors kill scrcpy
                 f"--tcpip={device_ip}:{device_port}",
                 stderr=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
