@@ -78,7 +78,7 @@ class PipelineManager:
                 [
                     "sudo", "v4l2loopback-ctl", "add",
                     "-n", card_label,
-                    "--exclusive_caps=1",
+                    "--exclusive-caps", "1",
                     device_path,
                 ],
                 check=True,

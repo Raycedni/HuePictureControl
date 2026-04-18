@@ -61,7 +61,8 @@ class TestDeviceCreation:
         assert "add" in cmd_list
         assert "-n" in cmd_list
         assert "Miracast Input" in cmd_list
-        assert "--exclusive_caps=1" in cmd_list
+        assert "--exclusive-caps" in cmd_list
+        assert "1" in cmd_list
         assert "/dev/video10" in cmd_list
 
     @pytest.mark.asyncio
