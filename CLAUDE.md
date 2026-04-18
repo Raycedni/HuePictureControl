@@ -211,4 +211,5 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 | preflight | Full pre-commit verification — runs tests, health checks, and visual UI verification before committing | `.claude/skills/preflight/SKILL.md` |
 | test | Run all backend and frontend tests in parallel and report results | `.claude/skills/test/SKILL.md` |
 | verify-ui | Visually verify the frontend UI by screenshotting all tabs using Playwright MCP | `.claude/skills/verify-ui/SKILL.md` |
+| vm-deploy | Deploy backend changes to the HueControl VM (push, pull, systemctl restart) and run arbitrary shell on the VM via Proxmox guest-agent API — no SSH or password needed | `.claude/skills/vm-deploy/SKILL.md` |
 <!-- GSD:skills-end -->
