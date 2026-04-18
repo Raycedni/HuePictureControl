@@ -8,6 +8,7 @@ Also provides enumerate_capture_devices() for listing available V4L2
 capture nodes without opening a streaming session.
 """
 import ctypes
+import errno
 import fcntl
 import glob
 import logging
@@ -34,6 +35,8 @@ _NUM_BUFFERS = 2
 _V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
 _V4L2_MEMORY_MMAP = 1
 _V4L2_PIX_FMT_MJPEG = 0x47504A4D  # 'MJPG'
+_V4L2_PIX_FMT_YUYV = 0x56595559  # 'YUYV' -- packed 4:2:2, 2 bytes/pixel
+_V4L2_PIX_FMT_YU12 = 0x32315559  # 'YU12' / I420 -- planar 4:2:0, 1.5 bytes/pixel
 
 
 class _timeval(ctypes.Structure):
@@ -91,6 +94,7 @@ def _iowr(magic: int, nr: int, size: int) -> int:
 
 _VIDIOC_QUERYCAP = 0x80685600
 _VIDIOC_S_FMT = 0xC0D05605
+_VIDIOC_G_FMT = 0xC0D05604
 _VIDIOC_REQBUFS = 0xC0145608
 _VIDIOC_QUERYBUF = _iowr(ord("V"), 9, _v4l2_buf_size)
 _VIDIOC_QBUF = _iowr(ord("V"), 15, _v4l2_buf_size)
@@ -180,6 +184,9 @@ class V4L2Capture(CaptureBackend):
         super().__init__(device_path)
         self._fd: Optional[int] = None
         self._buffers: list[mmap.mmap] = []
+        self._pixelformat: int = _V4L2_PIX_FMT_MJPEG
+        self._width: int = _WIDTH
+        self._height: int = _HEIGHT
 
     @property
     def is_open(self) -> bool:
@@ -208,9 +215,15 @@ class V4L2Capture(CaptureBackend):
             raise
 
         self._start_reader()
-        logger.info("Opened %s — MJPEG %dx%d, %d buffers", path, _WIDTH, _HEIGHT, _NUM_BUFFERS)
+        logger.info(
+            "Opened %s -- pixelformat=0x%08X %dx%d, %d buffers",
+            path, self._pixelformat, self._width, self._height, _NUM_BUFFERS,
+        )
 
     def _setup_device(self) -> None:
+        """Configure V4L2 format + buffers. Format-agnostic: falls back to
+        G_FMT when the producer owns the format (scrcpy via v4l2loopback
+        exclusive-caps=1). See VERIFICATION.md G-13-01."""
         fd = self._fd
 
         # Verify VIDEO_CAPTURE capability
@@ -220,12 +233,47 @@ class V4L2Capture(CaptureBackend):
         if not (device_caps & 0x01):
             raise RuntimeError("Device does not support VIDEO_CAPTURE")
 
-        # Set format: MJPEG 640x480
+        # Try to negotiate MJPEG 640x480 (physical UVC cameras). If the producer
+        # owns the format (v4l2loopback with --exclusive-caps=1, as scrcpy uses),
+        # the kernel returns EINVAL -- fall back to G_FMT to adopt the producer's
+        # pixel format, width, and height. See VERIFICATION.md G-13-01.
         fmt = bytearray(208)
-        struct.pack_into("<I", fmt, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
-        struct.pack_into("<II", fmt, 4, _WIDTH, _HEIGHT)
-        struct.pack_into("<I", fmt, 12, _V4L2_PIX_FMT_MJPEG)
-        fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
+        struct.pack_into("<I",  fmt, 0,  _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        struct.pack_into("<II", fmt, 4,  _WIDTH, _HEIGHT)
+        struct.pack_into("<I",  fmt, 12, _V4L2_PIX_FMT_MJPEG)
+
+        try:
+            fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
+            # S_FMT succeeded -- the kernel may still have rounded w/h/fmt, so read back.
+            self._width       = struct.unpack_from("<I", fmt, 4)[0] or _WIDTH
+            self._height      = struct.unpack_from("<I", fmt, 8)[0] or _HEIGHT
+            self._pixelformat = struct.unpack_from("<I", fmt, 12)[0] or _V4L2_PIX_FMT_MJPEG
+            logger.info(
+                "S_FMT negotiated pixelformat=0x%08X %dx%d",
+                self._pixelformat, self._width, self._height,
+            )
+        except OSError as exc:
+            if exc.errno != errno.EINVAL:
+                raise
+            # Producer owns the format (e.g. v4l2loopback exclusive-caps=1 fed by scrcpy).
+            # Read the current format via G_FMT.
+            gfmt = bytearray(208)
+            struct.pack_into("<I", gfmt, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+            fcntl.ioctl(fd, _VIDIOC_G_FMT, gfmt)
+            self._width       = struct.unpack_from("<I", gfmt, 4)[0]
+            self._height      = struct.unpack_from("<I", gfmt, 8)[0]
+            self._pixelformat = struct.unpack_from("<I", gfmt, 12)[0]
+            logger.info(
+                "S_FMT rejected (EINVAL) -- producer owns format; G_FMT reports "
+                "pixelformat=0x%08X %dx%d",
+                self._pixelformat, self._width, self._height,
+            )
+
+        if self._pixelformat not in (_V4L2_PIX_FMT_MJPEG, _V4L2_PIX_FMT_YUYV, _V4L2_PIX_FMT_YU12):
+            raise RuntimeError(
+                f"Unsupported V4L2 pixel format 0x{self._pixelformat:08X} "
+                f"on {self._device_path}; supported: MJPEG, YUYV, YU12 (I420)"
+            )
 
         # Request mmap buffers
         reqbufs = bytearray(20)
@@ -305,9 +353,9 @@ class V4L2Capture(CaptureBackend):
                 used = dqbuf.bytesused
 
                 mmapped = self._buffers[idx]
-                # Copy JPEG bytes and re-queue immediately so kernel
-                # gets the buffer back before we spend time decoding.
-                jpeg_data = mmapped[:used]
+                # Copy payload and re-queue immediately so the kernel gets the buffer back
+                # before we spend time decoding.
+                raw_data = mmapped[:used]
 
                 qbuf = _v4l2_buffer()
                 qbuf.index = idx
@@ -315,15 +363,45 @@ class V4L2Capture(CaptureBackend):
                 qbuf.memory = _V4L2_MEMORY_MMAP
                 fcntl.ioctl(self._fd, _VIDIOC_QBUF, qbuf)
 
-                # Decode MJPEG after buffer is re-queued
-                frame = cv2.imdecode(
-                    np.frombuffer(jpeg_data, dtype=np.uint8),
-                    cv2.IMREAD_COLOR,
-                )
+                # Decode based on the negotiated pixel format
+                frame = None
+                jpeg_bytes: Optional[bytes] = None
+
+                if self._pixelformat == _V4L2_PIX_FMT_MJPEG:
+                    frame = cv2.imdecode(
+                        np.frombuffer(raw_data, dtype=np.uint8),
+                        cv2.IMREAD_COLOR,
+                    )
+                    jpeg_bytes = bytes(raw_data)
+                elif self._pixelformat == _V4L2_PIX_FMT_YUYV:
+                    expected = self._width * self._height * 2
+                    if used < expected:
+                        logger.debug("Short YUYV frame: got %d bytes, expected %d", used, expected)
+                        continue
+                    arr = np.frombuffer(raw_data, dtype=np.uint8, count=expected)
+                    arr = arr.reshape((self._height, self._width, 2))
+                    frame = cv2.cvtColor(arr, cv2.COLOR_YUV2BGR_YUYV)
+                elif self._pixelformat == _V4L2_PIX_FMT_YU12:
+                    expected = self._width * self._height * 3 // 2
+                    if used < expected:
+                        logger.debug("Short YU12 frame: got %d bytes, expected %d", used, expected)
+                        continue
+                    arr = np.frombuffer(raw_data, dtype=np.uint8, count=expected)
+                    arr = arr.reshape((self._height * 3 // 2, self._width))
+                    frame = cv2.cvtColor(arr, cv2.COLOR_YUV2BGR_I420)
+                else:
+                    # Unreachable -- _setup_device already rejects unsupported formats.
+                    if not self._stop_event.is_set():
+                        logger.warning(
+                            "Unsupported pixelformat 0x%08X in reader loop -- dropping frame",
+                            self._pixelformat,
+                        )
+                    continue
+
                 if frame is not None:
                     with self._frame_lock:
                         self._latest_frame = frame
-                        self._latest_jpeg = jpeg_data
+                        self._latest_jpeg = jpeg_bytes  # None for raw-YUV paths (OK -- get_jpeg falls back)
                         self._last_frame_time = time.monotonic()
                         self._frame_seq += 1
                     self._new_frame_event.set()
