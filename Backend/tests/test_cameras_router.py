@@ -487,7 +487,7 @@ class TestWirelessCameraTagging:
         ])
 
         mock_enumerate = MagicMock(return_value=[
-            V4L2DeviceInfo(device_path="/dev/video11", card="scrcpy Input", bus_info="platform:v4l2loopback-011"),
+            V4L2DeviceInfo(device_path="/dev/video11", card="scrcpy Input", driver="v4l2loopback", bus_info="platform:v4l2loopback-011"),
         ])
         mock_stable_id = MagicMock(return_value=("v4l2:video11:scrcpy", True))
 
@@ -527,7 +527,7 @@ class TestWirelessCameraTagging:
         await db.commit()
 
         mock_enumerate = MagicMock(return_value=[
-            V4L2DeviceInfo(device_path="/dev/video0", card="USB Cam", bus_info="usb-0000:00:14.0-1"),
+            V4L2DeviceInfo(device_path="/dev/video0", card="USB Cam", driver="uvcvideo", bus_info="usb-0000:00:14.0-1"),
         ])
         mock_stable_id = MagicMock(return_value=("usb:cam0", True))
 
