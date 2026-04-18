@@ -1,9 +1,19 @@
 ---
 phase: 13-scrcpy-android-integration
 verified: 2026-04-18T00:00:00Z
-status: human_needed
-score: 4/5 must-haves verified
+status: gaps_found
+score: 4/5 must-haves verified, 1 integration gap discovered during hardware testing
 overrides_applied: 0
+gaps:
+  - id: G-13-01
+    severity: blocker
+    title: V4L2Capture cannot consume scrcpy's raw YUV output from v4l2loopback
+    discovered: 2026-04-18
+    symptom: "POST /api/wireless/scrcpy returns 422 producer_timeout; backend logs show `OSError: [Errno 22] Invalid argument` at capture_v4l2.py:228 (VIDIOC_S_FMT)"
+    root_cause: "V4L2Capture._setup_device hardcodes MJPEG 640x480 via VIDIOC_S_FMT. scrcpy --v4l2-sink writes raw YUV at phone resolution (e.g. 1080x2400). v4l2loopback with --exclusive-caps=1 rejects format changes once the producer is active, and cv2.imdecode cannot decode raw YUV frames."
+    affects: SC-3 (Hue lights driven from Android screen) — blocks end-to-end streaming for all wireless sources, including future Miracast (Phase 14)
+    proposed_fix: "Option A — make V4L2Capture format-agnostic. Use VIDIOC_G_FMT to discover the device's current format; support MJPEG (physical cameras), YUYV, and YUV420 (v4l2loopback producers) via cv2.cvtColor conversion in the reader thread."
+    requires_new_plan: true
 human_verification:
   - test: "POST /api/wireless/scrcpy with a real Android device IP; confirm 200 response with session data in under 10 seconds"
     expected: "200 OK with session_id, source_type='android_scrcpy', status='active', device_path='/dev/video11'"
@@ -134,13 +144,42 @@ No orphaned requirements: REQUIREMENTS.md maps exactly SCPY-01, SCPY-02, SCPY-03
 
 ### Gaps Summary
 
-No code gaps found. All Phase 13 must-haves are implemented and wired:
-- Service layer (Plan 01): Complete ADB lifecycle, stale-frame monitor, functional restart, model updates
-- API layer (Plan 02): POST/DELETE endpoints, is_wireless camera tagging, 9 new passing tests
-- Unit tests (Plan 03): 18 new tests covering all service-layer changes across 6 test classes
-- All 5 phase requirements (SCPY-01 through SCPY-04, WAPI-03) are code-satisfied
+#### G-13-01 — V4L2Capture cannot consume scrcpy's raw YUV output (BLOCKER)
 
-The human_needed status reflects SC-3 (lights driven from Android screen) and all other success criteria requiring physical ADB, v4l2loopback, and Hue hardware to fully validate. This is expected for a hardware-integration phase — the code paths are correct and thoroughly unit-tested.
+**Discovered:** 2026-04-18 during hardware testing on the HueControl VM (Ubuntu 24.04, kernel 6.8, v4l2loopback 0.15.3 from source, scrcpy 2.7 from source, Samsung SM-G998B Android 15).
+
+**Symptom:** POST `/api/wireless/scrcpy` with a real Android device returns HTTP 422 `producer_timeout`. Backend logs show the underlying error:
+
+```
+File "Backend/services/capture_v4l2.py", line 228, in _setup_device
+    fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
+OSError: [Errno 22] Invalid argument
+```
+
+**Root cause:** `V4L2Capture._setup_device` hardcodes MJPEG 640×480 and issues `VIDIOC_S_FMT` to lock that format. This works for physical UVC capture cards (which the consumer controls). It fails for v4l2loopback with an active producer because:
+
+1. scrcpy `--v4l2-sink` writes raw YUV at the phone's native resolution (1080×2400 for the test device)
+2. `v4l2loopback-ctl add --exclusive-caps 1` puts the device in exclusive mode where the producer owns the format — `S_FMT` from the consumer returns EINVAL
+3. Even if `S_FMT` were skipped, the reader thread calls `cv2.imdecode` which decodes MJPEG only and cannot handle raw YUV420/YUYV frames
+
+**Affects:**
+- SC-3 (Hue lights driven from Android screen) — blocks all end-to-end streaming from wireless sources
+- Phase 14 (Miracast) — same pipeline, same problem will surface there
+
+**Proposed fix (Option A):** Make `V4L2Capture` format-agnostic.
+1. Call `VIDIOC_G_FMT` first to discover the active pixel format and resolution set by the producer
+2. Attempt `VIDIOC_S_FMT` to the preferred MJPEG 640×480, but accept EINVAL and fall back to the discovered format
+3. In the reader thread, branch on `pixelformat`:
+   - `MJPG` → existing `cv2.imdecode` path
+   - `YUYV` (0x56595559) → `cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUYV)`
+   - `YU12`/`YV12` (0x32315559/0x32315659) → `cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)`
+4. Update existing V4L2Capture tests to cover the new discovery path; add regression test asserting physical-camera MJPEG path is unchanged
+
+**Requires new gap-closure plan.** `/gsd-plan-phase 13 --gaps` will read this section.
+
+---
+
+All 5 code-level must-haves remain satisfied; G-13-01 is an integration gap between Phase 13's scrcpy producer and Phase 2's physical-camera-only consumer. The code paths in the modified Phase 13 files are correct — the fix lives in `Backend/services/capture_v4l2.py`, a file Phase 13 did not touch but which transitively blocks Phase 13's goal.
 
 ---
 
