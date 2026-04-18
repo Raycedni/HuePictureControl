@@ -37,11 +37,16 @@ if sys.platform != "win32":
         return buf
 
     def _make_gfmt_buffer(pixelformat: int, width: int, height: int) -> bytes:
-        """Build a 208-byte v4l2_format buffer for G_FMT to return."""
+        """Build a 208-byte v4l2_format buffer for G_FMT to return.
+
+        Layout: type(u32) at offset 0, then 4 bytes of padding (union alignment
+        is 8 because struct v4l2_window contains a pointer on 64-bit). The pix
+        fields (width, height, pixelformat) are at offsets 8, 12, 16.
+        """
         buf = bytearray(208)
         struct.pack_into("<I",  buf, 0,  1)            # type = VIDEO_CAPTURE
-        struct.pack_into("<II", buf, 4,  width, height)
-        struct.pack_into("<I",  buf, 12, pixelformat)
+        struct.pack_into("<II", buf, 8,  width, height)
+        struct.pack_into("<I",  buf, 16, pixelformat)
         return bytes(buf)
 
     class TestSetupDeviceFormatNegotiation:

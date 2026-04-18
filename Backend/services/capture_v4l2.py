@@ -237,17 +237,24 @@ class V4L2Capture(CaptureBackend):
         # owns the format (v4l2loopback with --exclusive-caps=1, as scrcpy uses),
         # the kernel returns EINVAL -- fall back to G_FMT to adopt the producer's
         # pixel format, width, and height. See VERIFICATION.md G-13-01.
+        #
+        # struct v4l2_format layout on 64-bit Linux: the `fmt` union contains
+        # structs with pointers (v4l2_window.clips), so it has 8-byte alignment.
+        # This adds 4 bytes of padding after `type`, putting the pix fields at
+        # offsets 8 / 12 / 16 — not 4 / 8 / 12. (Phase 1's original code also
+        # used the wrong offsets; UVC cameras tolerated it by falling back to
+        # their own defaults, but v4l2loopback is strict.)
         fmt = bytearray(208)
         struct.pack_into("<I",  fmt, 0,  _V4L2_BUF_TYPE_VIDEO_CAPTURE)
-        struct.pack_into("<II", fmt, 4,  _WIDTH, _HEIGHT)
-        struct.pack_into("<I",  fmt, 12, _V4L2_PIX_FMT_MJPEG)
+        struct.pack_into("<II", fmt, 8,  _WIDTH, _HEIGHT)
+        struct.pack_into("<I",  fmt, 16, _V4L2_PIX_FMT_MJPEG)
 
         try:
             fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
             # S_FMT succeeded -- the kernel may still have rounded w/h/fmt, so read back.
-            self._width       = struct.unpack_from("<I", fmt, 4)[0] or _WIDTH
-            self._height      = struct.unpack_from("<I", fmt, 8)[0] or _HEIGHT
-            self._pixelformat = struct.unpack_from("<I", fmt, 12)[0] or _V4L2_PIX_FMT_MJPEG
+            self._width       = struct.unpack_from("<I", fmt, 8)[0] or _WIDTH
+            self._height      = struct.unpack_from("<I", fmt, 12)[0] or _HEIGHT
+            self._pixelformat = struct.unpack_from("<I", fmt, 16)[0] or _V4L2_PIX_FMT_MJPEG
             logger.info(
                 "S_FMT negotiated pixelformat=0x%08X %dx%d",
                 self._pixelformat, self._width, self._height,
@@ -260,9 +267,9 @@ class V4L2Capture(CaptureBackend):
             gfmt = bytearray(208)
             struct.pack_into("<I", gfmt, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
             fcntl.ioctl(fd, _VIDIOC_G_FMT, gfmt)
-            self._width       = struct.unpack_from("<I", gfmt, 4)[0]
-            self._height      = struct.unpack_from("<I", gfmt, 8)[0]
-            self._pixelformat = struct.unpack_from("<I", gfmt, 12)[0]
+            self._width       = struct.unpack_from("<I", gfmt, 8)[0]
+            self._height      = struct.unpack_from("<I", gfmt, 12)[0]
+            self._pixelformat = struct.unpack_from("<I", gfmt, 16)[0]
             logger.info(
                 "S_FMT rejected (EINVAL) -- producer owns format; G_FMT reports "
                 "pixelformat=0x%08X %dx%d",
