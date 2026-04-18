@@ -184,7 +184,7 @@ class TestSessionStart:
         async def fake_wait(session, delay=1.5):
             session.producer_ready.set()
 
-        async def fake_adb_connect(device_ip):
+        async def fake_adb_connect(device_ip, device_port=5555):
             return True, None
 
         with patch.object(pm, "_wait_for_producer", side_effect=fake_wait), \
@@ -196,6 +196,7 @@ class TestSessionStart:
         assert session.source_type == "android_scrcpy"
         assert session.device_path == "/dev/video11"
         assert session.device_ip == "192.168.1.50"
+        assert session.device_port == 5555
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +493,7 @@ class TestScrcpyStartAdb:
             with patch.object(pm, "_wait_for_producer", side_effect=fake_wait):
                 await pm.start_android_scrcpy("192.168.1.50")
 
-            mock_adb.assert_called_once_with("192.168.1.50")
+            mock_adb.assert_called_once_with("192.168.1.50", 5555)
 
     @pytest.mark.asyncio
     @patch("services.pipeline_manager.asyncio.create_subprocess_exec", new_callable=AsyncMock)
@@ -629,7 +630,7 @@ class TestRestartSessionScrcpy:
 
         with patch.object(pm, "_run_adb_connect", new_callable=AsyncMock, return_value=(True, None)) as mock_adb:
             await pm._restart_session("s1")
-            mock_adb.assert_called_once_with("192.168.1.50")
+            mock_adb.assert_called_once_with("192.168.1.50", 5555)
 
         assert session.status == "active"
 

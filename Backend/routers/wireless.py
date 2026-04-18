@@ -110,7 +110,7 @@ async def start_scrcpy(
     """
     pipeline_manager = request.app.state.pipeline_manager
     try:
-        session_id = await pipeline_manager.start_android_scrcpy(body.device_ip)
+        session_id = await pipeline_manager.start_android_scrcpy(body.device_ip, body.device_port)
     except RuntimeError as exc:
         # Retrieve the session to get structured error_code (D-04)
         session = pipeline_manager.get_session_by_ip(body.device_ip)

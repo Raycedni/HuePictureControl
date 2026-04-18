@@ -37,6 +37,7 @@ class WirelessSessionState:
     error_message: Optional[str] = None
     error_code: Optional[str] = None      # D-04: structured error codes
     device_ip: Optional[str] = None       # D-03: stored for restart
+    device_port: int = 5555               # ADB port (5555 classic, dynamic for Wireless Debugging)
     proc: Optional[asyncio.subprocess.Process] = field(default=None, repr=False)
     producer_ready: asyncio.Event = field(default_factory=asyncio.Event)
     supervisor_task: Optional[asyncio.Task] = field(default=None, repr=False)
@@ -106,17 +107,18 @@ class PipelineManager:
                 "Failed to delete v4l2loopback device %s: %s", device_path, exc.stderr
             )
 
-    async def _run_adb_connect(self, device_ip: str) -> tuple[bool, str | None]:
+    async def _run_adb_connect(self, device_ip: str, device_port: int = 5555) -> tuple[bool, str | None]:
         """Disconnect stale ADB state then connect. Returns (success, error_code | None).
 
         Per D-02: always disconnect first to clear stale TCP connection state.
         Output parsing per Mobly adb.py regex: 'connected to' or 'already connected to' = success.
         """
+        endpoint = f"{device_ip}:{device_port}"
         # Step 1: clear stale state (D-02)
         try:
             await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "disconnect", f"{device_ip}:5555"],
+                ["adb", "disconnect", endpoint],
                 capture_output=True, text=True, timeout=5,
             )
         except (subprocess.TimeoutExpired, Exception) as exc:
@@ -126,7 +128,7 @@ class PipelineManager:
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "connect", f"{device_ip}:5555"],
+                ["adb", "connect", endpoint],
                 capture_output=True, text=True, timeout=10,
             )
         except subprocess.TimeoutExpired:
@@ -282,7 +284,7 @@ class PipelineManager:
                     except Exception:
                         pass
                 # Full ADB cycle (D-02)
-                success, error_code = await self._run_adb_connect(session.device_ip)
+                success, error_code = await self._run_adb_connect(session.device_ip, session.device_port)
                 if not success:
                     session.status = "error"
                     session.error_code = error_code
@@ -293,7 +295,7 @@ class PipelineManager:
                     "scrcpy",
                     "--v4l2-sink=/dev/video11",
                     "--no-video-playback",
-                    f"--tcpip={session.device_ip}",
+                    f"--tcpip={session.device_ip}:{session.device_port}",
                     stderr=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.DEVNULL,
                 )
@@ -389,7 +391,7 @@ class PipelineManager:
 
         return session_id
 
-    async def start_android_scrcpy(self, device_ip: str) -> str:
+    async def start_android_scrcpy(self, device_ip: str, device_port: int = 5555) -> str:
         """Start an Android scrcpy session on /dev/video11.
 
         Validates device_ip, creates v4l2loopback device, launches scrcpy,
@@ -408,6 +410,12 @@ class PipelineManager:
                 f"Invalid device_ip '{device_ip}': must be a valid IP address"
             ) from exc
 
+        # Validate port range (prevents injection via non-integer or OOB values)
+        if not (1 <= device_port <= 65535):
+            raise RuntimeError(
+                f"Invalid device_port '{device_port}': must be 1-65535"
+            )
+
         session_id = str(uuid.uuid4())
         session = WirelessSessionState(
             session_id=session_id,
@@ -417,13 +425,14 @@ class PipelineManager:
             card_label="scrcpy Input",
         )
         self._sessions[session_id] = session
-        session.device_ip = device_ip  # D-03: store for restart
+        session.device_ip = device_ip       # D-03: store for restart
+        session.device_port = device_port
 
         try:
             await self._create_v4l2_device(self.DEVICE_NR_SCRCPY, "scrcpy Input")
 
             # ADB connect before scrcpy launch (SCPY-01, D-02)
-            success, error_code = await self._run_adb_connect(device_ip)
+            success, error_code = await self._run_adb_connect(device_ip, device_port)
             if not success:
                 session.status = "error"
                 session.error_code = error_code
@@ -434,7 +443,7 @@ class PipelineManager:
                 "scrcpy",
                 "--v4l2-sink=/dev/video11",
                 "--no-video-playback",      # Headless server -- no SDL window needed
-                f"--tcpip={device_ip}",
+                f"--tcpip={device_ip}:{device_port}",
                 stderr=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
             )
@@ -533,7 +542,7 @@ class PipelineManager:
             try:
                 await asyncio.to_thread(
                     subprocess.run,
-                    ["adb", "disconnect", f"{session.device_ip}:5555"],
+                    ["adb", "disconnect", f"{session.device_ip}:{session.device_port}"],
                     capture_output=True, text=True, timeout=5,
                 )
             except Exception as exc:

@@ -24,6 +24,7 @@ class CapabilitiesResponse(BaseModel):
 
 class ScrcpyStartRequest(BaseModel):
     device_ip: str   # Validated by ipaddress.ip_address() in PipelineManager
+    device_port: int = 5555   # Default 5555 (classic adb tcpip). Android 11+ Wireless Debugging uses a dynamic port.
 
 
 class WirelessSessionResponse(BaseModel):

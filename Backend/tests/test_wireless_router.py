@@ -115,7 +115,7 @@ class TestScrcpyEndpoints:
             assert data["source_type"] == "android_scrcpy"
             assert data["device_path"] == "/dev/video11"
             assert data["status"] == "active"
-            mock_pm.start_android_scrcpy.assert_called_once_with("192.168.1.50")
+            mock_pm.start_android_scrcpy.assert_called_once_with("192.168.1.50", 5555)
 
     def test_post_scrcpy_adb_refused(self):
         mock_pm = MagicMock()
