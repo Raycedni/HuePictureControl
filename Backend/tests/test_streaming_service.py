@@ -1434,3 +1434,413 @@ async def test_capture_reconnect_does_not_touch_registry(service_imports):
     # registry.acquire and registry.release should NOT be called
     mocks["registry"].acquire.assert_not_called()
     mocks["registry"].release.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 16-02: active_config_id / active_device_path push_state kwargs tests
+# ---------------------------------------------------------------------------
+
+
+def _find_push_state_call(calls, state: str):
+    """Return the first push_state call_args whose positional state arg equals `state`."""
+    for c in calls:
+        if c.args and c.args[0] == state:
+            return c
+    return None
+
+
+@pytest.mark.asyncio
+async def test_start_pushes_starting_with_active_kwargs(service_imports):
+    """start() pushes 'starting' state with active_config_id and resolved active_device_path."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-xyz", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def one_frame():
+        service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-xyz")
+                        if service._task:
+                            await service._task
+
+    starting_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "starting"
+    )
+    assert starting_call is not None, "push_state('starting', ...) was not called"
+    assert starting_call.kwargs.get("active_config_id") == "cfg-xyz"
+    assert starting_call.kwargs.get("active_device_path") == "/dev/video1"
+
+
+@pytest.mark.asyncio
+async def test_start_error_on_acquire_pushes_error_with_none(service_imports):
+    """start() pushes 'error' with active_config_id=None/active_device_path=None when registry.acquire fails."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    mocks["registry"].acquire = MagicMock(side_effect=RuntimeError("Device busy"))
+    camera_db = _make_db_with_camera_assignment("cfg-fail", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        await service.start("cfg-fail")
+
+    assert service.state == "error"
+    error_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "error"
+    )
+    assert error_call is not None, "push_state('error', ...) was not called"
+    # Must explicitly pass None (not omit) so the broadcaster clears internal state per D-06
+    assert "active_config_id" in error_call.kwargs, "active_config_id kwarg must be passed explicitly"
+    assert "active_device_path" in error_call.kwargs, "active_device_path kwarg must be passed explicitly"
+    assert error_call.kwargs["active_config_id"] is None
+    assert error_call.kwargs["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_loop_streaming_transition_pushes_active_kwargs(service_imports):
+    """_run_loop's 'streaming' push_state carries active_config_id and active_device_path."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-streaming", "cam-01", "/dev/video2")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    # Need to extend the db mock to also return bridge config, light_assignments, regions
+    # We'll use the pattern: first 2 calls handle _resolve_device_path, then bridge+assignments+regions
+    # Simpler approach: drive through start() with a controlled frame loop.
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def one_frame():
+        service._run_event.clear()
+        return _solid_blue_frame()
+
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
+
+    # Replace the run loop's DB-heavy work by pre-seeding state and calling _run_loop
+    # directly with an already-wired bridge path. Instead, drive via start() with
+    # a full DB that feeds both _resolve_device_path and _run_loop.
+    # Easier: build a db that sequences resolve-calls then bridge/assignments/regions.
+
+    cursors = []
+
+    def make_cursor_fetchone(val):
+        c = MagicMock()
+        c.fetchone = AsyncMock(return_value=val)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    def make_cursor_fetchall(rows):
+        c = MagicMock()
+        c.fetchall = AsyncMock(return_value=rows)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    cam_assign_row = MagicMock()
+    cam_assign_row.__getitem__ = MagicMock(side_effect=lambda k: {"camera_stable_id": "cam-01"}[k])
+    known_cam_row = MagicMock()
+    known_cam_row.__getitem__ = MagicMock(side_effect=lambda k: {"last_device_path": "/dev/video2"}[k])
+
+    bridge_row = {
+        "ip_address": "192.168.1.100",
+        "username": "testuser",
+        "client_key": "testkey",
+        "rid": "test-rid",
+        "bridge_id": "test-bridge",
+        "hue_app_id": "test-app",
+        "swversion": 1234,
+        "name": "Test Bridge",
+    }
+    bridge_row_mock = MagicMock()
+    bridge_row_mock.__getitem__ = MagicMock(side_effect=lambda k: bridge_row[k])
+
+    # Ordered cursor responses: _resolve_device_path (2 fetchone), _run_loop bridge_config (fetchone),
+    # _load_channel_map light_assignments (fetchall), regions (fetchall).
+    cursors_seq = [
+        make_cursor_fetchone(cam_assign_row),
+        make_cursor_fetchone(known_cam_row),
+        make_cursor_fetchone(bridge_row_mock),
+        make_cursor_fetchall([]),
+        make_cursor_fetchall([]),
+    ]
+    custom_db = MagicMock()
+    custom_db.execute = AsyncMock(side_effect=cursors_seq)
+
+    service = StreamingService(custom_db, mocks["registry"], mocks["broadcaster"])
+    mocks["capture"].wait_for_new_frame = AsyncMock(side_effect=one_frame)
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-streaming")
+                        if service._task:
+                            await service._task
+
+    streaming_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "streaming"
+    )
+    assert streaming_call is not None, "push_state('streaming', ...) was not called"
+    assert streaming_call.kwargs.get("active_config_id") == "cfg-streaming"
+    assert streaming_call.kwargs.get("active_device_path") == "/dev/video2"
+
+
+@pytest.mark.asyncio
+async def test_stop_pushes_idle_with_none_active(service_imports):
+    """stop() pushes 'idle' with active_config_id=None and active_device_path=None."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._state = "streaming"
+    service._config_id = "cfg-abc"
+    service._device_path = "/dev/video0"
+
+    async def fake_run_loop():
+        await asyncio.sleep(0.01)
+
+    service._task = asyncio.create_task(fake_run_loop())
+    service._run_event.set()
+
+    await service.stop()
+
+    idle_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "idle"
+    )
+    assert idle_call is not None, "push_state('idle', ...) was not called"
+    # Must explicitly pass None so broadcaster clears internal state (D-06)
+    assert "active_config_id" in idle_call.kwargs, "active_config_id kwarg must be passed explicitly"
+    assert "active_device_path" in idle_call.kwargs, "active_device_path kwarg must be passed explicitly"
+    assert idle_call.kwargs["active_config_id"] is None
+    assert idle_call.kwargs["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_loop_runtime_error_clears_active(service_imports):
+    """_run_loop except RuntimeError branch (line 243) clears active_config_id/path on broadcast."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-rt", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    service = StreamingService(camera_db, mocks["registry"], mocks["broadcaster"])
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        # Force a RuntimeError from the pykit streaming.start_stream call so
+        # _run_loop's except RuntimeError branch fires.
+        if fn is mocks["streaming"].start_stream:
+            raise RuntimeError("Capture device went away")
+        return fn(*args, **kwargs)
+
+    # Extend the DB so _run_loop can reach its bridge_config fetch and then fail
+    # when start_stream raises. Sequence: resolve (2), bridge (1) — failure hits
+    # before _load_channel_map runs. But _load_channel_map is called BEFORE
+    # start_stream in _run_loop (step 2 loads channel map, step 5 starts stream).
+    # So we also need the light_assignments and regions cursors.
+
+    def make_cursor_fetchone(val):
+        c = MagicMock()
+        c.fetchone = AsyncMock(return_value=val)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    def make_cursor_fetchall(rows):
+        c = MagicMock()
+        c.fetchall = AsyncMock(return_value=rows)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    cam_assign_row = MagicMock()
+    cam_assign_row.__getitem__ = MagicMock(side_effect=lambda k: {"camera_stable_id": "cam-01"}[k])
+    known_cam_row = MagicMock()
+    known_cam_row.__getitem__ = MagicMock(side_effect=lambda k: {"last_device_path": "/dev/video1"}[k])
+    bridge_row = {
+        "ip_address": "192.168.1.100",
+        "username": "testuser",
+        "client_key": "testkey",
+        "rid": "test-rid",
+        "bridge_id": "test-bridge",
+        "hue_app_id": "test-app",
+        "swversion": 1234,
+        "name": "Test Bridge",
+    }
+    bridge_row_mock = MagicMock()
+    bridge_row_mock.__getitem__ = MagicMock(side_effect=lambda k: bridge_row[k])
+
+    cursors_seq = [
+        make_cursor_fetchone(cam_assign_row),
+        make_cursor_fetchone(known_cam_row),
+        make_cursor_fetchone(bridge_row_mock),
+        make_cursor_fetchall([]),
+        make_cursor_fetchall([]),
+    ]
+    custom_db = MagicMock()
+    custom_db.execute = AsyncMock(side_effect=cursors_seq)
+
+    service = StreamingService(custom_db, mocks["registry"], mocks["broadcaster"])
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-rt")
+                        if service._task:
+                            await service._task
+
+    error_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "error"
+    )
+    assert error_call is not None, "push_state('error', ...) was not called"
+    # D-06: clear-on-error must explicitly pass None so _metrics is cleared
+    assert "active_config_id" in error_call.kwargs, "active_config_id kwarg must be passed explicitly"
+    assert "active_device_path" in error_call.kwargs, "active_device_path kwarg must be passed explicitly"
+    assert error_call.kwargs["active_config_id"] is None
+    assert error_call.kwargs["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_loop_generic_error_clears_active(service_imports):
+    """_run_loop except Exception branch (line 249) clears active_config_id/path on broadcast."""
+    StreamingService, _, __, mock_streaming_cls = service_imports
+
+    mocks = _make_mocks()
+    camera_db = _make_db_with_camera_assignment("cfg-ge", "cam-01", "/dev/video1")
+    mock_streaming_cls.return_value = mocks["streaming"]
+
+    # Force a generic (non-RuntimeError) exception from set_color_space (step 6 in _run_loop,
+    # which runs AFTER start_stream). ValueError -> lands in the generic except Exception branch.
+    async def fake_to_thread(fn, *args, **kwargs):
+        if fn is mocks["streaming"].set_color_space:
+            raise ValueError("Bad color space")
+        return fn(*args, **kwargs)
+
+    def make_cursor_fetchone(val):
+        c = MagicMock()
+        c.fetchone = AsyncMock(return_value=val)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    def make_cursor_fetchall(rows):
+        c = MagicMock()
+        c.fetchall = AsyncMock(return_value=rows)
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=False)
+        return c
+
+    cam_assign_row = MagicMock()
+    cam_assign_row.__getitem__ = MagicMock(side_effect=lambda k: {"camera_stable_id": "cam-01"}[k])
+    known_cam_row = MagicMock()
+    known_cam_row.__getitem__ = MagicMock(side_effect=lambda k: {"last_device_path": "/dev/video1"}[k])
+    bridge_row = {
+        "ip_address": "192.168.1.100",
+        "username": "testuser",
+        "client_key": "testkey",
+        "rid": "test-rid",
+        "bridge_id": "test-bridge",
+        "hue_app_id": "test-app",
+        "swversion": 1234,
+        "name": "Test Bridge",
+    }
+    bridge_row_mock = MagicMock()
+    bridge_row_mock.__getitem__ = MagicMock(side_effect=lambda k: bridge_row[k])
+
+    cursors_seq = [
+        make_cursor_fetchone(cam_assign_row),
+        make_cursor_fetchone(known_cam_row),
+        make_cursor_fetchone(bridge_row_mock),
+        make_cursor_fetchall([]),
+        make_cursor_fetchall([]),
+    ]
+    custom_db = MagicMock()
+    custom_db.execute = AsyncMock(side_effect=cursors_seq)
+
+    service = StreamingService(custom_db, mocks["registry"], mocks["broadcaster"])
+
+    with patch("services.streaming_service.activate_entertainment_config", new_callable=AsyncMock):
+        with patch("services.streaming_service.deactivate_entertainment_config", new_callable=AsyncMock):
+            with patch("services.streaming_service.resolve_light_to_channel_map", new_callable=AsyncMock, return_value={}):
+                with patch("asyncio.to_thread", side_effect=fake_to_thread):
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        await service.start("cfg-ge")
+                        if service._task:
+                            await service._task
+
+    error_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "error"
+    )
+    assert error_call is not None, "push_state('error', ...) was not called"
+    # D-06: clear-on-error must explicitly pass None so _metrics is cleared
+    assert "active_config_id" in error_call.kwargs, "active_config_id kwarg must be passed explicitly"
+    assert "active_device_path" in error_call.kwargs, "active_device_path kwarg must be passed explicitly"
+    assert error_call.kwargs["active_config_id"] is None
+    assert error_call.kwargs["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_capture_reconnect_pushes_reconnecting_with_active(service_imports):
+    """_capture_reconnect_loop pushes 'reconnecting' state with active config/device kwargs."""
+    StreamingService, _, __, ___ = service_imports
+
+    mocks = _make_mocks()
+    service = StreamingService(mocks["db"], mocks["registry"], mocks["broadcaster"])
+    service._capture = mocks["capture"]
+    service._run_event.set()
+    service._config_id = "cfg-recon"
+    service._device_path = "/dev/video3"
+
+    mocks["capture"].open = MagicMock()  # succeeds immediately
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await service._capture_reconnect_loop()
+
+    assert result is True
+
+    reconnecting_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "reconnecting"
+    )
+    assert reconnecting_call is not None, "push_state('reconnecting', ...) was not called"
+    assert reconnecting_call.kwargs.get("active_config_id") == "cfg-recon"
+    assert reconnecting_call.kwargs.get("active_device_path") == "/dev/video3"
+
+    # Post-reconnect 'streaming' must also carry the kwargs (unchanged active)
+    streaming_call = _find_push_state_call(
+        mocks["broadcaster"].push_state.call_args_list, "streaming"
+    )
+    assert streaming_call is not None, "push_state('streaming', ...) was not called after reconnect"
+    assert streaming_call.kwargs.get("active_config_id") == "cfg-recon"
+    assert streaming_call.kwargs.get("active_device_path") == "/dev/video3"
