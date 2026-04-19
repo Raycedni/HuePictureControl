@@ -127,7 +127,7 @@ async def test_connect_sends_current_metrics_snapshot():
 
 @pytest.mark.asyncio
 async def test_initial_metrics_defaults():
-    """Initial _metrics has expected default values."""
+    """Initial _metrics has expected default values (per Phase 16 D-06)."""
     from services.status_broadcaster import StatusBroadcaster
     sb = StatusBroadcaster()
     assert sb._metrics == {
@@ -137,7 +137,106 @@ async def test_initial_metrics_defaults():
         "packets_sent": 0,
         "packets_dropped": 0,
         "seq": 0,
+        "active_config_id": None,
+        "active_device_path": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_push_state_sets_active_config_id_and_device_path():
+    """push_state() with active_config_id and active_device_path kwargs populates payload and _metrics."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+    ws.send_text.reset_mock()
+
+    await sb.push_state("streaming", active_config_id="cfg-abc", active_device_path="/dev/video0")
+
+    payload = json.loads(ws.send_text.call_args[0][0])
+    assert payload["state"] == "streaming"
+    assert payload["active_config_id"] == "cfg-abc"
+    assert payload["active_device_path"] == "/dev/video0"
+    assert sb._metrics["active_config_id"] == "cfg-abc"
+    assert sb._metrics["active_device_path"] == "/dev/video0"
+
+
+@pytest.mark.asyncio
+async def test_push_state_clears_active_to_none():
+    """Explicit None kwargs clear active values on broadcast and internal state."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+
+    # First set values
+    await sb.push_state("streaming", active_config_id="cfg-1", active_device_path="/dev/video0")
+    ws.send_text.reset_mock()
+
+    # Now explicit None — must clear
+    await sb.push_state("idle", active_config_id=None, active_device_path=None)
+
+    payload = json.loads(ws.send_text.call_args[0][0])
+    assert payload["state"] == "idle"
+    assert payload["active_config_id"] is None
+    assert payload["active_device_path"] is None
+    assert sb._metrics["active_config_id"] is None
+    assert sb._metrics["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_push_state_omitted_kwargs_preserve_current():
+    """Omitting active kwargs on push_state preserves current values (no silent clear)."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+
+    # Set values first
+    await sb.push_state("streaming", active_config_id="cfg-xyz", active_device_path="/dev/video1")
+    ws.send_text.reset_mock()
+
+    # Second call without kwargs — must NOT clear to None
+    await sb.push_state("starting")
+
+    payload = json.loads(ws.send_text.call_args[0][0])
+    assert payload["state"] == "starting"
+    assert payload["active_config_id"] == "cfg-xyz"
+    assert payload["active_device_path"] == "/dev/video1"
+    assert sb._metrics["active_config_id"] == "cfg-xyz"
+    assert sb._metrics["active_device_path"] == "/dev/video1"
+
+
+@pytest.mark.asyncio
+async def test_connect_initial_snapshot_includes_active_fields():
+    """Fresh connect() sends an initial snapshot that includes both new keys."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+
+    ws.send_text.assert_called_once()
+    payload = json.loads(ws.send_text.call_args[0][0])
+    assert "active_config_id" in payload
+    assert "active_device_path" in payload
+    assert payload["active_config_id"] is None
+    assert payload["active_device_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_accepts_active_fields():
+    """update_metrics() accepts active_config_id/active_device_path via dict update (no broadcast)."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+    ws.send_text.reset_mock()
+
+    sb.update_metrics({"active_config_id": "cfg-1", "active_device_path": "/dev/video2"})
+
+    assert sb._metrics["active_config_id"] == "cfg-1"
+    assert sb._metrics["active_device_path"] == "/dev/video2"
+    ws.send_text.assert_not_called()
 
 
 @pytest.mark.asyncio
