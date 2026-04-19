@@ -82,6 +82,13 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             camera_name TEXT NOT NULL
         )
     """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS camera_last_zone (
+            camera_stable_id TEXT PRIMARY KEY,
+            entertainment_config_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     await db.commit()
     return db
 
