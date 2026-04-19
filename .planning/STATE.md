@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: Wireless Input
 status: executing
 stopped_at: Phase 16 context gathered
-last_updated: "2026-04-19T13:08:39.154Z"
-last_activity: 2026-04-19 -- Phase 16 planning complete
+last_updated: "2026-04-19T13:08:59.023Z"
+last_activity: 2026-04-19 -- Phase 16 execution started
 progress:
   total_phases: 8
   completed_phases: 6
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Planning next milestone (v1.2 Wireless Input)
+**Current focus:** Phase 16 — zone-persistence-bug-fixes
 
 ## Current Position
 
-Phase: Not started
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-19 -- Phase 16 planning complete
+Phase: 16 (zone-persistence-bug-fixes) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 16
+Last activity: 2026-04-19 -- Phase 16 execution started
 
 ## Performance Metrics
 
