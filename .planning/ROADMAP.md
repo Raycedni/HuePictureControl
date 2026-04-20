@@ -145,7 +145,16 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   4. Strips with more than 490 LEDs automatically use DNRGB chunked packets; strips with 490 or fewer use DRGB — no user configuration required
   5. When streaming stops, the UDP timeout byte causes the strip to release the last color within the configured timeout rather than staying frozen
   6. Hue and WLED devices stream simultaneously from the same captured frame without interference or frame-rate degradation
-**Plans**: TBD
+**Plans**: 9 plans
+  - [ ] 17-01-PLAN.md — Wave 0 fixtures: zeroconf dep + udp_listener + mock_capture
+  - [ ] 17-02-PLAN.md — DB schema (3 WLED tables) + sub_sample_gradient helper
+  - [ ] 17-03-PLAN.md — WLED packet builders (DRGB/DNRGB) + wled_client + wled_discovery (TDD)
+  - [ ] 17-04-PLAN.md — WledStreamer class (lifecycle, per-device lock, cooldown, blackout)
+  - [ ] 17-05-PLAN.md — StreamingCoordinator extraction + HueStreamer refactor (behavior-preserving)
+  - [ ] 17-06-PLAN.md — Coordinator↔WLED integration + StatusBroadcaster wled_devices + app.state rewire
+  - [ ] 17-07-PLAN.md — routers/wled.py CRUD + scan endpoints (with IP regex, cascade delete)
+  - [ ] 17-08-PLAN.md — Frontend: api/wled + Settings panel + WledDevicesPanel + store/WS extensions
+  - [ ] 17-09-PLAN.md — E2E integration test + preflight + manual verification checkpoint
 
 ---
 
