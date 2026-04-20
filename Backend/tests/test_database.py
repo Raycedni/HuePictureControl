@@ -171,3 +171,59 @@ async def test_entertainment_config_id_migration_idempotent(tmp_path):
         assert row is not None, "entertainment_config_id column missing after double init_db"
     finally:
         await close_db(conn2)
+
+
+async def test_camera_last_zone_table_created():
+    """camera_last_zone table is created by init_db(). Per D-02."""
+    conn = await init_db(":memory:")
+    try:
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='camera_last_zone'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None, "camera_last_zone table was not created"
+    finally:
+        await close_db(conn)
+
+
+async def test_camera_last_zone_persists(tmp_path):
+    """camera_last_zone row persists across DB close and reopen. Per BFIX-01."""
+    db_path = str(tmp_path / "test_last_zone.db")
+    conn = await init_db(db_path)
+    await conn.execute(
+        "INSERT INTO camera_last_zone (camera_stable_id, entertainment_config_id, updated_at) "
+        "VALUES (?, ?, ?)",
+        ("usb-1234:5678", "cfg-abc", "2026-04-18T00:00:00Z"),
+    )
+    await conn.commit()
+    await close_db(conn)
+
+    conn2 = await init_db(db_path)
+    try:
+        async with conn2.execute(
+            "SELECT * FROM camera_last_zone WHERE camera_stable_id = ?",
+            ("usb-1234:5678",),
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row["camera_stable_id"] == "usb-1234:5678"
+        assert row["entertainment_config_id"] == "cfg-abc"
+        assert row["updated_at"] == "2026-04-18T00:00:00Z"
+    finally:
+        await close_db(conn2)
+
+
+async def test_camera_last_zone_migration_idempotent(tmp_path):
+    """init_db run twice on same file-based DB does not error for camera_last_zone."""
+    db_path = str(tmp_path / "test_last_zone_migration.db")
+    conn1 = await init_db(db_path)
+    await close_db(conn1)
+    conn2 = await init_db(db_path)
+    try:
+        async with conn2.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='camera_last_zone'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+    finally:
+        await close_db(conn2)
