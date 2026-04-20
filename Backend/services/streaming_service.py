@@ -86,18 +86,29 @@ class StreamingService:
         self._period = 1.0 / self._target_hz
         self._config_id = config_id
         self._state = "starting"
-        await self._broadcaster.push_state(self._state)
 
-        # Resolve device path from DB camera assignment (falls back to CAPTURE_DEVICE)
+        # Resolve device path BEFORE broadcasting "starting" so the WS payload
+        # carries the resolved active_device_path (Phase 16 D-05/D-06).
         device_path = await self._resolve_device_path(config_id)
         self._device_path = device_path
+
+        await self._broadcaster.push_state(
+            self._state,
+            active_config_id=config_id,
+            active_device_path=device_path,
+        )
 
         # Acquire capture backend from registry
         try:
             self._capture = await asyncio.to_thread(self._capture_registry.acquire, device_path)
         except RuntimeError as exc:
             self._state = "error"
-            await self._broadcaster.push_state("error", error=str(exc))
+            await self._broadcaster.push_state(
+                "error",
+                error=str(exc),
+                active_config_id=None,
+                active_device_path=None,
+            )
             return
 
         self._run_event.set()
@@ -113,12 +124,23 @@ class StreamingService:
         if self._state == "idle":
             return
         self._state = "stopping"
-        await self._broadcaster.push_state(self._state)
+        # "stopping" still carries the active config/device — we're still on it
+        # until teardown completes (Phase 16 D-06).
+        await self._broadcaster.push_state(
+            self._state,
+            active_config_id=self._config_id,
+            active_device_path=self._device_path,
+        )
         self._run_event.clear()
         if self._task:
             await self._task
         self._state = "idle"
-        await self._broadcaster.push_state(self._state)
+        # Clear active config/device on idle (D-06).
+        await self._broadcaster.push_state(
+            self._state,
+            active_config_id=None,
+            active_device_path=None,
+        )
 
     # ------------------------------------------------------------------
     # Internal: device resolution
@@ -225,9 +247,13 @@ class StreamingService:
             # 6. Set color space to xyb
             await asyncio.to_thread(streaming.set_color_space, "xyb")
 
-            # Transition to streaming state
+            # Transition to streaming state — carry active config/device (D-06).
             self._state = "streaming"
-            await self._broadcaster.push_state(self._state)
+            await self._broadcaster.push_state(
+                self._state,
+                active_config_id=self._config_id,
+                active_device_path=self._device_path,
+            )
 
             # 7. Start broadcaster heartbeat
             await self._broadcaster.start_heartbeat()
@@ -236,17 +262,28 @@ class StreamingService:
             await self._frame_loop(streaming, channel_map, bridge_ip, username)
 
         except RuntimeError as exc:
-            # Capture card disconnect — stop entirely
+            # Capture card / runtime error — stop entirely and clear active (D-06).
             logger.error("Capture error in run loop: %s", exc)
             self._run_event.clear()
             self._state = "error"
-            await self._broadcaster.push_state("error", error=str(exc))
+            await self._broadcaster.push_state(
+                "error",
+                error=str(exc),
+                active_config_id=None,
+                active_device_path=None,
+            )
 
         except Exception as exc:
+            # Unexpected error — clear active (D-06).
             logger.error("Unexpected error in run loop: %s", exc)
             self._run_event.clear()
             self._state = "error"
-            await self._broadcaster.push_state("error", error=str(exc))
+            await self._broadcaster.push_state(
+                "error",
+                error=str(exc),
+                active_config_id=None,
+                active_device_path=None,
+            )
 
         finally:
             # 9. Locked stop sequence: stop_stream -> deactivate -> capture.release
@@ -382,7 +419,13 @@ class StreamingService:
                     continue
                 else:
                     self._state = "error"
-                    await self._broadcaster.push_state("error", error=str(exc))
+                    # Clear active on capture error (D-06).
+                    await self._broadcaster.push_state(
+                        "error",
+                        error=str(exc),
+                        active_config_id=None,
+                        active_device_path=None,
+                    )
                     return
 
             t_capture = time.monotonic()
@@ -465,7 +508,12 @@ class StreamingService:
             True if reconnection succeeded, False if run_event was cleared.
         """
         self._state = "reconnecting"
-        await self._broadcaster.push_state(self._state)
+        # Carry active config/device across reconnect — they do not change (D-06).
+        await self._broadcaster.push_state(
+            self._state,
+            active_config_id=self._config_id,
+            active_device_path=self._device_path,
+        )
 
         delay = 1
         max_delay = 30
@@ -486,7 +534,12 @@ class StreamingService:
                     raise RuntimeError("Device opened but no frames produced")
                 logger.info("Capture device reconnection succeeded")
                 self._state = "streaming"
-                await self._broadcaster.push_state(self._state)
+                # Active config/device unchanged after successful reconnect.
+                await self._broadcaster.push_state(
+                    self._state,
+                    active_config_id=self._config_id,
+                    active_device_path=self._device_path,
+                )
                 return True
             except Exception as exc:
                 logger.warning(
