@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: WLED Support, HA Control & Bug Fixes
-status: executing
-stopped_at: Phase 16 complete — ready for Phase 17
-last_updated: "2026-04-20T18:42:00.000Z"
+milestone: v1.2
+milestone_name: Wireless Input
+status: Phase 16 shipped; next up Phase 17 (WLED Backend and Streaming)
+stopped_at: Phase 17 context gathered
+last_updated: "2026-04-20T17:13:46.695Z"
 last_activity: 2026-04-20 -- Phase 16 plan 03 completed (all 3 plans shipped)
 progress:
-  total_phases: 8
-  completed_phases: 7
-  total_plans: 20
-  completed_plans: 20
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -85,6 +84,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-20T18:42:00.000Z
-Stopped at: Phase 16 complete — ready for Phase 17
-Resume file: .planning/phases/16-zone-persistence-bug-fixes/16-03-SUMMARY.md
+Last session: --stopped-at
+Stopped at: Phase 17 context gathered
+Resume file: --resume-file
