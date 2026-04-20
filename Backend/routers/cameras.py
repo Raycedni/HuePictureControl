@@ -40,6 +40,7 @@ class CameraDevice(BaseModel):
     display_name: str
     connected: bool
     last_seen_at: str | None
+    last_entertainment_config_id: str | None  # D-04: pre-select zone on reload
 
 
 class ZoneHealth(BaseModel):
@@ -76,6 +77,16 @@ class AssignmentResponse(BaseModel):
     entertainment_config_id: str
     camera_stable_id: str
     camera_name: str
+
+
+class LastZoneRequest(BaseModel):
+    entertainment_config_id: str
+
+
+class LastZoneResponse(BaseModel):
+    camera_stable_id: str
+    entertainment_config_id: str
+    updated_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +180,14 @@ async def list_cameras(request: Request) -> CamerasResponse:
         await _upsert_known_cameras(db, scan_results)
 
     # Fetch all rows from known_cameras (includes previously-seen-but-gone devices)
+    # LEFT JOIN camera_last_zone to expose last_entertainment_config_id per D-04
     async with db.execute(
-        "SELECT stable_id, display_name, last_seen_at, last_device_path FROM known_cameras"
+        """
+        SELECT k.stable_id, k.display_name, k.last_seen_at, k.last_device_path,
+               clz.entertainment_config_id AS last_entertainment_config_id
+        FROM known_cameras k
+        LEFT JOIN camera_last_zone clz ON clz.camera_stable_id = k.stable_id
+        """
     ) as cursor:
         known_rows = await cursor.fetchall()
 
@@ -193,6 +210,7 @@ async def list_cameras(request: Request) -> CamerasResponse:
                 display_name=row["display_name"],
                 connected=connected,
                 last_seen_at=row["last_seen_at"],
+                last_entertainment_config_id=row["last_entertainment_config_id"],
             )
         )
 
@@ -325,6 +343,13 @@ async def put_assignment(
         """,
         (entertainment_config_id, body.camera_stable_id, body.camera_name),
     )
+    # D-10 (W1): bump last_seen_at on every camera-dropdown change so the
+    # "most-recently-touched camera" heuristic reflects this assignment write.
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE known_cameras SET last_seen_at = ? WHERE stable_id = ?",
+        (now, body.camera_stable_id),
+    )
     await db.commit()
 
     return AssignmentResponse(
@@ -362,4 +387,77 @@ async def get_assignment(
         entertainment_config_id=row["entertainment_config_id"],
         camera_stable_id=row["camera_stable_id"],
         camera_name=row["camera_name"],
+    )
+
+
+@router.put("/last-zone/{stable_id}", response_model=LastZoneResponse)
+async def put_last_zone(
+    stable_id: str,
+    body: LastZoneRequest,
+    request: Request,
+) -> LastZoneResponse:
+    """Persist the last-used entertainment config for a camera.
+
+    Also bumps `known_cameras.last_seen_at` for the same stable_id so the
+    "most-recently-touched camera" heuristic reflects the zone-dropdown change.
+
+    Validates:
+      - stable_id exists in known_cameras (404 otherwise, per T-16-01)
+      - entertainment_config_id exists in entertainment_configs (404 otherwise, per T-16-02)
+
+    Per D-02 (schema), D-04 (endpoint), D-10 (last_seen_at bump), BFIX-01.
+    """
+    db = request.app.state.db
+
+    # Validate stable_id exists in known_cameras (T-16-01)
+    async with db.execute(
+        "SELECT stable_id FROM known_cameras WHERE stable_id = ?",
+        (stable_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"stable_id '{stable_id}' not found in known cameras.",
+        )
+
+    # Validate entertainment_config_id exists in entertainment_configs (T-16-02)
+    async with db.execute(
+        "SELECT id FROM entertainment_configs WHERE id = ?",
+        (body.entertainment_config_id,),
+    ) as cursor:
+        cfg_row = await cursor.fetchone()
+    if cfg_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"entertainment_config_id '{body.entertainment_config_id}' "
+                "not found in entertainment_configs."
+            ),
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Upsert the last-zone mapping
+    await db.execute(
+        """
+        INSERT INTO camera_last_zone (camera_stable_id, entertainment_config_id, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(camera_stable_id) DO UPDATE SET
+            entertainment_config_id = excluded.entertainment_config_id,
+            updated_at = excluded.updated_at
+        """,
+        (stable_id, body.entertainment_config_id, now),
+    )
+    # D-10: bump last_seen_at in the same transaction
+    await db.execute(
+        "UPDATE known_cameras SET last_seen_at = ? WHERE stable_id = ?",
+        (now, stable_id),
+    )
+    await db.commit()
+
+    return LastZoneResponse(
+        camera_stable_id=stable_id,
+        entertainment_config_id=body.entertainment_config_id,
+        updated_at=now,
     )

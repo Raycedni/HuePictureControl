@@ -7,6 +7,7 @@ Covers:
   - GET /api/cameras/assignments/{config_id}
 """
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +16,19 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from services.capture_v4l2 import V4L2DeviceInfo
+if sys.platform == "win32":
+    # capture_v4l2 is Linux-only (imports fcntl). Provide a minimal stand-in
+    # with the same fields used in tests so the module loads on Windows too.
+    from dataclasses import dataclass
+
+    @dataclass
+    class V4L2DeviceInfo:
+        device_path: str
+        card: str
+        driver: str
+        bus_info: str
+else:
+    from services.capture_v4l2 import V4L2DeviceInfo
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +37,7 @@ from services.capture_v4l2 import V4L2DeviceInfo
 
 
 async def _make_db():
-    """In-memory aiosqlite with known_cameras + camera_assignments schema."""
+    """In-memory aiosqlite with known_cameras + camera_assignments + camera_last_zone + entertainment_configs schema."""
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await conn.execute("""
@@ -40,6 +53,22 @@ async def _make_db():
             entertainment_config_id TEXT PRIMARY KEY,
             camera_stable_id TEXT NOT NULL,
             camera_name TEXT NOT NULL
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS camera_last_zone (
+            camera_stable_id TEXT PRIMARY KEY,
+            entertainment_config_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS entertainment_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'inactive',
+            channel_count INTEGER NOT NULL DEFAULT 0,
+            raw_json TEXT NOT NULL
         )
     """)
     await conn.commit()
@@ -385,6 +414,234 @@ def test_zone_health_connected(cameras_client):
     assert entry["device_path"] == "/dev/video0"
 
 
+def test_put_last_zone_persists(cameras_client):
+    """PUT /api/cameras/last-zone/{stable_id} persists the mapping. Per D-04, BFIX-01."""
+    client, _, _, db = cameras_client
+    # Seed known_cameras and entertainment_configs
+    client.get("/api/cameras")  # seeds known_cameras with stable_id "1234:5678"
+
+    async def _seed_config():
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-abc", "Test Config", "{}"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_seed_config())
+
+    resp = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "cfg-abc"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["camera_stable_id"] == "1234:5678"
+    assert body["entertainment_config_id"] == "cfg-abc"
+    assert "updated_at" in body
+
+    # Verify row is in camera_last_zone
+    async def _query():
+        async with db.execute(
+            "SELECT * FROM camera_last_zone WHERE camera_stable_id = ?",
+            ("1234:5678",),
+        ) as cur:
+            return await cur.fetchone()
+
+    row = asyncio.get_event_loop().run_until_complete(_query())
+    assert row is not None
+    assert row["entertainment_config_id"] == "cfg-abc"
+
+
+def test_put_last_zone_updates_last_seen_at(cameras_client):
+    """PUT /api/cameras/last-zone/{stable_id} bumps known_cameras.last_seen_at per D-10."""
+    client, _, _, db = cameras_client
+    # Seed known_cameras via list call
+    client.get("/api/cameras")
+
+    # Record baseline last_seen_at and seed an entertainment_config
+    baseline = "2020-01-01T00:00:00+00:00"
+
+    async def _setup():
+        await db.execute(
+            "UPDATE known_cameras SET last_seen_at = ? WHERE stable_id = ?",
+            (baseline, "1234:5678"),
+        )
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-abc", "Test Config", "{}"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_setup())
+
+    resp = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "cfg-abc"},
+    )
+    assert resp.status_code == 200
+
+    async def _query():
+        async with db.execute(
+            "SELECT last_seen_at FROM known_cameras WHERE stable_id = ?",
+            ("1234:5678",),
+        ) as cur:
+            return await cur.fetchone()
+
+    row = asyncio.get_event_loop().run_until_complete(_query())
+    assert row is not None
+    assert row["last_seen_at"] != baseline
+    assert row["last_seen_at"] > baseline  # ISO-8601 lexicographic ordering
+
+
+def test_put_last_zone_unknown_stable_id_404(cameras_client):
+    """PUT with stable_id not in known_cameras returns 404 (T-16-01)."""
+    client, _, _, db = cameras_client
+    # Seed only the entertainment_config; stable_id is intentionally absent
+    async def _seed_config():
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-abc", "Test Config", "{}"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_seed_config())
+
+    resp = client.put(
+        "/api/cameras/last-zone/unknown:id",
+        json={"entertainment_config_id": "cfg-abc"},
+    )
+    assert resp.status_code == 404
+
+
+def test_put_last_zone_upsert(cameras_client):
+    """Two consecutive PUTs on same stable_id: only the second is stored (ON CONFLICT UPDATE)."""
+    client, _, _, db = cameras_client
+    client.get("/api/cameras")  # seeds known_cameras
+
+    async def _seed_configs():
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-abc", "Config A", "{}"),
+        )
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-xyz", "Config B", "{}"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_seed_configs())
+
+    resp1 = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "cfg-abc"},
+    )
+    assert resp1.status_code == 200
+
+    resp2 = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "cfg-xyz"},
+    )
+    assert resp2.status_code == 200
+
+    async def _query():
+        async with db.execute(
+            "SELECT * FROM camera_last_zone WHERE camera_stable_id = ?",
+            ("1234:5678",),
+        ) as cur:
+            return await cur.fetchall()
+
+    rows = asyncio.get_event_loop().run_until_complete(_query())
+    assert len(rows) == 1
+    assert rows[0]["entertainment_config_id"] == "cfg-xyz"
+
+
+def test_put_last_zone_rejects_unknown_config_id(cameras_client):
+    """PUT with entertainment_config_id not in entertainment_configs returns 404 (T-16-02)."""
+    client, _, _, db = cameras_client
+    client.get("/api/cameras")  # seeds known_cameras with stable_id "1234:5678"
+
+    resp = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "nonexistent-cfg"},
+    )
+    assert resp.status_code == 404
+
+
+def test_get_cameras_exposes_last_entertainment_config_id(cameras_client):
+    """After PUT succeeds, GET /api/cameras returns last_entertainment_config_id per D-04."""
+    client, _, _, db = cameras_client
+    client.get("/api/cameras")  # seeds known_cameras
+
+    async def _seed_config():
+        await db.execute(
+            "INSERT INTO entertainment_configs (id, name, raw_json) VALUES (?, ?, ?)",
+            ("cfg-abc", "Test Config", "{}"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_seed_config())
+
+    put_resp = client.put(
+        "/api/cameras/last-zone/1234:5678",
+        json={"entertainment_config_id": "cfg-abc"},
+    )
+    assert put_resp.status_code == 200
+
+    resp = client.get("/api/cameras")
+    assert resp.status_code == 200
+    devices = resp.json()["devices"]
+    target = next((d for d in devices if d["stable_id"] == "1234:5678"), None)
+    assert target is not None
+    assert target["last_entertainment_config_id"] == "cfg-abc"
+
+
+def test_get_cameras_last_entertainment_config_id_null_when_unset(cameras_client):
+    """Before any PUT, last_entertainment_config_id is null for each device."""
+    client, *_ = cameras_client
+    resp = client.get("/api/cameras")
+    assert resp.status_code == 200
+    devices = resp.json()["devices"]
+    assert len(devices) >= 1
+    for d in devices:
+        assert "last_entertainment_config_id" in d
+        assert d["last_entertainment_config_id"] is None
+
+
+def test_put_assignment_updates_last_seen_at(cameras_client):
+    """put_assignment bumps known_cameras.last_seen_at per D-10 (camera-dropdown change, W1)."""
+    client, _, _, db = cameras_client
+    client.get("/api/cameras")  # seeds known_cameras with stable_id "1234:5678"
+
+    baseline = "2020-01-01T00:00:00+00:00"
+
+    async def _setup():
+        await db.execute(
+            "UPDATE known_cameras SET last_seen_at = ? WHERE stable_id = ?",
+            (baseline, "1234:5678"),
+        )
+        await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_setup())
+
+    resp = client.put(
+        "/api/cameras/assignments/cfg-xyz",
+        json={"camera_stable_id": "1234:5678", "camera_name": "Test Cam"},
+    )
+    assert resp.status_code == 200
+
+    async def _query():
+        async with db.execute(
+            "SELECT last_seen_at FROM known_cameras WHERE stable_id = ?",
+            ("1234:5678",),
+        ) as cur:
+            return await cur.fetchone()
+
+    row = asyncio.get_event_loop().run_until_complete(_query())
+    assert row is not None
+    assert row["last_seen_at"] != baseline
+    assert row["last_seen_at"] > baseline  # ISO-8601 lexicographic ordering
+
+
 def test_zone_health_disconnected(cameras_client_empty):
     """zone_health entry has connected=False when stable_id not in current scan."""
     import asyncio as _asyncio
@@ -407,6 +664,13 @@ def test_zone_health_disconnected(cameras_client_empty):
             CREATE TABLE IF NOT EXISTS camera_assignments (
                 entertainment_config_id TEXT PRIMARY KEY,
                 camera_stable_id TEXT NOT NULL, camera_name TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS camera_last_zone (
+                camera_stable_id TEXT PRIMARY KEY,
+                entertainment_config_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
         """)
         # Insert an assignment for a stable_id that won't be in the empty scan
