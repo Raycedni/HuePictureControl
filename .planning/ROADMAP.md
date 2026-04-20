@@ -112,7 +112,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 **Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
 
-- [ ] **Phase 16: Zone Persistence Bug Fixes** - Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
+- [x] **Phase 16: Zone Persistence Bug Fixes** (3/3 plans) — completed 2026-04-20 — Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
 - [ ] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
@@ -127,10 +127,10 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   1. After selecting an entertainment config and reloading the page, the same config is pre-selected in the dropdown without manual re-selection
   2. If streaming was active when the page was opened in another tab, the dropdown on the new tab shows the streaming state correctly rather than a default/idle state
   3. Selecting different entertainment configs for different cameras persists independently — switching cameras shows the config last used with that camera
-**Plans**: 3 plans
-  - [ ] 16-01-PLAN.md — Backend DB schema + PUT /api/cameras/last-zone endpoint + GET last_entertainment_config_id field
-  - [ ] 16-02-PLAN.md — StatusBroadcaster + StreamingService active_config_id/active_device_path wiring
-  - [ ] 16-03-PLAN.md — Frontend API, Zustand store, WS parser, LightPanel 3-tier initial selection + auto-save on zone change
+**Plans**: 3 plans (3/3 complete — shipped 2026-04-20)
+  - [x] 16-01-PLAN.md — Backend DB schema + PUT /api/cameras/last-zone endpoint + GET last_entertainment_config_id field
+  - [x] 16-02-PLAN.md — StatusBroadcaster + StreamingService active_config_id/active_device_path wiring
+  - [x] 16-03-PLAN.md — Frontend API, Zustand store, WS parser, LightPanel 3-tier initial selection + auto-save on zone change
 
 ---
 

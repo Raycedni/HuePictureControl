@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Wireless Input
+milestone: v1.3
+milestone_name: WLED Support, HA Control & Bug Fixes
 status: executing
-stopped_at: Phase 16 context gathered
-last_updated: "2026-04-19T13:08:59.023Z"
-last_activity: 2026-04-19 -- Phase 16 execution started
+stopped_at: Phase 16 complete — ready for Phase 17
+last_updated: "2026-04-20T18:42:00.000Z"
+last_activity: 2026-04-20 -- Phase 16 plan 03 completed (all 3 plans shipped)
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 20
-  completed_plans: 17
-  percent: 85
+  completed_plans: 20
+  percent: 100
 ---
 
 # Project State
@@ -21,33 +21,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 16 — zone-persistence-bug-fixes
+**Current focus:** Phase 17 — WLED Backend and Streaming (next)
 
 ## Current Position
 
-Phase: 16 (zone-persistence-bug-fixes) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 16
-Last activity: 2026-04-19 -- Phase 16 execution started
+Phase: 16 (zone-persistence-bug-fixes) — COMPLETE
+Plan: 3 of 3 complete
+Status: Phase 16 shipped; next up Phase 17 (WLED Backend and Streaming)
+Last activity: 2026-04-20 -- Phase 16 plan 03 completed (all 3 plans shipped)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (new milestone)
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 3 (Phase 16 full)
+- Average duration: ~30 min / plan
+- Total execution time: ~1.5 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| (none yet) | - | - | - |
+| 16 | 3 | ~1.5h | ~30 min |
 
 **Recent Trend:**
 
-- Last 5 plans: none yet
-- Trend: -
+- Last 5 plans: 16-01 (backend DB + router), 16-02 (broadcaster + streaming service), 16-03 (frontend store + LightPanel)
+- Trend: steady; Phase 16 executed cleanly across both backend and frontend
 
 *Updated after each plan completion*
 
@@ -58,6 +58,10 @@ Last activity: 2026-04-19 -- Phase 16 execution started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [16-03]: LightPanel uses a 3-tier zone selection cascade (streaming > camera-persisted > configs[0]) with guard-clause early returns inside a single useEffect
+- [16-03]: Stale-persisted configs fall back silently AND overwrite the dangling row via putLastZone (Claude's Discretion per 16-CONTEXT.md)
+- [16-03]: W2 closure — pre-selection is read-only; verified by explicit `not.toHaveBeenCalled()` negative assertion
+- [16-03]: W3 closure — zone `<select>` carries data-testid="zone-select"; tests use findByTestId/getByTestId instead of index-based querySelectorAll
 - [v1.3 roadmap]: WLED streaming uses stdlib socket (UDP) — no new library; DRGB for <=490 LEDs, DNRGB for >490 (auto-selected by WledService)
 - [v1.3 roadmap]: WLED device registration uses existing httpx to fetch /json/info from device IP before persisting
 - [v1.3 roadmap]: WLED channels use shared channel abstraction — painted ranges appear in light panel alongside Hue segments, same drag-drop assignment
@@ -73,13 +77,14 @@ None yet.
 - Phase 3.1 inserted after Phase 3: Auto-Mapping from Entertainment Config — auto-generate screen regions from channel positions before building manual canvas editor (user decision 2026-03-24)
 - v1.3 Phases 16-19 added 2026-04-14: Zone persistence fixes, WLED backend+streaming, HA control endpoints, WLED strip paint UI
 - v1.1 archived 2026-04-14: 5 phases, 10 plans, 7 requirements left unchecked (known gaps)
+- Phase 16 closed 2026-04-20: 3 plans, BFIX-01 + BFIX-02 shipped
 
 ### Blockers/Concerns
 
-(None for current milestone — cleared at v1.1 close)
+(None — Phase 16 clean close; ready for Phase 17 kickoff)
 
 ## Session Continuity
 
-Last session: 2026-04-18T19:03:49.481Z
-Stopped at: Phase 16 context gathered
-Resume file: .planning/phases/16-zone-persistence-bug-fixes/16-CONTEXT.md
+Last session: 2026-04-20T18:42:00.000Z
+Stopped at: Phase 16 complete — ready for Phase 17
+Resume file: .planning/phases/16-zone-persistence-bug-fixes/16-03-SUMMARY.md
