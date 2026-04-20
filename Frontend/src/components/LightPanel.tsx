@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getLights, getEntertainmentConfigs, fetchConfigChannels, type Light, type ConfigChannel, type EntertainmentConfig } from '@/api/hue'
 import { fetchRegions, startStreaming, stopStreaming, clearAllAssignments } from '@/api/regions'
-import { putCameraAssignment, type CamerasResponse } from '@/api/cameras'
+import { putCameraAssignment, putLastZone, type CamerasResponse } from '@/api/cameras'
 import { useStatusStore } from '@/store/useStatusStore'
 import { useRegionStore } from '@/store/useRegionStore'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,7 @@ export function LightPanel({
   const [search, setSearch] = useState('')
 
   const isStreaming = useStatusStore((s) => s.isStreaming)
+  const activeConfigId = useStatusStore((s) => s.activeConfigId)
   const regions = useRegionStore((s) => s.regions)
   const setRegions = useRegionStore((s) => s.setRegions)
 
@@ -45,16 +46,60 @@ export function LightPanel({
       })
 
     getEntertainmentConfigs()
-      .then((cfgs) => {
-        setConfigs(cfgs)
-        if (cfgs.length > 0 && !selectedConfigId) {
-          onConfigChange(cfgs[0].id)
-        }
-      })
+      .then(setConfigs)
       .catch((err) => {
         console.error('Failed to load configs:', err)
       })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 3-tier initial zone selection — BFIX-01/BFIX-02, D-07/D-09/D-11.
+  //   1. Streaming state (activeConfigId non-null) wins (D-07, D-11).
+  //   2. Else the selected camera's last_entertainment_config_id (D-09).
+  //   3. Else the first available config (Phase 10 fresh-install fallback).
+  //
+  // Runs when configs load, the WS streaming state changes, or the selected
+  // camera changes. Only writes via putLastZone in the stale-clear branch —
+  // happy-path pre-selection is read-only (W2).
+  useEffect(() => {
+    if (configs.length === 0) return
+
+    // Tier 1 — live streaming state always wins.
+    if (activeConfigId) {
+      if (selectedConfigId !== activeConfigId) {
+        onConfigChange(activeConfigId)
+      }
+      return
+    }
+
+    // Tiers 2/3 only apply when no zone currently selected (avoid fighting
+    // the user's explicit selection on subsequent renders).
+    if (selectedConfigId) return
+
+    const selectedCamera = selectedDevice
+      ? camerasData?.devices.find((d) => d.device_path === selectedDevice)
+      : undefined
+    const persisted = selectedCamera?.last_entertainment_config_id ?? null
+    const persistedExists = persisted !== null && configs.some((c) => c.id === persisted)
+
+    if (persistedExists) {
+      onConfigChange(persisted as string)
+      return
+      // W2 — no putLastZone call on the happy path. Pre-selection is READ-only.
+    }
+
+    // Stale or missing persisted value — fall back to first config.
+    const fallbackId = configs[0].id
+    onConfigChange(fallbackId)
+
+    // Clear the stale row (Claude's Discretion per 16-CONTEXT.md) — only fires
+    // when there WAS a persisted value that no longer matches any config.
+    // Never fires on the happy-path pre-selection (W2).
+    if (persisted !== null && !persistedExists && selectedCamera) {
+      putLastZone(selectedCamera.stable_id, fallbackId).catch((err) => {
+        console.error('Failed to clear stale last-zone:', err)
+      })
+    }
+  }, [configs, activeConfigId, selectedConfigId, selectedDevice, camerasData, onConfigChange])
 
   // Zone-health-driven camera initialization — D-06
   useEffect(() => {
@@ -92,6 +137,31 @@ export function LightPanel({
       } catch (err) {
         console.error('Failed to save camera assignment:', err)
       }
+    }
+    // Camera→zone auto-switch (D-08) — only when not streaming and the target
+    // camera has a persisted last zone that still exists in the configs list.
+    if (isStreaming) return
+    const persisted = cam.last_entertainment_config_id
+    if (persisted && configs.some((c) => c.id === persisted)) {
+      onConfigChange(persisted)
+    }
+    // If persisted is null or stale → leave the current zone as-is (D-08 "last touched wins").
+  }
+
+  // Zone-dropdown change handler (D-03): propagate up AND auto-save when not
+  // streaming. While streaming the select is disabled so the PUT path is
+  // effectively unreachable; the early return below documents the invariant.
+  async function handleZoneChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const newConfigId = e.target.value
+    onConfigChange(newConfigId)
+    if (isStreaming) return
+    if (!selectedDevice || !camerasData) return
+    const cam = camerasData.devices.find((d) => d.device_path === selectedDevice)
+    if (!cam) return
+    try {
+      await putLastZone(cam.stable_id, newConfigId)
+    } catch (err) {
+      console.error('Failed to save last-zone:', err)
     }
   }
 
@@ -164,9 +234,10 @@ export function LightPanel({
         <h2 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Zone</h2>
         {configs.length > 0 ? (
           <select
+            data-testid="zone-select"
             className="text-xs rounded-lg px-2 py-1.5"
             value={selectedConfigId}
-            onChange={(e) => onConfigChange(e.target.value)}
+            onChange={handleZoneChange}
             disabled={isStreaming}
           >
             {configs.map((cfg) => (
