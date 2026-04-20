@@ -4,6 +4,7 @@ export interface CameraDevice {
   display_name: string
   connected: boolean
   last_seen_at: string | null
+  last_entertainment_config_id: string | null
 }
 
 export interface ZoneHealth {
@@ -36,6 +37,20 @@ export async function putCameraAssignment(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ camera_stable_id: cameraStableId, camera_name: cameraName }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+// D-04: Persist the last entertainment config selected for a given camera.
+// Called on every zone-dropdown change when not streaming.
+export async function putLastZone(
+  stableId: string,
+  entertainmentConfigId: string,
+): Promise<void> {
+  const res = await fetch(`/api/cameras/last-zone/${encodeURIComponent(stableId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entertainment_config_id: entertainmentConfigId }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }

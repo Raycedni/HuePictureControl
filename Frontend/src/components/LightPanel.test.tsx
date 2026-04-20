@@ -33,6 +33,7 @@ const mockCamerasData = {
       display_name: 'USB Capture Card',
       connected: true,
       last_seen_at: '2026-04-07T12:00:00',
+      last_entertainment_config_id: null,
     },
     {
       device_path: '/dev/video2',
@@ -40,6 +41,7 @@ const mockCamerasData = {
       display_name: 'Elgato HD60',
       connected: true,
       last_seen_at: null,
+      last_entertainment_config_id: null,
     },
   ],
   identity_mode: 'stable',
