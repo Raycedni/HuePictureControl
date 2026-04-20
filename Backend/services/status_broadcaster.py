@@ -7,6 +7,12 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 
+# Sentinel to distinguish "caller omitted the kwarg" from "caller passed None".
+# Used by push_state() so callers can opt-in to setting active_config_id /
+# active_device_path without silently clearing them when the kwarg is left off.
+_UNSET = object()
+
+
 class StatusBroadcaster:
     """Manages WebSocket connections and broadcasts streaming metrics.
 
@@ -25,6 +31,8 @@ class StatusBroadcaster:
             "packets_sent": 0,
             "packets_dropped": 0,
             "seq": 0,
+            "active_config_id": None,
+            "active_device_path": None,
         }
         self._heartbeat_task: asyncio.Task | None = None
 
@@ -53,17 +61,33 @@ class StatusBroadcaster:
         """
         self._metrics.update(data)
 
-    async def push_state(self, state: str, error: str | None = None) -> None:
+    async def push_state(
+        self,
+        state: str,
+        error: str | None = None,
+        active_config_id: str | None | object = _UNSET,
+        active_device_path: str | None | object = _UNSET,
+    ) -> None:
         """Update state and immediately broadcast to all clients.
 
         Bypasses the 1 Hz rate limit so state transitions (streaming, error,
         idle) are delivered instantly.
+
+        Per Phase 16 D-05/D-06: active_config_id and active_device_path may be
+        passed to update the currently-active entertainment config and device.
+        Omission preserves the current value in _metrics; passing explicit None
+        clears it. This distinguishes "I'm not touching that field" from "I'm
+        clearing that field on idle/error".
         """
         self._metrics["state"] = state
         if error is not None:
             self._metrics["error"] = error
         elif "error" in self._metrics:
             del self._metrics["error"]
+        if active_config_id is not _UNSET:
+            self._metrics["active_config_id"] = active_config_id  # type: ignore[assignment]
+        if active_device_path is not _UNSET:
+            self._metrics["active_device_path"] = active_device_path  # type: ignore[assignment]
         await self._send_to_all()
 
     async def _send_to_all(self) -> None:
