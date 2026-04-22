@@ -660,9 +660,13 @@ import threading
 import time
 
 class WledStreamer:
-    def __init__(self):
+    def __init__(self, udp_port: int = 21324):
+        """Accepts `udp_port` kwarg (defaults to WLED 21324) so integration tests
+        can redirect to a loopback listener without monkey-patching module state.
+        """
         self._devices: dict[str, dict] = {}   # id -> {ip, led_count, enabled, socket, state}
         self._lock = threading.Lock()
+        self._udp_port = udp_port
 
     async def start(self, device_rows: list[dict]) -> None:
         with self._lock:
@@ -689,7 +693,7 @@ class WledStreamer:
                     blackout = self._build_packets([(0, 0, 0)] * dev["led_count"], dev["led_count"])
                     try:
                         for pkt in blackout:
-                            dev["socket"].sendto(pkt, (dev["ip"], 21324))
+                            dev["socket"].sendto(pkt, (dev["ip"], self._udp_port))
                     except OSError:
                         pass   # best-effort
                 try:
@@ -730,32 +734,34 @@ class WledStreamer:
 | A9 | `enabled` toggle mid-stream is safe with a `threading.Lock` on `WledStreamer._devices` | Pitfall 6 | If lock is forgotten or misused, intermittent crashes. Covered by a unit test that toggles enabled while frame loop iterates. |
 | A10 | Frontend Settings panel as a drawer/modal satisfies WLED-04 ("dedicated tab") intent | phase_requirements note | If user reads WLED-04 strictly, the planner should re-verify via `/gsd-discuss-phase` escalation. 17-CONTEXT.md D-20 explicitly endorses this. |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All five open questions have been resolved during planning. Resolutions are inlined below with `RESOLVED:` markers and are load-bearing in the plan files (cross-reference: Plan 04, Plan 06, Plan 07).
 
 1. **Value of N in auto-disable threshold (D-15)**
    - What we know: 30 frames at 60 Hz = 0.5s — suggested by 17-CONTEXT.md.
    - What's unclear: Whether to expose this as an env var / config setting, or hardcode.
-   - Recommendation: Hardcode at 30 with a named constant `WLED_FAILURE_COOLDOWN_THRESHOLD`. Expose only if a user reports it's wrong.
+   - **RESOLVED:** Hardcode at 30 via named constant `WLED_FAILURE_COOLDOWN_THRESHOLD` defined at module level in `Backend/services/wled_streamer.py` (see Plan 04 Task 1 `<tuning_constants>` block). Cooldown duration 30.0s via `WLED_COOLDOWN_DURATION_SECONDS`. Log rate limit 5.0s via `WLED_ERROR_LOG_RATE_LIMIT_SECONDS`. Not exposed as env var — if a user reports the threshold is wrong we revisit; premature configurability is out of scope per CONTEXT.md.
 
 2. **Should GET `/api/wled/devices` actively probe each device, or return cached health from `WledStreamer._devices`?**
    - What we know: The coordinator has live state while streaming; stale/unknown when idle.
    - What's unclear: When idle, should GET trigger an ad-hoc `/json/info` call per device to update `connected: bool`?
-   - Recommendation: GET returns persisted rows with `connected = (last_success_at within last 5s)` during streaming; when idle, `connected = False` for all. No HTTP probes from GET — it should be cheap. Manual refresh (if needed) can be a separate endpoint or just the scan button.
+   - **RESOLVED:** GET returns persisted rows merged with `WledStreamer.health_snapshot()` via `_coord_health(request)` (Plan 07 `_row_to_out`). `connected = (last_success_at within last 5s)`. No HTTP probes from GET — endpoint stays cheap. When the coordinator is idle (`app.state.coordinator` None or `_wled` absent), health is `{}` and every device reports `connected=false`. Manual refresh is implicit via the Scan button; no dedicated probe endpoint is added in Phase 17.
 
 3. **Snapshot endpoint alignment with active streaming device**
    - What we know: `routers/capture.py::get_snapshot` uses `registry.get_default()` — may not match active camera.
    - What's unclear: Is this a Phase 17 concern?
-   - Recommendation: Out of scope. Flag in RETROSPECTIVE for a later cleanup.
+   - **RESOLVED:** Out of scope for Phase 17. Captured as Assumption A4 above and noted in Pitfall 5 for future retrospective follow-up. Phase 17 does not modify `get_snapshot`. If a user hits the mismatch during Phase 17 UAT, we'll file it as a standalone bug rather than expanding phase scope.
 
 4. **Does the `WledStreamer.render` call path need to be concurrent across devices, or serial?**
    - What we know: Sending to 4 devices sequentially at ~1ms each = 4ms/frame, fine.
    - What's unclear: At 10+ devices, serial sends may exceed frame budget.
-   - Recommendation: Start serial (simpler). Add `asyncio.gather` later if perf measurements show it matters.
+   - **RESOLVED:** **Concurrent per-device via `asyncio.gather`** (canonical per D-06 per-device isolation — one slow device must never block another). See Plan 04 Task 2 `WledStreamer.render`: builds a per-device plan list under the lock, then `await asyncio.gather(*(self._render_one_device(...) for ...))`. Each device's send runs in its own `asyncio.to_thread(_send_all)` call. This is the implementation reality; the earlier "start serial, optimize later" note in the discovery draft is superseded.
 
 5. **mDNS scan behavior if Docker returns (future)**
    - What we know: Native Linux per v1.2 memory — mDNS works.
    - What's unclear: If user later containerizes, `zeroconf` silently returns nothing in bridge network mode.
-   - Recommendation: Document in code comment; add warning log if scan returns zero results within 3s.
+   - **RESOLVED:** Document in code. Plan 03 Task 3 `scan_for_wled_devices` implementation logs an `INFO`-level warning when the scan returns zero results within the timeout: `"zeroconf scan for _wled._tcp.local. completed with zero results (timeout=%.1fs). If the device is known to be online, check for Docker bridge network multicast blocking."` The grep-verifiable acceptance criterion on "async_close" + the log line satisfy this. No runtime detection of Docker is attempted — empty results + log is sufficient breadcrumb.
 
 ## Environment Availability
 

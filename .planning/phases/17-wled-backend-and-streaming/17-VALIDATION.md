@@ -2,9 +2,10 @@
 phase: 17
 slug: wled-backend-and-streaming
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-04-20
+updated: 2026-04-20
 ---
 
 # Phase 17 — Validation Strategy
@@ -41,11 +42,30 @@ created: 2026-04-20
 
 ## Per-Task Verification Map
 
-*Populated by the planner — each task in every PLAN.md gets one row. Requirement IDs below are Phase 17's committed REQ set from ROADMAP.md.*
+> One row per `<task>` across all nine PLAN.md files (20 tasks total). `Automated Command` is lifted verbatim from each task's `<verify><automated>` block; checkpoint tasks with no automated verify are marked `—`. `File Exists` tracks whether the target test/fixture file already exists (❌ W0 = Wave 0 must create it).
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| *TBD* | *planner fills in* | | WLED-01..WLED-05 / WSTR-01..WSTR-04 | T-17-xx / — | — | unit/integration | — | ❌ W0 | ⬜ pending |
+| 17-01-01 | 17-01 | 0 | WLED-01, WSTR-01..04 | T-17-DEP | zeroconf supply-chain pin (>=0.148,<2, 1.0.0 yanked) | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -c "import zeroconf; from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf; print('ok', zeroconf.__version__)" && python -m pytest -q` | ❌ W0 | ⬜ pending |
+| 17-01-02 | 17-01 | 0 | WSTR-01..04 (observation fixture) | — | Fixture binds loopback only (SOCK_DGRAM, 127.0.0.1, SO_REUSEADDR) | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_loopback_fixture.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-01-03 | 17-01 | 0 | WSTR-03 (coordinator fixture) | — | Deterministic ndarray; no real capture device touched | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_mock_capture_fixture.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-02-01 | 17-02 | 1 | WLED-01, WLED-02, WLED-05 | T-17-SCHEMA, T-17-CASCADE | UNIQUE(ip) + composite PK enforce input hygiene; no PRAGMA FK (cascade in code per A5) | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_database.py -x -q` | ✅ extend | ⬜ pending |
+| 17-02-02 | 17-02 | 1 | WSTR-03 | — | Sub-sample clamps to longest-axis length; deterministic ordering | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_color_math.py tests/test_database.py -x -q` | ✅ extend | ⬜ pending |
+| 17-03-01 | 17-03 | 1 | WSTR-01, WSTR-02, WSTR-04 | T-17-UDP | Byte-exact layouts; timeout byte 0x02 in every packet (D-14); 489 cap prevents MTU overflow | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_packet.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-03-02 | 17-03 | 1 | WLED-01, WLED-03 | T-17-SSRF, T-17-RESP | httpx timeout=5s default; `data.get(...)` defensive parse; HTTP (no TLS) documented | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_client.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-03-03 | 17-03 | 1 | WLED-01 (scan), WLED-03 | — | AsyncServiceBrowser canceled + AsyncZeroconf closed in finally; bounded timeout | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_packet.py tests/test_wled_client.py tests/test_wled_discovery.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-04-01 | 17-04 | 2 | WLED-05, WSTR-01..04 | T-17-RACE, T-17-SOCKET-LEAK | threading.Lock guards _devices; start() raises if already started; non-blocking sockets | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_streamer.py -x -q -k "start or stop or enabled or snapshot or lock_discipline"` | ❌ W0 | ⬜ pending |
+| 17-04-02 | 17-04 | 2 | WSTR-01, WSTR-02, WSTR-03, WSTR-04, WLED-05 | T-17-UDP-FLOOD, T-17-BLACKOUT-MISS | 30-frame cooldown caps bad-device traffic; blackout before close (D-13); asyncio.gather for per-device isolation (D-06) | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_streamer.py tests/test_wled_packet.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-05-01 | 17-05 | 2 | WSTR-03, WSTR-04 | T-17-REFACTOR-BEHAVIOR | Behavior-preserving extract; full suite must stay green | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_streaming_coordinator.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-05-02 | 17-05 | 2 | WSTR-03, WSTR-04 | T-17-REFACTOR-BEHAVIOR | Compatibility shim keeps main.py wiring alive; N=1 gradient.mean matches extract_region_color | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest -x -q` | ✅ extend | ⬜ pending |
+| 17-06-01 | 17-06 | 3 | WSTR-03, WSTR-04, WLED-05 | — | `_UNSET` sentinel preserves existing payload keys; additive field only | unit | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_status_broadcaster.py -x -q` | ✅ extend | ⬜ pending |
+| 17-06-02 | 17-06 | 3 | WSTR-03, WSTR-04, WLED-05 | T-17-DB-JOIN | wled_light_assignments filtered by entertainment_config_id; set_wled_device_enabled under WledStreamer lock; `monkeypatch.setattr` for test isolation; WledStreamer accepts `udp_port` kwarg for loopback redirection | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_streaming_coordinator.py tests/test_status_broadcaster.py -x -q` | ✅ extend | ⬜ pending |
+| 17-06-03 | 17-06 | 3 | WSTR-03, WSTR-04, WLED-05 | T-17-WIRING | Atomic single-commit rename sweep (5 files); compatibility shim removed; full backend suite gates merge | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest -x -q` | ✅ extend | ⬜ pending |
+| 17-07-01 | 17-07 | 4 | WLED-01, WLED-02, WLED-03, WLED-05 | T-17-INPUT, T-17-SSRF, T-17-UDP, T-17-DUPE, T-17-DELETE-ORPHAN, T-17-ENABLE-RACE | IP regex at edge; 409 duplicate pre-INSERT; explicit cascade (assignments→channels→device); PUT /enabled goes through coordinator lock | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_wled_router.py -x -q` | ❌ W0 | ⬜ pending |
+| 17-08-01 | 17-08 | 4 | WLED-01..05 | — | WledApiError exposes HTTP status for UI branching; encodeURIComponent on id path params | unit | `cd Frontend && npx vitest run src/api/wled.test.ts src/store src/hooks` | ❌ W0 | ⬜ pending |
+| 17-08-02 | 17-08 | 4 | WLED-01, WLED-02, WLED-03, WLED-04, WLED-05 | T-17-FE-INPUT, T-17-FE-XSS | React escapes all text children; no dangerouslySetInnerHTML; server-side validation is the source of truth | unit | `cd Frontend && npx vitest run` | ❌ W0 | ⬜ pending |
+| 17-09-01 | 17-09 | 5 | WLED-01..05, WSTR-01..04 | T-17-E2E-FLAKE | Phase gate — fps ≥ 40 Hz floor, ≥ 50 packets in 2s, blackout on stop, cascade delete via router | integration | `source /tmp/hpc-venv/bin/activate && cd Backend && python -m pytest tests/test_phase17_e2e.py -x -v && cd ../Frontend && npx vitest run` | ❌ W0 | ⬜ pending |
+| 17-09-02 | 17-09 | 5 | WLED-01, WLED-03, WLED-05, WSTR-01, WSTR-03 | T-17-MANUAL-GAP | Hardware-dependent invariants (strip update, zeroconf LAN find, timeout release) — `approved-no-hardware` resume signal allowed | checkpoint:human-verify | — | n/a (manual) | ⬜ pending |
 
 ---
 
@@ -100,11 +120,11 @@ Every invariant below MUST be asserted by at least one test, OR captured as a ma
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (fixtures + empty test files)
-- [ ] No watch-mode flags in any quick/full command
-- [ ] Feedback latency < 60s (full backend suite)
-- [ ] `nyquist_compliant: true` set in frontmatter after planner fills Per-Task Verification Map
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (see Per-Task Verification Map above — 19/20 automated, 1 manual checkpoint with documented instructions)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify (only 17-09-02 lacks automated; its predecessor 17-09-01 runs the full E2E suite)
+- [x] Wave 0 covers all MISSING references (fixtures + empty test files listed in Wave 0 Requirements)
+- [x] No watch-mode flags in any quick/full command
+- [x] Feedback latency < 60s (full backend suite)
+- [x] `nyquist_compliant: true` set in frontmatter after planner filled Per-Task Verification Map
 
-**Approval:** pending
+**Approval:** planner-complete; `wave_0_complete` flips to true once Wave 0 tasks (17-01-01, 17-01-02, 17-01-03) ship green.
