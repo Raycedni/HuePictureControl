@@ -1,15 +1,17 @@
 """Unit tests for enumerate_capture_devices() in capture_v4l2.py.
 
 All V4L2 ioctls and filesystem calls are mocked — no real device needed.
+Skipped on Windows: fcntl/V4L2 are Linux-only.
 """
-import fcntl
-import os
-import struct
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from services.capture_v4l2 import enumerate_capture_devices, V4L2DeviceInfo
+fcntl = pytest.importorskip("fcntl", reason="V4L2 tests require Linux fcntl module")
+
+import os  # noqa: E402
+import struct  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+from services.capture_v4l2 import enumerate_capture_devices, V4L2DeviceInfo  # noqa: E402
 
 _VIDIOC_QUERYCAP = 0x80685600
 
