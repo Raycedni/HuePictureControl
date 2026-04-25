@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: Wireless Input
 status: executing
 stopped_at: Phase 17 Wave 1 complete (17-01/02/03); 34 passing tests; resume at Wave 2 (17-04 WledStreamer + 17-05 Coordinator extraction)
-last_updated: "2026-04-25T13:59:17.032Z"
-last_activity: 2026-04-22 -- Phase 17 execution started
+last_updated: "2026-04-25T14:08:06.253Z"
+last_activity: 2026-04-25 -- Phase 17 execution started
 progress:
   total_phases: 9
   completed_phases: 7
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 17 (wled-backend-and-streaming) — EXECUTING
 Plan: 1 of 9
 Status: Executing Phase 17
-Last activity: 2026-04-22 -- Phase 17 execution started
+Last activity: 2026-04-25 -- Phase 17 execution started
 
 ## Performance Metrics
 
