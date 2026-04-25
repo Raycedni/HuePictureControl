@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
-status: Phase 16 shipped; next up Phase 17 (WLED Backend and Streaming)
-stopped_at: Phase 17 context gathered
-last_updated: "2026-04-20T17:13:46.695Z"
-last_activity: 2026-04-20 -- Phase 16 plan 03 completed (all 3 plans shipped)
+status: executing
+stopped_at: Phase 17 Wave 1 complete (17-01/02/03); 34 passing tests; resume at Wave 2 (17-04 WledStreamer + 17-05 Coordinator extraction)
+last_updated: "2026-04-25T13:59:17.032Z"
+last_activity: 2026-04-22 -- Phase 17 execution started
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_phases: 9
+  completed_phases: 7
+  total_plans: 29
+  completed_plans: 23
+  percent: 79
 ---
 
 # Project State
@@ -20,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 17 — WLED Backend and Streaming (next)
+**Current focus:** Phase 17 — wled-backend-and-streaming
 
 ## Current Position
 
-Phase: 16 (zone-persistence-bug-fixes) — COMPLETE
-Plan: 3 of 3 complete
-Status: Phase 16 shipped; next up Phase 17 (WLED Backend and Streaming)
-Last activity: 2026-04-20 -- Phase 16 plan 03 completed (all 3 plans shipped)
+Phase: 17 (wled-backend-and-streaming) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 17
+Last activity: 2026-04-22 -- Phase 17 execution started
 
 ## Performance Metrics
 
@@ -85,5 +86,7 @@ None yet.
 ## Session Continuity
 
 Last session: --stopped-at
-Stopped at: Phase 17 context gathered
+Stopped at: Phase 17 Wave 1 complete (17-01/02/03); 34 passing tests; resume at Wave 2 (17-04 WledStreamer + 17-05 Coordinator extraction)
 Resume file: --resume-file
+
+**Planned Phase:** 17 (wled-backend-and-streaming) — 9 plans — 2026-04-22T18:56:33.911Z
