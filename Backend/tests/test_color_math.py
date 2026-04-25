@@ -10,7 +10,9 @@ from services.color_math import (
     build_polygon_mask,
     extract_region_color,
     rgb_to_xy,
+    sub_sample_gradient,
 )
+from tests.fixtures.mock_capture import _default_frame
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +239,76 @@ class TestExtractRegionColor:
         result = extract_region_color(frame, _full_mask())
         assert len(result) == 3
         assert all(isinstance(v, int) for v in result)
+
+
+# ---------------------------------------------------------------------------
+# sub_sample_gradient (Phase 17 D-10)
+# ---------------------------------------------------------------------------
+
+
+class TestSubSampleGradient:
+    def test_n1_matches_extract_region_color(self):
+        """sub_sample_gradient(frame, region, 1) == extract_region_color (single RGB)."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            width=640, height=480,
+        )
+        gradient = sub_sample_gradient(frame, region, 1)
+        assert gradient.shape == (1, 3)
+        assert gradient.dtype == np.uint8
+        r, g, b = extract_region_color(frame, region)
+        assert tuple(gradient[0]) == (r, g, b)
+
+    def test_n3_left_to_right_on_rgb_gradient(self):
+        """3-band BGR frame -> samples ordered red, green, blue along X axis."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            width=640, height=480,
+        )
+        gradient = sub_sample_gradient(frame, region, 3)
+        assert gradient.shape == (3, 3)
+        r0, g0, b0 = gradient[0]
+        assert r0 > 200 and g0 < 60 and b0 < 60, f"expected red, got {(r0, g0, b0)}"
+        r2, g2, b2 = gradient[2]
+        assert b2 > 200 and r2 < 60 and g2 < 60, f"expected blue, got {(r2, g2, b2)}"
+
+    def test_picks_longer_axis_for_tall_region(self):
+        """Tall skinny region samples top-to-bottom along Y axis."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.49, 0.0], [0.51, 0.0], [0.51, 1.0], [0.49, 1.0]],
+            width=640, height=480,
+        )
+        gradient = sub_sample_gradient(frame, region, 5)
+        assert gradient.shape == (5, 3)
+        # All samples fall inside the middle green band — green should dominate
+        for rgb in gradient:
+            assert rgb[1] >= rgb[0] and rgb[1] >= rgb[2], (
+                f"expected green-dominant, got {rgb}"
+            )
+
+    def test_dtype_and_value_range(self):
+        """Output is uint8 in [0, 255]."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            width=640, height=480,
+        )
+        gradient = sub_sample_gradient(frame, region, 10)
+        assert gradient.dtype == np.uint8
+        assert gradient.min() >= 0 and gradient.max() <= 255
+
+    def test_clamps_to_longest_axis_length_for_tiny_region(self):
+        """N greater than the longest axis length is clamped (Pitfall 8)."""
+        frame = _default_frame()
+        # Tiny 2x2 region near the top-left -> longest axis is 2 px
+        region = build_polygon_mask(
+            [[0.0, 0.0], [0.003, 0.0], [0.003, 0.005], [0.0, 0.005]],
+            width=640, height=480,
+        )
+        gradient = sub_sample_gradient(frame, region, 10)
+        # Region width = ceil(0.003*639)+1 = 2-3 px; clamping cap -> at most 3
+        assert gradient.shape[0] <= 10
+        assert gradient.shape[1] == 3

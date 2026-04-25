@@ -6,6 +6,7 @@ Exports:
     RegionMask    -- Pre-computed mask with bounding box for fast ROI extraction
     build_polygon_mask -- Build a RegionMask from normalized polygon coordinates
     extract_region_color -- Extract mean RGB from a frame within a RegionMask
+    sub_sample_gradient  -- Sample N RGBs along the region's bounding-box longest axis
 """
 import math
 from dataclasses import dataclass
@@ -195,3 +196,60 @@ def extract_region_color(
     mean_bgr = cv2.mean(roi_frame, mask=region.roi_mask)
     b, g, r_val = int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
     return r_val, g, b
+
+
+def sub_sample_gradient(
+    frame: np.ndarray, region: RegionMask, n: int
+) -> np.ndarray:
+    """Return an (n, 3) array of RGB means sampled along the region's longest bbox axis.
+
+    Per Phase 17 D-10: each LED i in a range of width N samples position i/(N-1)
+    along the longer of (x2-x1, y2-y1). The slab around each sample center is
+    3 columns/rows wide to absorb single-pixel noise.
+
+    When n == 1, returns a (1, 3) array equal to extract_region_color (so HueStreamer
+    can call .mean(axis=0) on the same gradient array WledStreamer slices).
+    When n > longest_axis_length, n is clamped to longest_axis_length (per
+    17-RESEARCH.md Pitfall 8 — tiny regions can't produce more distinct samples
+    than they have pixels in their long dimension).
+
+    Args:
+        frame: BGR uint8 numpy array (H x W x 3).
+        region: RegionMask with pre-computed bounding box.
+        n: Number of equidistant samples to produce.
+
+    Returns:
+        uint8 ndarray of shape (n_effective, 3) in RGB order, where
+        n_effective = max(1, min(n, longest_axis_length)).
+    """
+    if n <= 1:
+        r, g, b = extract_region_color(frame, region)
+        return np.array([[r, g, b]], dtype=np.uint8)
+
+    width = region.x2 - region.x1
+    height = region.y2 - region.y1
+    longest = max(width, height, 1)
+    n_effective = max(1, min(n, longest))
+
+    axis_x = width >= height
+    roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
+
+    means = np.empty((n_effective, 3), dtype=np.uint8)
+    for i in range(n_effective):
+        t = i / (n_effective - 1) if n_effective > 1 else 0.0
+        if axis_x:
+            col_center = int(round(t * (width - 1)))
+            slab_x1 = max(col_center - 1, 0)
+            slab_x2 = min(col_center + 2, width)
+            slab_frame = roi_frame[:, slab_x1:slab_x2]
+            slab_mask = region.roi_mask[:, slab_x1:slab_x2]
+        else:
+            row_center = int(round(t * (height - 1)))
+            slab_y1 = max(row_center - 1, 0)
+            slab_y2 = min(row_center + 2, height)
+            slab_frame = roi_frame[slab_y1:slab_y2, :]
+            slab_mask = region.roi_mask[slab_y1:slab_y2, :]
+        mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
+        # cv2.mean returns BGR; convert to RGB for output
+        means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
+    return means
