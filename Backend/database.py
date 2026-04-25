@@ -89,6 +89,41 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             updated_at TEXT NOT NULL
         )
     """)
+    # Phase 17 D-07: WLED device + channel + region-assignment schema.
+    # FK clauses are documentation-as-code only — SQLite does not enforce them
+    # without `PRAGMA foreign_keys = ON`, which the project intentionally omits
+    # (per 17-RESEARCH.md A5). Cascade deletes are implemented in router code
+    # (Plan 17-07).
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS wled_devices (
+            id TEXT PRIMARY KEY,
+            ip TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            led_count INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS wled_channels (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            start_led INTEGER NOT NULL,
+            end_led INTEGER NOT NULL,
+            color TEXT NOT NULL DEFAULT '#ffffff',
+            FOREIGN KEY (device_id) REFERENCES wled_devices(id) ON DELETE CASCADE
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS wled_light_assignments (
+            region_id TEXT NOT NULL,
+            wled_channel_id TEXT NOT NULL,
+            entertainment_config_id TEXT NOT NULL,
+            PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id),
+            FOREIGN KEY (wled_channel_id) REFERENCES wled_channels(id) ON DELETE CASCADE
+        )
+    """)
     await db.commit()
     return db
 

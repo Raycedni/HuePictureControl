@@ -227,3 +227,119 @@ async def test_camera_last_zone_migration_idempotent(tmp_path):
         assert row is not None
     finally:
         await close_db(conn2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 - WLED schema tests (Plan 17-02)
+# Per 17-CONTEXT.md D-07: three new tables for WLED device/channel/assignment
+# ---------------------------------------------------------------------------
+
+
+async def test_wled_devices_table_created():
+    """wled_devices table is created by init_db(). Per D-07."""
+    conn = await init_db(":memory:")
+    try:
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wled_devices'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None and row["name"] == "wled_devices"
+    finally:
+        await close_db(conn)
+
+
+async def test_wled_channels_table_created():
+    """wled_channels table is created by init_db(). Per D-07."""
+    conn = await init_db(":memory:")
+    try:
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wled_channels'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+    finally:
+        await close_db(conn)
+
+
+async def test_wled_light_assignments_table_created():
+    """wled_light_assignments table is created by init_db(). Per D-07."""
+    conn = await init_db(":memory:")
+    try:
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wled_light_assignments'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+    finally:
+        await close_db(conn)
+
+
+async def test_wled_devices_ip_unique():
+    """wled_devices.ip has a UNIQUE constraint - dup inserts must raise."""
+    conn = await init_db(":memory:")
+    try:
+        await conn.execute(
+            "INSERT INTO wled_devices (id, ip, name, led_count, enabled, created_at) "
+            "VALUES ('a', '192.168.1.10', 'WLED A', 100, 1, '2026-04-20')"
+        )
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                "INSERT INTO wled_devices (id, ip, name, led_count, enabled, created_at) "
+                "VALUES ('b', '192.168.1.10', 'WLED B', 100, 1, '2026-04-20')"
+            )
+        await conn.rollback()
+    finally:
+        await close_db(conn)
+
+
+async def test_wled_devices_enabled_default_is_1():
+    """Inserting a wled_devices row without `enabled` yields 1 (default)."""
+    conn = await init_db(":memory:")
+    try:
+        await conn.execute(
+            "INSERT INTO wled_devices (id, ip, name, led_count, created_at) "
+            "VALUES ('a', '192.168.1.10', 'WLED A', 100, '2026-04-20')"
+        )
+        async with conn.execute(
+            "SELECT enabled FROM wled_devices WHERE id='a'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row["enabled"] == 1
+    finally:
+        await close_db(conn)
+
+
+async def test_wled_light_assignments_composite_pk():
+    """Composite PK (region_id, wled_channel_id, entertainment_config_id) rejects duplicates."""
+    conn = await init_db(":memory:")
+    try:
+        await conn.execute(
+            "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
+            "VALUES ('r1', 'c1', 'cfg1')"
+        )
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
+                "VALUES ('r1', 'c1', 'cfg1')"
+            )
+        await conn.rollback()
+    finally:
+        await close_db(conn)
+
+
+async def test_init_db_is_idempotent_with_wled_tables(tmp_path):
+    """Running init_db twice on the same file DB is safe (IF NOT EXISTS honored)."""
+    db_path = str(tmp_path / "test_wled_idempotent.db")
+    conn1 = await init_db(db_path)
+    await close_db(conn1)
+    conn2 = await init_db(db_path)
+    try:
+        async with conn2.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+            "('wled_devices', 'wled_channels', 'wled_light_assignments')"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        names = {row["name"] for row in rows}
+        assert names == {"wled_devices", "wled_channels", "wled_light_assignments"}
+    finally:
+        await close_db(conn2)
