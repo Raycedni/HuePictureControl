@@ -216,19 +216,34 @@ async def test_render_two_devices_concurrent():
             await streamer.stop()
 
 
+class _FailingSocket:
+    """Stand-in for socket.socket that raises OSError on every sendto.
+
+    Used to exercise the cooldown path without binding a real socket. Real
+    socket.socket objects refuse attribute assignment to sendto, so we swap
+    the device's stored 'socket' value with this lightweight stub.
+    """
+
+    def __init__(self) -> None:
+        self.send_count: int = 0
+
+    def sendto(self, *args, **kwargs) -> None:  # noqa: D401 — match socket API
+        self.send_count += 1
+        raise OSError("injected")
+
+    def close(self) -> None:  # called by stop() blackout-and-close path
+        pass
+
+
 @pytest.mark.asyncio
 async def test_cooldown_after_30_failures():
     streamer = WledStreamer(udp_port=LOOPBACK_PORT)
     await streamer.start([_row()])
     try:
-        # Force every sendto on this device's socket to raise OSError
+        # Swap the socket with a stub that always raises OSError on sendto.
         with streamer._lock:
-            fake_sock = streamer._devices["d1"]["socket"]
-
-        def failing_sendto(*args, **kwargs):
-            raise OSError("injected")
-
-        fake_sock.sendto = failing_sendto
+            streamer._devices["d1"]["socket"].close()
+            streamer._devices["d1"]["socket"] = _FailingSocket()
 
         for _ in range(30):
             await streamer.render({"r1": _gradient(10, [1, 2, 3])})
@@ -237,6 +252,7 @@ async def test_cooldown_after_30_failures():
             "device should be in cooldown after 30 failures"
         )
         assert snap["d1"]["last_error"] is not None
+        assert "OSError" in snap["d1"]["last_error"]
     finally:
         await streamer.stop()
 
@@ -247,24 +263,18 @@ async def test_cooldown_skips_render_no_further_failure_increments():
     streamer = WledStreamer(udp_port=LOOPBACK_PORT)
     await streamer.start([_row()])
     try:
-        # Force failures and accumulate to threshold
         with streamer._lock:
-            fake_sock = streamer._devices["d1"]["socket"]
-        send_calls = {"n": 0}
-
-        def failing_sendto(*args, **kwargs):
-            send_calls["n"] += 1
-            raise OSError("injected")
-
-        fake_sock.sendto = failing_sendto
+            streamer._devices["d1"]["socket"].close()
+            failing = _FailingSocket()
+            streamer._devices["d1"]["socket"] = failing
 
         for _ in range(30):
             await streamer.render({"r1": _gradient(10, [1, 2, 3])})
-        sends_after_cooldown = send_calls["n"]
+        sends_after_cooldown = failing.send_count
         # Render again while in cooldown — should be skipped entirely
         for _ in range(5):
             await streamer.render({"r1": _gradient(10, [1, 2, 3])})
-        assert send_calls["n"] == sends_after_cooldown, (
+        assert failing.send_count == sends_after_cooldown, (
             "render() must not call sendto on a cooldown device"
         )
         with streamer._lock:

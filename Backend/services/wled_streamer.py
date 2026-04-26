@@ -262,5 +262,133 @@ class WledStreamer:
             }
 
     async def render(self, region_gradients: dict) -> None:
-        """Placeholder — implemented in Task 2."""
-        raise NotImplementedError("render() is implemented in Task 2")
+        """Per-frame fan-out to all enabled, non-cooldown devices.
+
+        Concurrent per-device via ``asyncio.gather`` per 17-RESEARCH.md Open
+        Question 4 (RESOLVED): one slow device must never block another (D-06
+        per-device isolation). Each device's send runs in its own
+        ``asyncio.to_thread`` batch — one to_thread call per device per frame
+        (NOT per packet, per anti-pattern note).
+
+        Args:
+            region_gradients: ``{region_id: np.ndarray of shape (N_region, 3),
+                dtype uint8}``. Each device's channels reference a region_id;
+                the channel's ``[start_led, end_led]`` slice is filled from the
+                gradient via linear sub-sampling (D-10).
+        """
+        now = time.monotonic()
+        with self._lock:
+            # Snapshot targets under the lock; release before IO.
+            plan: list[tuple[str, dict]] = []
+            for dev_id, dev in self._devices.items():
+                if not dev["enabled"]:
+                    continue
+                if now < dev["in_cooldown_until"]:
+                    continue
+                plan.append((dev_id, {
+                    "ip": dev["ip"],
+                    "led_count": dev["led_count"],
+                    "channels": list(dev["channels"]),
+                    "socket": dev["socket"],
+                }))
+
+        if not plan:
+            return
+
+        # Fire sends concurrently per device (bounded by len(plan)).
+        await asyncio.gather(*(
+            self._render_one_device(dev_id, snap, region_gradients)
+            for dev_id, snap in plan
+        ), return_exceptions=False)
+
+    async def _render_one_device(
+        self, device_id: str, snap: dict, region_gradients: dict
+    ) -> None:
+        """Build and send packets for one device in a single to_thread batch."""
+        led_count = snap["led_count"]
+        if led_count <= 0:
+            return
+
+        colors: list[tuple[int, int, int]] = [(0, 0, 0)] * led_count
+        populated = False
+        for ch in snap["channels"]:
+            region_id = ch.get("region_id")
+            if region_id is None:
+                continue
+            gradient = region_gradients.get(region_id)
+            if gradient is None:
+                continue
+            start = int(ch["start_led"])
+            end = int(ch["end_led"])
+            range_len = end - start + 1
+            if range_len <= 0:
+                continue
+            src_n = len(gradient)
+            if src_n == 0:
+                continue
+            if src_n == range_len:
+                slice_arr = gradient
+            elif src_n == 1:
+                # Single-color region — broadcast the same color across the range
+                slice_arr = np.tile(gradient[0], (range_len, 1))
+            else:
+                # Resample the gradient along its first axis to match range_len (D-10).
+                idx = np.linspace(0, src_n - 1, range_len).astype(np.int32)
+                slice_arr = gradient[idx]
+            for i in range(range_len):
+                pos = start + i
+                if 0 <= pos < led_count:
+                    r = int(slice_arr[i][0])
+                    g = int(slice_arr[i][1])
+                    b = int(slice_arr[i][2])
+                    colors[pos] = (r, g, b)
+                    populated = True
+
+        if not populated:
+            return  # no channels in this device matched the frame's regions
+
+        packets = build_packets_for_device(led_count, colors)
+        sock = snap["socket"]
+        ip = snap["ip"]
+        port = self._udp_port  # respects constructor override for tests
+
+        def _send_all() -> None:
+            for pkt in packets:
+                sock.sendto(pkt, (ip, port))
+
+        try:
+            await asyncio.to_thread(_send_all)
+            self._mark_success(device_id)
+        except (OSError, BlockingIOError) as exc:
+            self._mark_failure(device_id, exc)
+
+    def _mark_success(self, device_id: str) -> None:
+        with self._lock:
+            dev = self._devices.get(device_id)
+            if dev is None:
+                return
+            dev["last_error"] = None
+            dev["last_success_at"] = datetime.now(timezone.utc).isoformat()
+            dev["consecutive_failures"] = 0
+
+    def _mark_failure(self, device_id: str, exc: BaseException) -> None:
+        now_mono = time.monotonic()
+        with self._lock:
+            dev = self._devices.get(device_id)
+            if dev is None:
+                return
+            dev["consecutive_failures"] += 1
+            dev["last_error"] = f"{type(exc).__name__}: {exc}"
+            # Rate-limited log to avoid spam during sustained outages.
+            if now_mono - dev["last_error_log_at"] >= WLED_ERROR_LOG_RATE_LIMIT_SECONDS:
+                logger.warning(
+                    "WLED send failure for device %s (%s): %s",
+                    device_id, dev["ip"], dev["last_error"],
+                )
+                dev["last_error_log_at"] = now_mono
+            if dev["consecutive_failures"] >= WLED_FAILURE_COOLDOWN_THRESHOLD:
+                dev["in_cooldown_until"] = now_mono + WLED_COOLDOWN_DURATION_SECONDS
+                logger.info(
+                    "WLED device %s entered cooldown for %.0fs",
+                    device_id, WLED_COOLDOWN_DURATION_SECONDS,
+                )
