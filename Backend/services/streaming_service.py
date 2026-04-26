@@ -1,21 +1,34 @@
-"""StreamingService: async class that owns the capture-to-DTLS streaming loop.
+"""HueStreamer: DTLS sink that streams per-frame RGB to the Hue bridge via pykit.
 
-Connects LatestFrameCapture, color_math, StatusBroadcaster, and
-hue-entertainment-pykit into a managed 50 Hz loop that extracts colors
-from screen regions and sends them to Hue lights via DTLS.
+Refactored from the former ``StreamingService`` (Phase 17 Plan 05). Capture
+lifecycle, broadcaster orchestration, and the 60 Hz frame loop moved to
+``StreamingCoordinator`` (services/streaming_coordinator.py). This class owns
+only the Hue-specific concerns: bridge creation, Entertainment API
+activation/deactivation, DTLS stream start/stop, per-channel set_input, and
+Hue-only reconnect.
+
+The coordinator produces ``region_gradients: dict[region_id, (N, 3) uint8]``
+once per frame and calls ``HueStreamer.render(region_gradients)``. Hue
+averages the per-region gradient back to a single RGB per channel
+(``gradient.mean(axis=0)``), preserving the pre-refactor single-color
+behavior — N=1 for Hue-only regions is the trivial case (Plan 05).
+
+Plan 07 will rewire ``main.py`` / ``app.state.streaming`` to point at
+``StreamingCoordinator``. Until then, the bottom-of-file shim re-exports
+``StreamingCoordinator`` as ``StreamingService`` so existing imports keep
+working without touching the wiring.
 
 Exports:
-    StreamingService -- Main async streaming orchestrator
+    HueStreamer       -- DTLS sink; one instance per coordinator.
+    StreamingService  -- compatibility shim alias for ``StreamingCoordinator``.
 """
 import asyncio
 import json
 import logging
-import time
 
 from hue_entertainment_pykit import create_bridge, Entertainment, Streaming
 
-from services.capture_service import CAPTURE_DEVICE
-from services.color_math import extract_region_color, rgb_to_xy, build_polygon_mask
+from services.color_math import build_polygon_mask, rgb_to_xy
 from services.hue_client import (
     activate_entertainment_config,
     deactivate_entertainment_config,
@@ -25,310 +38,178 @@ from services.hue_client import (
 logger = logging.getLogger(__name__)
 
 
-class StreamingService:
-    """Manages the full capture -> color extract -> DTLS stream loop at 50 Hz.
+class HueStreamer:
+    """Hue DTLS sink: bridge + Entertainment API + per-channel set_input.
 
-    Lifecycle::
+    Lifecycle is owned by ``StreamingCoordinator``::
 
-        service = StreamingService(db, capture, broadcaster)
-        await service.start(config_id)   # idle -> starting -> streaming
-        await service.stop()             # streaming -> stopping -> idle
+        sink = HueStreamer(db)
+        await sink.start(config_id)            # bridge + DTLS + channel map
+        # per frame:
+        await sink.render(region_gradients)
+        # on bridge socket error:
+        ok = await sink.handle_bridge_error(exc)
+        await sink.stop()                      # stop_stream + deactivate
 
-    The frame loop runs as an asyncio.Task started by start(). It can be
-    stopped by calling stop() which clears the run event and awaits the task.
-
-    Bridge disconnect triggers exponential backoff reconnect; during reconnect
-    the capture pipeline continues independently (not paused/released).
-
-    Capture card disconnect also triggers exponential backoff reconnect via
-    _capture_reconnect_loop. Streaming resumes automatically on reconnect.
-    If run_event is cleared during reconnect, streaming transitions to error.
+    No capture, no broadcaster, no run loop — coordinator owns those.
     """
 
-    DEFAULT_HZ = 60
-
-    def __init__(self, db, capture_registry, broadcaster) -> None:
+    def __init__(self, db) -> None:
         self._db = db
-        self._capture_registry = capture_registry
-        self._capture = None        # Set by start() via registry.acquire()
-        self._device_path = None    # Track for release in stop()
-        self._broadcaster = broadcaster
-        self._run_event: asyncio.Event = asyncio.Event()
-        self._task: asyncio.Task | None = None
-        self._state: str = "idle"
+        self._streaming = None
+        self._bridge_ip: str = ""
+        self._username: str = ""
         self._config_id: str | None = None
-        self._target_hz: int = self.DEFAULT_HZ
-        self._period: float = 1.0 / self.DEFAULT_HZ
+        self._channel_map: dict = {}            # channel_id -> RegionMask
+        self._channel_to_region: dict = {}      # channel_id -> region_id
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API (called by StreamingCoordinator)
     # ------------------------------------------------------------------
 
-    @property
-    def state(self) -> str:
-        """Current streaming state: idle | starting | streaming | stopping | error."""
-        return self._state
+    async def start(self, config_id: str) -> None:
+        """Hue bridge + DTLS + channel map setup. No capture, no frame loop.
 
-    async def start(self, config_id: str, target_hz: int = DEFAULT_HZ) -> None:
-        """Start the streaming loop for the given entertainment config ID.
-
-        No-op if already streaming (state not idle or error).
-
-        Transitions: idle/error -> starting -> streaming (inside run loop)
-
-        Args:
-            config_id: UUID of the Hue entertainment configuration to stream to.
-            target_hz: Target update rate in Hz (1-100, default 50).
+        Lifted verbatim from the former ``StreamingService`` run-loop
+        bridge-setup block (streaming_service.py lines 206-248 pre-refactor).
+        Order preserved so existing integration behavior is unchanged:
+        bridge_config SELECT -> create_bridge -> Entertainment -> configs.get
+        -> repo -> Streaming() -> activate_entertainment_config -> start_stream
+        -> set_color_space("xyb").
         """
-        if self._state not in ("idle", "error"):
-            return
-        self._target_hz = max(1, min(100, target_hz))
-        self._period = 1.0 / self._target_hz
         self._config_id = config_id
-        self._state = "starting"
 
-        # Resolve device path BEFORE broadcasting "starting" so the WS payload
-        # carries the resolved active_device_path (Phase 16 D-05/D-06).
-        device_path = await self._resolve_device_path(config_id)
-        self._device_path = device_path
+        # 1. Load bridge credentials
+        async with await self._db.execute(
+            "SELECT * FROM bridge_config WHERE id = 1"
+        ) as cursor:
+            bridge_row = await cursor.fetchone()
 
-        await self._broadcaster.push_state(
-            self._state,
-            active_config_id=config_id,
-            active_device_path=device_path,
+        self._bridge_ip = bridge_row["ip_address"]
+        self._username = bridge_row["username"]
+        client_key = bridge_row["client_key"]
+        rid = bridge_row["rid"]
+        bridge_id = bridge_row["bridge_id"]
+        hue_app_id = bridge_row["hue_app_id"]
+        swversion = bridge_row["swversion"]
+        name = bridge_row["name"]
+
+        # 2. Load channel map once (masks are constant for a given config).
+        #    This runs independently of the coordinator's _build_region_plan —
+        #    self._load_channel_map builds {channel_id: RegionMask} for Hue
+        #    set_input; the coordinator's region_plan builds
+        #    {region_id: (mask, N_region)} for sub_sample_gradient. Both
+        #    queries run at stream start and meet at the per-frame render call.
+        #    See <query_responsibilities> in 17-05-PLAN.md.
+        channel_map = await self._load_channel_map(
+            config_id, self._bridge_ip, self._username
+        )
+        self._channel_map = channel_map
+        # Build the parallel channel_id -> region_id map needed by render().
+        self._channel_to_region = await self._load_channel_to_region(
+            config_id, self._bridge_ip, self._username
         )
 
-        # Acquire capture backend from registry
-        try:
-            self._capture = await asyncio.to_thread(self._capture_registry.acquire, device_path)
-        except RuntimeError as exc:
-            self._state = "error"
-            await self._broadcaster.push_state(
-                "error",
-                error=str(exc),
-                active_config_id=None,
-                active_device_path=None,
-            )
-            return
+        # 3. Build pykit objects
+        bridge = create_bridge(
+            identification=bridge_id,
+            rid=rid,
+            ip_address=self._bridge_ip,
+            username=self._username,
+            hue_app_id=hue_app_id,
+            clientkey=client_key,
+            swversion=swversion,
+            name=name,
+        )
+        entertainment = Entertainment(bridge)
+        configs = entertainment.get_entertainment_configs()
+        config = configs.get(config_id) or list(configs.values())[0]
+        repo = entertainment.get_ent_conf_repo()
+        self._streaming = Streaming(bridge, config, repo)
 
-        self._run_event.set()
-        self._task = asyncio.create_task(self._run_loop(config_id))
+        # 4. Activate entertainment config via REST
+        await activate_entertainment_config(
+            self._bridge_ip, self._username, config_id
+        )
+
+        # 5. Start DTLS stream
+        await asyncio.to_thread(self._streaming.start_stream)
+
+        # 6. Set color space to xyb
+        await asyncio.to_thread(self._streaming.set_color_space, "xyb")
+
+    async def render(self, region_gradients: dict) -> None:
+        """Per frame: average region gradient to one RGB per channel and set_input.
+
+        ``region_gradients``: ``{region_id: np.ndarray of shape (N, 3) uint8}``.
+
+        The Hue sink averages the N-point gradient back to a single RGB per
+        channel per D-05. This preserves 100% of the current Hue behavior —
+        N=1 for Hue-only regions is the trivial case (gradient.mean(axis=0)
+        of a (1, 3) array equals the same RGB ``extract_region_color``
+        produced pre-refactor).
+        """
+        if self._streaming is None:
+            return
+        inputs = []
+        for channel_id, region_id in self._channel_to_region.items():
+            gradient = region_gradients.get(region_id)
+            if gradient is None or len(gradient) == 0:
+                continue
+            mean_rgb = gradient.mean(axis=0)
+            r, g, b = int(mean_rgb[0]), int(mean_rgb[1]), int(mean_rgb[2])
+            x, y = rgb_to_xy(r, g, b)
+            bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
+            bri = max(bri, 0.01)  # dark scene protection
+            inputs.append((x, y, bri, channel_id))
+
+        # set_input is a tiny DTLS packet send; thread pool overhead would
+        # exceed the cost of the brief GIL hold (preserved from pre-refactor).
+        for inp in inputs:
+            self._streaming.set_input(inp)
 
     async def stop(self) -> None:
-        """Stop the streaming loop cleanly.
+        """Stop DTLS and deactivate; no capture release (coordinator owns that)."""
+        if self._streaming is not None:
+            try:
+                await asyncio.to_thread(self._streaming.stop_stream)
+            except Exception:
+                logger.warning("stop_stream failed (best-effort)")
+            self._streaming = None
+        if self._bridge_ip and self._username and self._config_id:
+            try:
+                await deactivate_entertainment_config(
+                    self._bridge_ip, self._username, self._config_id
+                )
+            except Exception:
+                logger.warning(
+                    "deactivate_entertainment_config failed (best-effort)"
+                )
 
-        No-op if already idle. Clears the run event and awaits the task.
-        The task's cleanup routine handles the locked stop sequence:
-        stop_stream -> deactivate -> capture.release.
+    async def handle_bridge_error(self, exc: BaseException) -> bool:
+        """Invoke the Hue-only reconnect loop. Returns True on success.
+
+        Called by ``StreamingCoordinator._frame_loop`` when ``render`` raises
+        a bridge socket error. Capture pipeline is NOT touched (per Phase 16
+        locked decision).
         """
-        if self._state == "idle":
-            return
-        self._state = "stopping"
-        # "stopping" still carries the active config/device — we're still on it
-        # until teardown completes (Phase 16 D-06).
-        await self._broadcaster.push_state(
-            self._state,
-            active_config_id=self._config_id,
-            active_device_path=self._device_path,
+        logger.warning("Bridge socket error: %s, starting reconnect", exc)
+        return await self._reconnect_loop(
+            self._config_id or "", self._bridge_ip, self._username
         )
-        self._run_event.clear()
-        if self._task:
-            await self._task
-        self._state = "idle"
-        # Clear active config/device on idle (D-06).
-        await self._broadcaster.push_state(
-            self._state,
-            active_config_id=None,
-            active_device_path=None,
-        )
 
     # ------------------------------------------------------------------
-    # Internal: device resolution
-    # ------------------------------------------------------------------
-
-    async def _resolve_device_path(self, config_id: str) -> str:
-        """Resolve the device path for the given entertainment config.
-
-        Looks up camera_assignments for the config_id, then finds the
-        last_device_path in known_cameras. Falls back to CAPTURE_DEVICE
-        if no assignment exists or the camera is unknown.
-
-        Args:
-            config_id: Entertainment configuration UUID.
-
-        Returns:
-            Device path string (e.g. '/dev/video0').
-        """
-        async with await self._db.execute(
-            "SELECT camera_stable_id FROM camera_assignments WHERE entertainment_config_id = ?",
-            (config_id,),
-        ) as cursor:
-            assign_row = await cursor.fetchone()
-
-        if assign_row is None:
-            return CAPTURE_DEVICE
-
-        stable_id = assign_row["camera_stable_id"]
-
-        async with await self._db.execute(
-            "SELECT last_device_path FROM known_cameras WHERE stable_id = ?",
-            (stable_id,),
-        ) as cursor:
-            cam_row = await cursor.fetchone()
-
-        if cam_row is None or not cam_row["last_device_path"]:
-            return CAPTURE_DEVICE
-
-        return cam_row["last_device_path"]
-
-    # ------------------------------------------------------------------
-    # Internal: run loop
-    # ------------------------------------------------------------------
-
-    async def _run_loop(self, config_id: str) -> None:
-        """Main streaming orchestration: setup, frame loop, teardown.
-
-        1. Load bridge credentials from DB
-        2. Load channel map (light_assignments JOIN regions -> {channel_id: mask})
-        3. Build Bridge, Entertainment, Streaming objects
-        4. Activate entertainment config via REST
-        5. Start DTLS stream (asyncio.to_thread)
-        6. Set color space to xyb
-        7. Start broadcaster heartbeat
-        8. Run frame loop (exits when run_event is cleared or error occurs)
-        9. Teardown: stop_stream -> deactivate -> capture.release (locked sequence)
-        """
-        streaming = None
-        bridge_ip: str = ""
-        username: str = ""
-
-        try:
-            # 1. Load bridge credentials
-            async with await self._db.execute(
-                "SELECT * FROM bridge_config WHERE id = 1"
-            ) as cursor:
-                bridge_row = await cursor.fetchone()
-
-            bridge_ip = bridge_row["ip_address"]
-            username = bridge_row["username"]
-            client_key = bridge_row["client_key"]
-            rid = bridge_row["rid"]
-            bridge_id = bridge_row["bridge_id"]
-            hue_app_id = bridge_row["hue_app_id"]
-            swversion = bridge_row["swversion"]
-            name = bridge_row["name"]
-
-            # 2. Load channel map once (masks are constant for a given config)
-            channel_map = await self._load_channel_map(config_id, bridge_ip, username)
-
-            # 3. Build pykit objects
-            bridge = create_bridge(
-                identification=bridge_id,
-                rid=rid,
-                ip_address=bridge_ip,
-                username=username,
-                hue_app_id=hue_app_id,
-                clientkey=client_key,
-                swversion=swversion,
-                name=name,
-            )
-            entertainment = Entertainment(bridge)
-            configs = entertainment.get_entertainment_configs()
-            config = configs.get(config_id) or list(configs.values())[0]
-            repo = entertainment.get_ent_conf_repo()
-            streaming = Streaming(bridge, config, repo)
-
-            # 4. Activate entertainment config via REST
-            await activate_entertainment_config(bridge_ip, username, config_id)
-
-            # 5. Start DTLS stream
-            await asyncio.to_thread(streaming.start_stream)
-
-            # 6. Set color space to xyb
-            await asyncio.to_thread(streaming.set_color_space, "xyb")
-
-            # Transition to streaming state — carry active config/device (D-06).
-            self._state = "streaming"
-            await self._broadcaster.push_state(
-                self._state,
-                active_config_id=self._config_id,
-                active_device_path=self._device_path,
-            )
-
-            # 7. Start broadcaster heartbeat
-            await self._broadcaster.start_heartbeat()
-
-            # 8. Run the frame loop
-            await self._frame_loop(streaming, channel_map, bridge_ip, username)
-
-        except RuntimeError as exc:
-            # Capture card / runtime error — stop entirely and clear active (D-06).
-            logger.error("Capture error in run loop: %s", exc)
-            self._run_event.clear()
-            self._state = "error"
-            await self._broadcaster.push_state(
-                "error",
-                error=str(exc),
-                active_config_id=None,
-                active_device_path=None,
-            )
-
-        except Exception as exc:
-            # Unexpected error — clear active (D-06).
-            logger.error("Unexpected error in run loop: %s", exc)
-            self._run_event.clear()
-            self._state = "error"
-            await self._broadcaster.push_state(
-                "error",
-                error=str(exc),
-                active_config_id=None,
-                active_device_path=None,
-            )
-
-        finally:
-            # 9. Locked stop sequence: stop_stream -> deactivate -> capture.release
-            await self._broadcaster.stop_heartbeat()
-
-            if streaming is not None:
-                try:
-                    await asyncio.to_thread(streaming.stop_stream)
-                except Exception:
-                    logger.warning("stop_stream failed (best-effort)")
-
-            if bridge_ip and username and self._config_id:
-                await deactivate_entertainment_config(bridge_ip, username, self._config_id)
-
-            if self._device_path:
-                try:
-                    await asyncio.to_thread(self._capture_registry.release, self._device_path)
-                except Exception:
-                    logger.warning("Registry release failed (best-effort)")
-                self._device_path = None
-                self._capture = None
-
-            if self._state not in ("error",):
-                self._state = "idle"
-
-    # ------------------------------------------------------------------
-    # Internal: channel map
+    # Internal: channel map (Hue-only DB queries)
     # ------------------------------------------------------------------
 
     async def _load_channel_map(
         self, config_id: str, bridge_ip: str, username: str
     ) -> dict:
-        """Load channel map: {channel_id: polygon_mask}.
+        """Load channel map: {channel_id: RegionMask}.
 
         Uses the light_assignments table for precise per-channel mapping when
         available (auto-mapped regions). Falls back to resolving
         regions.light_id → all channel_ids for manually assigned regions.
-
-        Args:
-            config_id: Entertainment configuration UUID.
-            bridge_ip: Bridge IP for channel resolution.
-            username: Bridge application key.
-
-        Returns:
-            dict mapping channel_id (int) to uint8 mask ndarray (480x640).
         """
         # Load explicit channel assignments from light_assignments table
         assign_query = """
@@ -340,8 +221,8 @@ class StreamingService:
         async with await self._db.execute(assign_query, (config_id,)) as cursor:
             assignment_rows = await cursor.fetchall()
 
-        channel_map = {}
-        assigned_region_ids = set()
+        channel_map: dict = {}
+        assigned_region_ids: set = set()
 
         for row in assignment_rows:
             polygon_points = json.loads(row["polygon"])
@@ -378,211 +259,94 @@ class StreamingService:
 
         logger.info(
             "Loaded channel map: %d channels (%d from assignments, %d fallback)",
-            len(channel_map), len(assignment_rows), len(channel_map) - len(assignment_rows),
+            len(channel_map),
+            len(assignment_rows),
+            len(channel_map) - len(assignment_rows),
         )
         return channel_map
 
-    # ------------------------------------------------------------------
-    # Internal: frame loop
-    # ------------------------------------------------------------------
+    async def _load_channel_to_region(
+        self, config_id: str, bridge_ip: str, username: str
+    ) -> dict:
+        """Load {channel_id: region_id} mapping for render().
 
-    async def _frame_loop(self, streaming, channel_map: dict, bridge_ip: str, username: str) -> None:
-        """50 Hz frame loop: extract colors from screen regions and send to Hue lights.
-
-        For each frame:
-        - Grab frame from capture
-        - For each channel_id, mask in channel_map:
-            - extract_region_color -> (r, g, b)
-            - rgb_to_xy -> (x, y)
-            - compute brightness, clamp to 0.01 minimum
-            - smooth toward target using exponential moving average
-            - asyncio.to_thread(streaming.set_input, (x, y, bri, channel_id))
-        - update_metrics (silent, NOT broadcast -- 1 Hz heartbeat handles delivery)
-        - Sleep to maintain ~50 Hz
-
-        Bridge socket errors trigger _reconnect_loop (unlimited retries with
-        exponential backoff). Capture RuntimeError stops the loop entirely.
+        Mirrors ``_load_channel_map``'s SELECT but projects ``region_id``
+        alongside ``channel_id``. For the fallback branch (regions with
+        ``light_id`` but no explicit ``light_assignments`` row), the same
+        region.id is reused for every channel produced by
+        ``resolve_light_to_channel_map``.
         """
-        seq = 0
-        packets_sent = 0
-        prev_t0 = time.monotonic()
-
-        while self._run_event.is_set():
-            t0 = time.monotonic()
-
-            try:
-                frame = await self._capture.wait_for_new_frame()
-            except RuntimeError as exc:
-                logger.warning("Capture device error: %s, starting reconnect", exc)
-                success = await self._capture_reconnect_loop()
-                if success:
-                    continue
-                else:
-                    self._state = "error"
-                    # Clear active on capture error (D-06).
-                    await self._broadcaster.push_state(
-                        "error",
-                        error=str(exc),
-                        active_config_id=None,
-                        active_device_path=None,
-                    )
-                    return
-
-            t_capture = time.monotonic()
-            # How old is this frame? (time since reader thread stored it)
-            try:
-                lft = self._capture._last_frame_time
-                frame_age = t_capture - lft if isinstance(lft, (int, float)) and lft > 0 else 0
-            except Exception:
-                frame_age = 0
-
-            # Compute colors for all channels and send immediately (no smoothing)
-            inputs = []
-            for channel_id, mask in channel_map.items():
-                r, g, b = extract_region_color(frame, mask)
-                x, y = rgb_to_xy(r, g, b)
-                bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
-                bri = max(bri, 0.01)  # dark scene protection
-                inputs.append((x, y, bri, channel_id))
-
-            t_color = time.monotonic()
-
-            # Send all channels to bridge synchronously — set_input is a
-            # tiny DTLS packet send, thread pool overhead costs more than
-            # the brief GIL hold.
-            try:
-                for inp in inputs:
-                    streaming.set_input(inp)
-                packets_sent += len(inputs)
-            except Exception as exc:
-                logger.warning("Bridge socket error: %s, starting reconnect", exc)
-                success = await self._reconnect_loop(
-                    self._config_id or "", bridge_ip, username
-                )
-                if not success:
-                    return
-
-            t_send = time.monotonic()
-
-            seq += 1
-            elapsed = time.monotonic() - t0
-            latency_ms = elapsed * 1000.0
-
-            # Log timing breakdown every 60 frames (~1s)
-            if seq % 60 == 0:
-                print(
-                    f"PERF seq={seq} frame_age={frame_age*1000:.1f}ms capture={( t_capture-t0)*1000:.1f}ms color={(t_color-t_capture)*1000:.1f}ms send={(t_send-t_color)*1000:.1f}ms total={latency_ms:.1f}ms",
-                    flush=True,
-                )
-
-            # FPS = actual loop rate (includes sleep), not just processing speed
-            cycle_time = t0 - prev_t0
-            prev_t0 = t0
-
-            # Silent metrics update — StatusBroadcaster 1 Hz heartbeat handles delivery
-            self._broadcaster.update_metrics({
-                "fps": round(1.0 / max(cycle_time, 1e-6), 1) if seq > 1 else self._target_hz,
-                "latency_ms": round(latency_ms, 1),
-                "packets_sent": packets_sent,
-                "seq": seq,
-            })
-
-            # No sleep needed — wait_for_new_frame paces the loop
-            # to the capture card's actual framerate
-
-    # ------------------------------------------------------------------
-    # Internal: reconnect
-    # ------------------------------------------------------------------
-
-    async def _capture_reconnect_loop(self) -> bool:
-        """Reconnect the capture device with exponential backoff.
-
-        Called when get_frame() raises RuntimeError (device disconnected).
-        Retries indefinitely while run_event is set.
-        Delays: 1s, 2s, 4s, 8s, 16s, 30s (capped).
-
-        capture.open() is called via asyncio.to_thread because cv2.VideoCapture
-        is a blocking operation (Pitfall 3 from research).
-
-        Returns:
-            True if reconnection succeeded, False if run_event was cleared.
+        assign_query = """
+            SELECT la.region_id, la.channel_id
+            FROM light_assignments la
+            JOIN regions r ON r.id = la.region_id
+            WHERE la.entertainment_config_id = ?
         """
-        self._state = "reconnecting"
-        # Carry active config/device across reconnect — they do not change (D-06).
-        await self._broadcaster.push_state(
-            self._state,
-            active_config_id=self._config_id,
-            active_device_path=self._device_path,
+        async with await self._db.execute(assign_query, (config_id,)) as cursor:
+            assignment_rows = await cursor.fetchall()
+
+        channel_to_region: dict = {}
+        assigned_region_ids: set = set()
+
+        for row in assignment_rows:
+            channel_to_region[row["channel_id"]] = row["region_id"]
+            assigned_region_ids.add(row["region_id"])
+
+        # Fallback: regions with light_id but no light_assignments entry
+        light_to_channels = await resolve_light_to_channel_map(
+            bridge_ip, username, config_id
         )
 
-        delay = 1
-        max_delay = 30
+        query = "SELECT id, light_id FROM regions WHERE light_id IS NOT NULL"
+        async with await self._db.execute(query) as cursor:
+            rows = await cursor.fetchall()
 
-        while self._run_event.is_set():
-            try:
-                self._capture.release()
-                await asyncio.to_thread(self._capture.open)
-                # Wait for the reader thread to produce a first frame
-                for _ in range(20):
-                    await asyncio.sleep(0.2)
-                    try:
-                        await self._capture.get_frame()
-                        break
-                    except RuntimeError:
-                        pass
-                else:
-                    raise RuntimeError("Device opened but no frames produced")
-                logger.info("Capture device reconnection succeeded")
-                self._state = "streaming"
-                # Active config/device unchanged after successful reconnect.
-                await self._broadcaster.push_state(
-                    self._state,
-                    active_config_id=self._config_id,
-                    active_device_path=self._device_path,
-                )
-                return True
-            except Exception as exc:
-                logger.warning(
-                    "Capture reconnect failed: %s, retrying in %ds", exc, delay
-                )
-                # Ensure clean state before next attempt
-                try:
-                    self._capture.release()
-                except Exception:
-                    pass
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, max_delay)
+        for row in rows:
+            region_id = row["id"]
+            if region_id in assigned_region_ids:
+                continue
+            light_id = row["light_id"]
+            channel_ids = light_to_channels.get(light_id, [])
+            if not channel_ids:
+                continue
+            for channel_id in channel_ids:
+                if channel_id not in channel_to_region:
+                    channel_to_region[channel_id] = region_id
 
-        return False
+        return channel_to_region
+
+    # ------------------------------------------------------------------
+    # Internal: bridge reconnect (Hue-only — capture is the coordinator's)
+    # ------------------------------------------------------------------
 
     async def _reconnect_loop(
         self, config_id: str, bridge_ip: str, username: str
     ) -> bool:
         """Reconnect to the Hue bridge with exponential backoff.
 
-        Retries indefinitely while run_event is set.
+        Retries indefinitely while caller is still streaming.
         Delays: 1s, 2s, 4s, 8s, 16s, 30s (capped).
 
         IMPORTANT: Does NOT touch the capture pipeline. Capture continues
         independently during bridge reconnect (per locked decision).
 
-        Args:
-            config_id: Entertainment configuration UUID.
-            bridge_ip: Bridge IP address.
-            username: Bridge application key.
-
-        Returns:
-            True if reconnection succeeded, False if run_event was cleared.
+        The pre-refactor StreamingService gated this loop on its run-event;
+        that event lives on the coordinator post-refactor. HueStreamer can't
+        see when the coordinator wants to shut down, so the loop instead
+        retries until ``activate_entertainment_config`` succeeds. The
+        coordinator cancels the parent task on stop(), which cancels the
+        awaited ``asyncio.sleep`` and bubbles a CancelledError out of this
+        loop — the standard cooperative-cancel pattern for sink-side
+        reconnects.
         """
-        if not self._run_event.is_set():
-            return False
-
         delay = 1
         max_delay = 30
 
-        while self._run_event.is_set():
+        while True:
             try:
-                await activate_entertainment_config(bridge_ip, username, config_id)
+                await activate_entertainment_config(
+                    bridge_ip, username, config_id
+                )
                 logger.info("Bridge reconnection succeeded")
                 return True
             except Exception as exc:
@@ -592,4 +356,11 @@ class StreamingService:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
 
-        return False
+
+# ---------------------------------------------------------------------------
+# Compatibility shim — Plan 07 replaces main.py wiring with StreamingCoordinator
+# directly and removes this re-export. Until then, ``StreamingService`` keeps
+# resolving so ``app.state.streaming = StreamingService(db, registry, broadcaster)``
+# in main.py continues to work without touching unrelated wiring.
+# ---------------------------------------------------------------------------
+from services.streaming_coordinator import StreamingCoordinator as StreamingService  # noqa: E402,F401
