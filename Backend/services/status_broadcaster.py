@@ -33,6 +33,7 @@ class StatusBroadcaster:
             "seq": 0,
             "active_config_id": None,
             "active_device_path": None,
+            "wled_devices": {},
         }
         self._heartbeat_task: asyncio.Task | None = None
 
@@ -67,6 +68,7 @@ class StatusBroadcaster:
         error: str | None = None,
         active_config_id: str | None | object = _UNSET,
         active_device_path: str | None | object = _UNSET,
+        wled_devices: dict | object = _UNSET,
     ) -> None:
         """Update state and immediately broadcast to all clients.
 
@@ -78,6 +80,10 @@ class StatusBroadcaster:
         Omission preserves the current value in _metrics; passing explicit None
         clears it. This distinguishes "I'm not touching that field" from "I'm
         clearing that field on idle/error".
+
+        Per Phase 17 D-16: wled_devices may be passed to update the per-device
+        WLED health dict. Omission preserves the current value (via _UNSET
+        sentinel); passing an explicit dict (including ``{}``) overwrites.
         """
         self._metrics["state"] = state
         if error is not None:
@@ -88,6 +94,8 @@ class StatusBroadcaster:
             self._metrics["active_config_id"] = active_config_id  # type: ignore[assignment]
         if active_device_path is not _UNSET:
             self._metrics["active_device_path"] = active_device_path  # type: ignore[assignment]
+        if wled_devices is not _UNSET:
+            self._metrics["wled_devices"] = wled_devices  # type: ignore[assignment]
         await self._send_to_all()
 
     async def _send_to_all(self) -> None:
