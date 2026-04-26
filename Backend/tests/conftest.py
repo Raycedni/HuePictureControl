@@ -164,21 +164,21 @@ def capture_app_client_broken_open():
 
 
 # ---------------------------------------------------------------------------
-# StreamingService mock helpers
+# StreamingCoordinator mock helpers (Phase 17 Plan 06: app.state.coordinator)
 # ---------------------------------------------------------------------------
 
 
-def _make_streaming_service_mock():
-    """Return a MagicMock StreamingService with async start/stop and idle state."""
-    mock_streaming = MagicMock()
-    mock_streaming.start = AsyncMock()
-    mock_streaming.stop = AsyncMock()
-    type(mock_streaming).state = property(lambda self: "idle")
-    return mock_streaming
+def _make_coordinator_mock():
+    """Return a MagicMock StreamingCoordinator with async start/stop and idle state."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.start = AsyncMock()
+    mock_coordinator.stop = AsyncMock()
+    type(mock_coordinator).state = property(lambda self: "idle")
+    return mock_coordinator
 
 
-def _make_capture_app_client_with_streaming(mock_capture, mock_streaming):
-    """Create a TestClient with mock capture_registry and mock streaming on app.state."""
+def _make_capture_app_client_with_streaming(mock_capture, mock_coordinator):
+    """Create a TestClient with mock capture_registry and mock coordinator on app.state."""
     from fastapi import FastAPI
     from routers.capture import router as capture_router
 
@@ -188,7 +188,7 @@ def _make_capture_app_client_with_streaming(mock_capture, mock_streaming):
     @asynccontextmanager
     async def capture_lifespan(app):
         app.state.capture_registry = mock_registry
-        app.state.streaming = mock_streaming
+        app.state.coordinator = mock_coordinator
         yield
 
     test_app = FastAPI(lifespan=capture_lifespan)
@@ -198,11 +198,17 @@ def _make_capture_app_client_with_streaming(mock_capture, mock_streaming):
 
 @pytest.fixture
 def capture_app_client_with_streaming():
-    """TestClient with working mock capture and mock streaming service."""
+    """TestClient with working mock capture and mock streaming coordinator.
+
+    Yields ``(client, mock_coordinator)``. Plan 06 renamed the inner mock
+    identity from ``mock_streaming`` to ``mock_coordinator`` and the app.state
+    attribute from ``streaming`` to ``coordinator``; the fixture name is kept
+    so existing test imports still resolve.
+    """
     mock_capture = _make_capture_mock()
-    mock_streaming = _make_streaming_service_mock()
-    with _make_capture_app_client_with_streaming(mock_capture, mock_streaming) as client:
-        yield client, mock_streaming
+    mock_coordinator = _make_coordinator_mock()
+    with _make_capture_app_client_with_streaming(mock_capture, mock_coordinator) as client:
+        yield client, mock_coordinator
 
 
 # ---------------------------------------------------------------------------

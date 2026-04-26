@@ -28,6 +28,7 @@ import numpy as np
 
 from services.capture_service import CAPTURE_DEVICE
 from services.color_math import build_polygon_mask, sub_sample_gradient
+from services.streaming_service import HueStreamer
 from services.wled_streamer import WledStreamer
 
 logger = logging.getLogger(__name__)
@@ -64,13 +65,11 @@ class StreamingCoordinator:
         self._capture = None        # Set by start() via registry.acquire()
         self._device_path = None    # Track for release in stop()
         self._broadcaster = broadcaster
-        # Defer HueStreamer import to break the circular dependency between
-        # streaming_service.py (which re-exports StreamingCoordinator at module
-        # bottom as a compatibility shim) and streaming_coordinator.py.
-        if hue_streamer is None:
-            from services.streaming_service import HueStreamer  # local import
-            hue_streamer = HueStreamer(db)
-        self._hue = hue_streamer
+        # Phase 17 Plan 06 removed the bottom-of-file StreamingService shim
+        # in services/streaming_service.py, so the previous deferred local
+        # import is no longer required — HueStreamer is now imported at the
+        # module top level (no cycle).
+        self._hue = hue_streamer if hue_streamer is not None else HueStreamer(db)
         # Phase 17 Plan 06: WLED is no longer optional. Default-construct a
         # production WledStreamer (UDP port 21324 per D-14) when not injected;
         # tests pass a real WledStreamer(udp_port=41324) bound to a loopback

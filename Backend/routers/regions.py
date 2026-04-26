@@ -106,8 +106,8 @@ async def auto_map(body: AutoMapRequest, request: Request):
     response = {"regions_created": count}
 
     # Warn if streaming is currently active (new regions won't take effect until restart)
-    streaming = getattr(request.app.state, "streaming", None)
-    if streaming is not None and getattr(streaming, "state", "idle") != "idle":
+    coordinator = getattr(request.app.state, "coordinator", None)
+    if coordinator is not None and getattr(coordinator, "state", "idle") != "idle":
         response["warning"] = (
             "Streaming is active — restart streaming to use new regions"
         )

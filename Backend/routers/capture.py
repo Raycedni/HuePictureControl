@@ -44,8 +44,8 @@ async def start_capture(body: StartCaptureRequest, request: Request):
     Returns:
         200 JSON {"status": "starting"}
     """
-    streaming = request.app.state.streaming
-    await streaming.start(body.config_id, target_hz=body.target_hz)
+    coordinator = request.app.state.coordinator
+    await coordinator.start(body.config_id, target_hz=body.target_hz)
     return {"status": "starting"}
 
 
@@ -56,8 +56,8 @@ async def stop_capture(request: Request):
     Returns:
         200 JSON {"status": "stopping"}
     """
-    streaming = request.app.state.streaming
-    await streaming.stop()
+    coordinator = request.app.state.coordinator
+    await coordinator.stop()
     return {"status": "stopping"}
 
 
