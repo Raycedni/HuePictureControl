@@ -37,6 +37,20 @@ export function useStatusWS(): void {
                 : raw.active_device_path === null
                   ? null
                   : undefined,
+            // Phase 17 D-16: tri-state parse for the new wled_devices key.
+            // - undefined  -> field absent from payload, preserve existing
+            //                 store value (Partial<setMetrics> contract).
+            // - object     -> overwrite store keyed by device id (including
+            //                 explicit `{}` to clear the map).
+            // - anything else (null, array, scalar) -> ignore as malformed.
+            wledDevices:
+              raw.wled_devices && typeof raw.wled_devices === 'object' && !Array.isArray(raw.wled_devices)
+                ? (raw.wled_devices as Record<string, {
+                    last_error: string | null
+                    last_success_at: string | null
+                    in_cooldown: boolean
+                  }>)
+                : undefined,
           })
         } catch {
           // ignore malformed JSON
