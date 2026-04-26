@@ -14,8 +14,10 @@ Tests in this module focus on the Hue-side narrow surface only:
     to one RGB and calls set_input with (x, y, bri, channel_id).
 
 State-machine, capture, and frame-loop tests live in
-test_streaming_coordinator.py. The compatibility shim
-``StreamingService = StreamingCoordinator`` is exercised indirectly there.
+test_streaming_coordinator.py. Phase 17 Plan 06 removed the
+``StreamingService`` compatibility shim — ``main.py`` now imports
+``StreamingCoordinator`` directly and ``app.state.coordinator`` is the only
+surface routers see.
 """
 import asyncio
 import json
@@ -107,15 +109,10 @@ def hue_imports():
 
 
 # ---------------------------------------------------------------------------
-# Compatibility shim test
+# (Plan 06 removed the StreamingService compatibility shim — there's no
+# longer an alias to assert. Routers and main.py now import
+# StreamingCoordinator directly; see test_streaming_coordinator.py.)
 # ---------------------------------------------------------------------------
-
-
-def test_streaming_service_compat_shim_exports_coordinator(hue_imports):
-    """``StreamingService`` must alias ``StreamingCoordinator`` (Plan 07 handoff)."""
-    from services.streaming_service import StreamingService
-    from services.streaming_coordinator import StreamingCoordinator
-    assert StreamingService is StreamingCoordinator
 
 
 # ---------------------------------------------------------------------------

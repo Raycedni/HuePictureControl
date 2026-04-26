@@ -16,7 +16,7 @@ from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
 from services.capture_service import CaptureRegistry
 from services.status_broadcaster import StatusBroadcaster
-from services.streaming_service import StreamingService
+from services.streaming_coordinator import StreamingCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +46,18 @@ async def lifespan(app: FastAPI):
     registry = CaptureRegistry()
     app.state.capture_registry = registry
 
-    # Startup: create StatusBroadcaster and StreamingService
+    # Startup: create StatusBroadcaster and StreamingCoordinator
     broadcaster = StatusBroadcaster()
     app.state.broadcaster = broadcaster
 
-    streaming = StreamingService(db=db, capture_registry=registry, broadcaster=broadcaster)
-    app.state.streaming = streaming
+    coordinator = StreamingCoordinator(db=db, capture_registry=registry, broadcaster=broadcaster)
+    app.state.coordinator = coordinator
 
     yield
 
     # Shutdown: stop streaming if active (before releasing capture)
-    if streaming.state not in ("idle",):
-        await streaming.stop()
+    if coordinator.state not in ("idle",):
+        await coordinator.stop()
 
     # Shutdown: release all capture backends
     registry.shutdown()

@@ -29,16 +29,20 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 
 def _make_regions_app(db_conn, streaming_state="idle"):
-    """Build a minimal FastAPI app with regions router and a pre-wired DB."""
+    """Build a minimal FastAPI app with regions router and a pre-wired DB.
+
+    Phase 17 Plan 06 renamed ``app.state.streaming`` to ``app.state.coordinator``
+    along with the rest of the Backend; the helper now mirrors that.
+    """
     from routers.regions import router as regions_router
 
-    mock_streaming = MagicMock()
-    type(mock_streaming).state = property(lambda self: streaming_state)
+    mock_coordinator = MagicMock()
+    type(mock_coordinator).state = property(lambda self: streaming_state)
 
     @asynccontextmanager
     async def lifespan(app):
         app.state.db = db_conn
-        app.state.streaming = mock_streaming
+        app.state.coordinator = mock_coordinator
         yield
 
     test_app = FastAPI(lifespan=lifespan)

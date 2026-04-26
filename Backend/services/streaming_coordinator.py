@@ -28,6 +28,8 @@ import numpy as np
 
 from services.capture_service import CAPTURE_DEVICE
 from services.color_math import build_polygon_mask, sub_sample_gradient
+from services.streaming_service import HueStreamer
+from services.wled_streamer import WledStreamer
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +65,19 @@ class StreamingCoordinator:
         self._capture = None        # Set by start() via registry.acquire()
         self._device_path = None    # Track for release in stop()
         self._broadcaster = broadcaster
-        # Defer HueStreamer import to break the circular dependency between
-        # streaming_service.py (which re-exports StreamingCoordinator at module
-        # bottom as a compatibility shim) and streaming_coordinator.py.
-        if hue_streamer is None:
-            from services.streaming_service import HueStreamer  # local import
-            hue_streamer = HueStreamer(db)
-        self._hue = hue_streamer
-        self._wled = wled_streamer
+        # Phase 17 Plan 06 removed the bottom-of-file StreamingService shim
+        # in services/streaming_service.py, so the previous deferred local
+        # import is no longer required — HueStreamer is now imported at the
+        # module top level (no cycle).
+        self._hue = hue_streamer if hue_streamer is not None else HueStreamer(db)
+        # Phase 17 Plan 06: WLED is no longer optional. Default-construct a
+        # production WledStreamer (UDP port 21324 per D-14) when not injected;
+        # tests pass a real WledStreamer(udp_port=41324) bound to a loopback
+        # listener (see test_streaming_coordinator.py fan-out test) or a
+        # MagicMock with AsyncMock start/stop/render + MagicMock
+        # health_snapshot. The streamer is started inside _run_loop with the
+        # device_rows produced by _load_wled_device_rows.
+        self._wled = wled_streamer if wled_streamer is not None else WledStreamer()
         self._run_event: asyncio.Event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._state: str = "idle"
@@ -158,6 +165,43 @@ class StreamingCoordinator:
             active_device_path=None,
         )
 
+    async def set_wled_device_enabled(self, device_id: str, enabled: bool) -> None:
+        """Toggle a WLED device's enabled flag (D-12). Updates DB + live streamer.
+
+        Per D-12 the ``enabled`` column is a per-frame UDP-send gate, not an
+        attachment gate. Devices stay in the streamer's view; toggling
+        enabled/disabled simply skips them in the next render() call. Safe to
+        call at any lifecycle state — when streaming, the live gate takes
+        effect on the next frame; when idle, only the DB row changes and the
+        streamer picks up the new value on next start.
+        """
+        await self._db.execute(
+            "UPDATE wled_devices SET enabled = ? WHERE id = ?",
+            (1 if enabled else 0, device_id),
+        )
+        await self._db.commit()
+        self._wled.set_enabled(device_id, enabled)
+
+    async def add_wled_device_to_live(self, device_id: str) -> bool:
+        """Attach a newly-registered enabled device to an already-running stream.
+
+        No-op when not streaming. ``WledStreamer.start`` raises if called twice
+        without an intervening ``stop()`` so we cannot simply re-load the
+        device rows mid-stream. For Plan 06 this is a logged no-op — the device
+        becomes active on the next stream start. Phase 19 (or a follow-up)
+        may add a true ``WledStreamer.attach_device`` for hot-add.
+
+        Returns True if attached live, False otherwise. Plan 06 always returns
+        False; Plan 07 routers call this after INSERT and surface the result.
+        """
+        if self._state != "streaming" or self._config_id is None:
+            return False
+        logger.info(
+            "WLED device %s registered mid-stream; it will be active on next stream start.",
+            device_id,
+        )
+        return False
+
     # ------------------------------------------------------------------
     # Internal: device resolution
     # ------------------------------------------------------------------
@@ -190,6 +234,94 @@ class StreamingCoordinator:
             return CAPTURE_DEVICE
 
         return cam_row["last_device_path"]
+
+    # ------------------------------------------------------------------
+    # Internal: WLED device + channel loader (Phase 17 Plan 06 / D-11, D-12)
+    # ------------------------------------------------------------------
+
+    async def _load_wled_device_rows(self, config_id: str) -> list[dict]:
+        """Load enabled WLED devices with their channel + region assignments.
+
+        Returns the ``device_rows`` list ``WledStreamer.start`` expects:
+        ``[{"id", "ip", "led_count", "enabled", "channels": [{"id",
+        "region_id", "start_led", "end_led"}, ...]}, ...]``.
+
+        Per D-11 the global ``/api/capture/start`` attaches all
+        ``wled_devices WHERE enabled = 1`` as UDP sinks. Per the
+        T-17-DB-JOIN mitigation, the channel-side LEFT JOIN scopes
+        ``wla.entertainment_config_id`` so channels not assigned for the
+        active config surface ``region_id = NULL`` and WledStreamer.render
+        skips them.
+
+        Returns an empty list if no devices are registered or all are
+        disabled. Falls back to ``[]`` if the wled_* tables don't yet exist
+        (DB schema may lag in some test paths).
+        """
+        rows: list[dict] = []
+        try:
+            async with await self._db.execute(
+                "SELECT id, ip, led_count, enabled FROM wled_devices WHERE enabled = 1"
+            ) as cur:
+                device_rows = await cur.fetchall()
+        except Exception as exc:
+            logger.warning(
+                "WLED device query failed (returning empty rows): %s", exc
+            )
+            return []
+
+        for dev in device_rows:
+            try:
+                dev_id = dev["id"]
+                dev_ip = dev["ip"]
+                dev_led_count = dev["led_count"]
+                dev_enabled = dev["enabled"]
+            except Exception:
+                # Defensive: row may be a tuple in some mocks
+                dev_id, dev_ip, dev_led_count, dev_enabled = (
+                    dev[0], dev[1], dev[2], dev[3]
+                )
+            try:
+                async with await self._db.execute(
+                    """
+                    SELECT wc.id AS channel_id, wc.start_led, wc.end_led, wla.region_id
+                    FROM wled_channels wc
+                    LEFT JOIN wled_light_assignments wla
+                        ON wla.wled_channel_id = wc.id
+                        AND wla.entertainment_config_id = ?
+                    WHERE wc.device_id = ?
+                    """,
+                    (config_id, dev_id),
+                ) as cur:
+                    ch_rows = await cur.fetchall()
+            except Exception as exc:
+                logger.warning(
+                    "WLED channel query failed for device %s: %s", dev_id, exc
+                )
+                ch_rows = []
+            channels = []
+            for c in ch_rows:
+                try:
+                    channels.append({
+                        "id": c["channel_id"],
+                        "region_id": c["region_id"],
+                        "start_led": int(c["start_led"]),
+                        "end_led": int(c["end_led"]),
+                    })
+                except Exception:
+                    channels.append({
+                        "id": c[0],
+                        "region_id": c[3] if len(c) > 3 else None,
+                        "start_led": int(c[1]),
+                        "end_led": int(c[2]),
+                    })
+            rows.append({
+                "id": dev_id,
+                "ip": dev_ip,
+                "led_count": int(dev_led_count),
+                "enabled": bool(dev_enabled),
+                "channels": channels,
+            })
+        return rows
 
     # ------------------------------------------------------------------
     # Internal: region plan (sub-sample N per region)
@@ -266,11 +398,13 @@ class StreamingCoordinator:
             #    manages its own _load_channel_map / _load_channel_to_region.
             await self._hue.start(config_id)
 
-            # 2. Optional WLED sink — Plan 06 wires real device rows from DB.
-            if self._wled is not None:
-                # Plan 05 placeholder: WLED start happens via routers/wled.py
-                # in Plan 06 with explicit device_rows. Nothing to do here yet.
-                pass
+            # 2. Phase 17 Plan 06: Load enabled WLED devices + their channel/
+            #    region assignments and start the WledStreamer (D-11 global
+            #    start attaches all enabled devices). Empty list is fine — the
+            #    streamer enters the "started, no devices" state and render()
+            #    is a no-op.
+            wled_rows = await self._load_wled_device_rows(config_id)
+            await self._wled.start(wled_rows)
 
             # 3. Transition to streaming state — carry active config/device (D-06).
             self._state = "streaming"
@@ -316,11 +450,10 @@ class StreamingCoordinator:
                 await self._hue.stop()
             except Exception:
                 logger.warning("HueStreamer.stop failed (best-effort)")
-            if self._wled is not None:
-                try:
-                    await self._wled.stop()
-                except Exception:
-                    logger.warning("WledStreamer.stop failed (best-effort)")
+            try:
+                await self._wled.stop()
+            except Exception:
+                logger.warning("WledStreamer.stop failed (best-effort)")
             if self._device_path:
                 try:
                     await asyncio.to_thread(
@@ -341,9 +474,12 @@ class StreamingCoordinator:
           * for each (region_id, (mask, N_region)) in region_plan,
             compute sub_sample_gradient(frame, mask, N_region)
           * await self._hue.render(region_gradients)
-          * if WLED sink set, await self._wled.render(region_gradients)
+          * await self._wled.render(region_gradients) — always called now
+            (Plan 06). With no enabled devices the call is a cheap no-op.
         Bridge errors call ``self._hue.handle_bridge_error(exc)``; capture
-        errors trigger ``_capture_reconnect_loop``.
+        errors trigger ``_capture_reconnect_loop``. Per D-06 WLED errors are
+        isolated per-device inside ``WledStreamer`` and never escape its
+        ``render`` — they cannot reach the bridge-reconnect path.
         """
         seq = 0
         prev_t0 = time.monotonic()
@@ -375,8 +511,7 @@ class StreamingCoordinator:
 
             try:
                 await self._hue.render(region_gradients)
-                if self._wled is not None:
-                    await self._wled.render(region_gradients)
+                await self._wled.render(region_gradients)
             except Exception as exc:
                 # Per D-06: Hue errors trigger Hue reconnect; WLED errors are
                 # isolated per-device inside WledStreamer and never reach here.
@@ -398,11 +533,10 @@ class StreamingCoordinator:
                 "latency_ms": round(latency_ms, 1),
                 "seq": seq,
             }
-            if self._wled is not None:
-                try:
-                    metrics["wled_devices"] = self._wled.health_snapshot()
-                except Exception:
-                    pass
+            try:
+                metrics["wled_devices"] = self._wled.health_snapshot()
+            except Exception:
+                metrics["wled_devices"] = {}
             self._broadcaster.update_metrics(metrics)
 
     # ------------------------------------------------------------------

@@ -127,7 +127,7 @@ async def test_connect_sends_current_metrics_snapshot():
 
 @pytest.mark.asyncio
 async def test_initial_metrics_defaults():
-    """Initial _metrics has expected default values (per Phase 16 D-06)."""
+    """Initial _metrics has expected default values (per Phase 16 D-06, Phase 17 D-16)."""
     from services.status_broadcaster import StatusBroadcaster
     sb = StatusBroadcaster()
     assert sb._metrics == {
@@ -139,6 +139,7 @@ async def test_initial_metrics_defaults():
         "seq": 0,
         "active_config_id": None,
         "active_device_path": None,
+        "wled_devices": {},
     }
 
 
@@ -295,3 +296,84 @@ async def test_start_and_stop_heartbeat():
 
     await sb.stop_heartbeat()
     assert sb._heartbeat_task.done()
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 D-16: wled_devices payload key + push_state kwarg
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wled_devices_key_present_on_init():
+    """`wled_devices` key exists in _metrics at init and equals empty dict (D-16)."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    assert "wled_devices" in sb._metrics
+    assert sb._metrics["wled_devices"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_merges_wled_devices():
+    """update_metrics({'wled_devices': ...}) merges into _metrics (no broadcast)."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    sb.update_metrics({
+        "wled_devices": {
+            "d1": {
+                "last_error": None,
+                "last_success_at": "2026-04-20T00:00:00+00:00",
+                "in_cooldown": False,
+            }
+        }
+    })
+    assert sb._metrics["wled_devices"]["d1"]["in_cooldown"] is False
+    assert sb._metrics["wled_devices"]["d1"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_push_state_preserves_wled_devices_without_kwarg():
+    """push_state() without wled_devices kwarg preserves the existing value (via _UNSET)."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    sb._metrics["wled_devices"] = {
+        "d1": {"last_error": "x", "last_success_at": None, "in_cooldown": True}
+    }
+    await sb.push_state("streaming")  # no wled_devices kwarg
+    assert sb._metrics["wled_devices"]["d1"]["in_cooldown"] is True
+    assert sb._metrics["wled_devices"]["d1"]["last_error"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_push_state_clears_wled_devices_with_explicit_empty():
+    """push_state(wled_devices={}) explicitly clears the dict to empty."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    sb._metrics["wled_devices"] = {
+        "d1": {"last_error": None, "last_success_at": None, "in_cooldown": False}
+    }
+    await sb.push_state("idle", wled_devices={})
+    assert sb._metrics["wled_devices"] == {}
+
+
+@pytest.mark.asyncio
+async def test_push_state_sets_wled_devices_with_dict():
+    """push_state(wled_devices=payload) sets the key AND emits the payload to clients."""
+    from services.status_broadcaster import StatusBroadcaster
+    sb = StatusBroadcaster()
+    ws = _make_ws()
+    await sb.connect(ws)
+    ws.send_text.reset_mock()
+
+    payload = {
+        "d1": {
+            "last_error": None,
+            "last_success_at": "2026-04-20T00:00:00+00:00",
+            "in_cooldown": False,
+        }
+    }
+    await sb.push_state("streaming", wled_devices=payload)
+    assert sb._metrics["wled_devices"] == payload
+
+    ws.send_text.assert_called_once()
+    sent = json.loads(ws.send_text.call_args[0][0])
+    assert sent["wled_devices"]["d1"]["in_cooldown"] is False

@@ -237,6 +237,8 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
     """region_gradients dict is keyed by region_id with (N_region, 3) ndarrays."""
     # Build a DB where _resolve_device_path returns no assignment (CAPTURE_DEVICE)
     # and _build_region_plan returns one region with N_region=1.
+    # Plan 06: route by SQL content because _load_wled_device_rows now also
+    # runs against this DB between hue.start and _build_region_plan.
     polygon = json.dumps([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
 
     region_row = MagicMock()
@@ -246,18 +248,24 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
         "n_region": 1,
     }[k])
 
-    cam_assign_cur = _empty_cursor()  # _resolve_device_path: no assignment
-    region_plan_cur = MagicMock()
-    region_plan_cur.__aenter__ = AsyncMock(return_value=region_plan_cur)
-    region_plan_cur.__aexit__ = AsyncMock(return_value=None)
-    region_plan_cur.fetchone = AsyncMock(return_value=None)
-    region_plan_cur.fetchall = AsyncMock(return_value=[region_row])
-
     db = MagicMock()
-    cursors_seq = [cam_assign_cur, region_plan_cur]
 
     async def _exec(*args, **kwargs):
-        return cursors_seq.pop(0) if cursors_seq else _empty_cursor()
+        sql = args[0] if args else ""
+        if "wled_devices WHERE enabled" in sql:
+            # No WLED devices registered.
+            return _empty_cursor()
+        if "FROM wled_channels" in sql:
+            return _empty_cursor()
+        if "FROM regions r" in sql:
+            cur = MagicMock()
+            cur.__aenter__ = AsyncMock(return_value=cur)
+            cur.__aexit__ = AsyncMock(return_value=None)
+            cur.fetchone = AsyncMock(return_value=None)
+            cur.fetchall = AsyncMock(return_value=[region_row])
+            return cur
+        # _resolve_device_path: camera_assignments / known_cameras → empty.
+        return _empty_cursor()
 
     db.execute = _exec
 
@@ -612,3 +620,93 @@ async def test_capture_reconnect_does_not_touch_registry():
     capture.open.assert_called()
     assert registry.acquire_calls == []
     assert registry.release_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 fan-out integration test (Plan 06)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_coordinator_fans_out_to_hue_and_wled(monkeypatch):
+    """One captured frame -> Hue.render + WLED.render both called.
+
+    Per Plan 06 preamble:
+      * Use ``monkeypatch.setattr`` for ``_build_region_plan`` so pytest auto-
+        restores the class attribute on test exit (no leakage to subsequent
+        tests).
+      * Pass ``udp_port=41324`` to ``WledStreamer(...)`` (Plan 04 ctor kwarg)
+        to redirect packets to a loopback ``udp_listener`` without monkey-
+        patching the module-level ``UDP_PORT`` constant.
+    """
+    from services.streaming_coordinator import StreamingCoordinator
+    from services.wled_streamer import WledStreamer
+    from services.color_math import build_polygon_mask
+    from tests.fixtures.wled_loopback import udp_listener
+
+    db = MagicMock()
+
+    async def _exec(*args, **kwargs):
+        cur = MagicMock()
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+        sql = args[0] if args else ""
+        if "wled_devices WHERE enabled" in sql:
+            cur.fetchall = AsyncMock(return_value=[
+                {"id": "d1", "ip": "127.0.0.1", "led_count": 10, "enabled": 1},
+            ])
+        elif "FROM wled_channels" in sql:
+            cur.fetchall = AsyncMock(return_value=[
+                {"channel_id": "c1", "start_led": 0, "end_led": 9, "region_id": "r1"},
+            ])
+        else:
+            cur.fetchone = AsyncMock(return_value=None)
+            cur.fetchall = AsyncMock(return_value=[])
+        return cur
+
+    db.execute = _exec
+    db.commit = AsyncMock()
+
+    broadcaster = StatusBroadcaster()
+    mock_hue = MagicMock()
+    mock_hue.start = AsyncMock()
+    mock_hue.stop = AsyncMock()
+    mock_hue.render = AsyncMock()
+    mock_hue.handle_bridge_error = AsyncMock(return_value=False)
+
+    capture = make_mock_capture(_solid_blue_frame())
+    registry = _MockRegistry(capture)
+
+    # Real WledStreamer with loopback-port override (Plan 04 constructor kwarg).
+    # NO module-level patching of UDP_PORT.
+    real_wled = WledStreamer(udp_port=41324)
+
+    coord = StreamingCoordinator(
+        db=db,
+        capture_registry=registry,
+        broadcaster=broadcaster,
+        hue_streamer=mock_hue,
+        wled_streamer=real_wled,
+    )
+
+    # Inject a full-frame region via monkeypatch so pytest restores the class
+    # attribute on test exit (no global state leakage into subsequent tests).
+    fake_region = build_polygon_mask(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    )
+
+    async def _fake_plan(self, cfg):
+        return {"r1": (fake_region, 10)}  # N_region=10 matching the channel
+
+    monkeypatch.setattr(
+        "services.streaming_coordinator.StreamingCoordinator._build_region_plan",
+        _fake_plan,
+    )
+
+    with udp_listener(port=41324) as q:
+        await coord.start("cfg-1")
+        await asyncio.sleep(0.3)
+        await coord.stop()
+
+    assert mock_hue.render.await_count > 0, "Hue render must be called"
+    assert not q.empty(), "WLED listener must receive at least one packet"

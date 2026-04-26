@@ -13,14 +13,12 @@ averages the per-region gradient back to a single RGB per channel
 (``gradient.mean(axis=0)``), preserving the pre-refactor single-color
 behavior — N=1 for Hue-only regions is the trivial case (Plan 05).
 
-Plan 07 will rewire ``main.py`` / ``app.state.streaming`` to point at
-``StreamingCoordinator``. Until then, the bottom-of-file shim re-exports
-``StreamingCoordinator`` as ``StreamingService`` so existing imports keep
-working without touching the wiring.
+Phase 17 Plan 06 removed the bottom-of-file ``StreamingService`` compatibility
+shim; ``main.py`` now imports ``StreamingCoordinator`` directly and
+``app.state.coordinator`` is the only surface routers see.
 
 Exports:
-    HueStreamer       -- DTLS sink; one instance per coordinator.
-    StreamingService  -- compatibility shim alias for ``StreamingCoordinator``.
+    HueStreamer -- DTLS sink; one instance per coordinator.
 """
 import asyncio
 import json
@@ -355,12 +353,3 @@ class HueStreamer:
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
-
-
-# ---------------------------------------------------------------------------
-# Compatibility shim — Plan 07 replaces main.py wiring with StreamingCoordinator
-# directly and removes this re-export. Until then, ``StreamingService`` keeps
-# resolving so ``app.state.streaming = StreamingService(db, registry, broadcaster)``
-# in main.py continues to work without touching unrelated wiring.
-# ---------------------------------------------------------------------------
-from services.streaming_coordinator import StreamingCoordinator as StreamingService  # noqa: E402,F401
