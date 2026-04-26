@@ -14,6 +14,7 @@ from routers.hue import router as hue_router
 from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
 from routers.streaming_ws import router as streaming_ws_router
+from routers.wled import router as wled_router
 from services.capture_service import CaptureRegistry
 from services.status_broadcaster import StatusBroadcaster
 from services.streaming_coordinator import StreamingCoordinator
@@ -79,6 +80,7 @@ app.include_router(health_router)
 app.include_router(hue_router)
 app.include_router(capture_router)
 app.include_router(cameras_router)
+app.include_router(wled_router)
 app.include_router(regions_router)
 app.include_router(streaming_ws_router)
 app.include_router(preview_ws_router)
