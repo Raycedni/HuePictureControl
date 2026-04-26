@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DrawingToolbar } from './DrawingToolbar'
 import { EditorCanvas, handleEditorDelete } from './EditorCanvas'
 import { LightPanel } from './LightPanel'
+import { SettingsPanel } from './Settings/SettingsPanel'
 import { useRegionStore } from '@/store/useRegionStore'
 import { useCameras } from '@/hooks/useCameras'
 
@@ -12,6 +13,9 @@ export function EditorPage() {
   const [selectedConfigId, setSelectedConfigId] = useState<string>('')
   const [selectedDevice, setSelectedDevice] = useState<string | undefined>(undefined)
   const [previewEnabled, setPreviewEnabled] = useState(true)
+  // Phase 17 D-17: WLED device CRUD lives behind a Settings entry button so
+  // the editor stays uncluttered. The modal mounts only when open.
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const cameras = useCameras()
 
   const regions = useRegionStore((s) => s.regions)
@@ -57,7 +61,19 @@ export function EditorPage() {
   }, [])
 
   return (
-    <div className="flex flex-col md:flex-row flex-1 min-h-0 text-left">
+    <div className="relative flex flex-col md:flex-row flex-1 min-h-0 text-left">
+      {/* Phase 17 D-17: Settings entry button — opens the WLED device CRUD
+          modal. `relative` on the parent above anchors this button. */}
+      <button
+        type="button"
+        data-testid="open-settings-button"
+        onClick={() => setSettingsOpen(true)}
+        className="absolute top-2 right-2 z-30 text-xs bg-black/40 border border-white/[0.08] rounded px-2 py-1 hover:bg-black/60"
+        aria-label="Open settings"
+      >
+        Settings
+      </button>
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {/* Left: canvas area ~70% */}
       <div className="flex flex-col flex-1 md:flex-[7] min-h-0">
         <DrawingToolbar onDelete={handleEditorDelete} previewEnabled={previewEnabled} onPreviewToggle={setPreviewEnabled} />
