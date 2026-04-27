@@ -16,6 +16,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
+# Replacement for asyncio.sleep that skips the wall-clock wait but still
+# yields to the event loop (asyncio.sleep(0) is the canonical scheduler-yield
+# idiom). A bare AsyncMock returns instantly without yielding, which turns
+# the preview websocket's "while True" loop into a tight CPU loop after the
+# test client disconnects — pytest peak RSS ballooned to ~20 GB and timed
+# out.  Yielding lets the loop observe WebSocketDisconnect and exit.
+async def _yield_only_sleep(_delay):
+    await asyncio.sleep(0)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -136,7 +146,7 @@ class TestPreviewWsEndpoint:
 
         app = _make_preview_ws_app(registry=mock_registry)
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("asyncio.sleep", side_effect=_yield_only_sleep):
             with TestClient(app) as client:
                 with client.websocket_connect("/ws/preview?device=/dev/video0") as ws:
                     data = ws.receive_bytes()
@@ -163,7 +173,7 @@ class TestPreviewWsEndpoint:
 
         app = _make_preview_ws_app(registry=mock_registry)
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("asyncio.sleep", side_effect=_yield_only_sleep):
             with TestClient(app) as client:
                 with client.websocket_connect("/ws/preview?device=/dev/video0") as ws:
                     ws.receive_bytes()

@@ -1,8 +1,18 @@
 """Mock capture fixture: deterministic frame producer for coordinator tests."""
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
+
+# V4L2 paces wait_for_new_frame at hardware framerate (~60 Hz). With the
+# default AsyncMock(return_value=...) the coordinator's _frame_loop becomes
+# an unbounded tight asyncio loop, allocating millions of numpy arrays per
+# `asyncio.sleep(2.0)` test window — pytest peak RSS ballooned to >20 GB.
+# Pace the mock at 200 Hz (5 ms) so the loop yields like real hardware would.
+# Stays well above every fps/packet-rate floor: e2e asserts >=40 fps, >=50
+# packets in 2 s; at 200 Hz we deliver ~400 packets and ~200 fps with margin.
+_MOCK_FRAME_PERIOD_S = 0.005
 
 
 def _default_frame() -> np.ndarray:
@@ -31,9 +41,17 @@ def make_mock_capture(frame: np.ndarray | None = None) -> MagicMock:
     if frame is None:
         frame = _default_frame()
 
+    async def _paced_wait():
+        await asyncio.sleep(_MOCK_FRAME_PERIOD_S)
+        return frame
+
+    async def _paced_get():
+        await asyncio.sleep(_MOCK_FRAME_PERIOD_S)
+        return frame
+
     mock = MagicMock()
-    mock.wait_for_new_frame = AsyncMock(return_value=frame)
-    mock.get_frame = AsyncMock(return_value=frame)
+    mock.wait_for_new_frame = AsyncMock(side_effect=_paced_wait)
+    mock.get_frame = AsyncMock(side_effect=_paced_get)
     mock.open = MagicMock()
     mock.release = MagicMock()
     mock._last_frame_time = time.monotonic()
