@@ -4,8 +4,9 @@ import PairingFlow from './components/PairingFlow'
 import PreviewPage from './components/PreviewPage'
 import { StatusBar } from './components/StatusBar'
 import { EditorPage } from './components/EditorPage'
+import { SettingsPage } from './components/Settings/SettingsPage'
 
-type Page = 'setup' | 'preview' | 'editor'
+type Page = 'setup' | 'preview' | 'editor' | 'settings'
 
 function App() {
   const [page, setPage] = useState<Page>('setup')
@@ -37,6 +38,12 @@ function App() {
           >
             Editor
           </button>
+          <button
+            className={`app-nav-tab ${page === 'settings' ? 'active' : ''}`}
+            onClick={() => setPage('settings')}
+          >
+            Settings
+          </button>
         </nav>
       </header>
 
@@ -44,6 +51,7 @@ function App() {
         {page === 'setup' && <PairingFlow />}
         {page === 'preview' && <PreviewPage />}
         {page === 'editor' && <EditorPage />}
+        {page === 'settings' && <SettingsPage />}
       </div>
 
       <StatusBar />
