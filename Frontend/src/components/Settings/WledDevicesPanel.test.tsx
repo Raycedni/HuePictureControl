@@ -191,7 +191,7 @@ describe('WledDevicesPanel', () => {
     render(<WledDevicesPanel />)
     await waitFor(() => screen.getByTestId('wled-scan-button'))
     fireEvent.click(screen.getByTestId('wled-scan-button'))
-    await waitFor(() => screen.getByText('WLED-Kitchen'))
+    await waitFor(() => screen.getByText(/WLED-Kitchen/))
   })
 
   it('shows 502 error message on unreachable add', async () => {
