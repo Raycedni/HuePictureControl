@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
-status: executing
+status: milestone_complete
 stopped_at: Phase 17 Wave 1 complete (17-01/02/03); 34 passing tests; resume at Wave 2 (17-04 WledStreamer + 17-05 Coordinator extraction)
 last_updated: "2026-04-25T14:08:06.253Z"
 last_activity: 2026-04-25 -- Phase 17 execution started
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 29
   completed_plans: 23
-  percent: 79
+  percent: 89
 ---
 
 # Project State
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 
 ## Current Position
 
-Phase: 17 (wled-backend-and-streaming) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 17
-Last activity: 2026-04-25 -- Phase 17 execution started
+Phase: 17
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-04-27
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 3 (Phase 16 full)
+- Total plans completed: 12 (Phase 16 full)
 - Average duration: ~30 min / plan
 - Total execution time: ~1.5 hours
 
@@ -43,6 +43,7 @@ Last activity: 2026-04-25 -- Phase 17 execution started
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 16 | 3 | ~1.5h | ~30 min |
+| 17 | 9 | - | - |
 
 **Recent Trend:**
 

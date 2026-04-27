@@ -113,7 +113,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 **Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
 
 - [x] **Phase 16: Zone Persistence Bug Fixes** (3/3 plans) — completed 2026-04-20 — Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
-- [ ] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output
+- [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
 
@@ -146,15 +146,15 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   5. When streaming stops, the UDP timeout byte causes the strip to release the last color within the configured timeout rather than staying frozen
   6. Hue and WLED devices stream simultaneously from the same captured frame without interference or frame-rate degradation
 **Plans**: 9 plans
-  - [ ] 17-01-PLAN.md — Wave 0 fixtures: zeroconf dep + udp_listener + mock_capture
-  - [ ] 17-02-PLAN.md — DB schema (3 WLED tables) + sub_sample_gradient helper
-  - [ ] 17-03-PLAN.md — WLED packet builders (DRGB/DNRGB) + wled_client + wled_discovery (TDD)
-  - [ ] 17-04-PLAN.md — WledStreamer class (lifecycle, per-device lock, cooldown, blackout)
-  - [ ] 17-05-PLAN.md — StreamingCoordinator extraction + HueStreamer refactor (behavior-preserving)
-  - [ ] 17-06-PLAN.md — Coordinator↔WLED integration + StatusBroadcaster wled_devices + app.state rewire
-  - [ ] 17-07-PLAN.md — routers/wled.py CRUD + scan endpoints (with IP regex, cascade delete)
-  - [ ] 17-08-PLAN.md — Frontend: api/wled + Settings panel + WledDevicesPanel + store/WS extensions
-  - [ ] 17-09-PLAN.md — E2E integration test + preflight + manual verification checkpoint
+  - [x] 17-01-PLAN.md — Wave 0 fixtures: zeroconf dep + udp_listener + mock_capture
+  - [x] 17-02-PLAN.md — DB schema (3 WLED tables) + sub_sample_gradient helper
+  - [x] 17-03-PLAN.md — WLED packet builders (DRGB/DNRGB) + wled_client + wled_discovery (TDD)
+  - [x] 17-04-PLAN.md — WledStreamer class (lifecycle, per-device lock, cooldown, blackout)
+  - [x] 17-05-PLAN.md — StreamingCoordinator extraction + HueStreamer refactor (behavior-preserving)
+  - [x] 17-06-PLAN.md — Coordinator↔WLED integration + StatusBroadcaster wled_devices + app.state rewire
+  - [x] 17-07-PLAN.md — routers/wled.py CRUD + scan endpoints (with IP regex, cascade delete)
+  - [x] 17-08-PLAN.md — Frontend: api/wled + Settings panel + WledDevicesPanel + store/WS extensions
+  - [x] 17-09-PLAN.md — E2E integration test + preflight + manual verification checkpoint
 
 ---
 
@@ -208,7 +208,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Docker & Polish | v1.2 | 0/TBD | Not started | - |
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
-| 17. WLED Backend and Streaming | v1.3 | 0/TBD | Not started | - |
+| 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/TBD | Not started | - |
 
