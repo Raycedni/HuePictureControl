@@ -39,11 +39,11 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 
 ### Active (v1.3)
 
-- [ ] WLED device discovery and management in a dedicated UI tab
-- [ ] UDP realtime protocol (DDP/DRGB) streaming to WLED ESP32 devices
-- [ ] Paint-on-strip UI for assigning LED pixel ranges to canvas zones
-- [ ] Shared channel-per-area mapping abstraction for Hue and WLED
-- [ ] Home Assistant REST endpoints: select camera, select zone, start/stop streaming
+- ✓ WLED device discovery and management in a dedicated UI tab — Phase 17
+- ✓ UDP realtime protocol (DRGB/DNRGB) streaming to WLED ESP32 devices — Phase 17
+- [ ] Paint-on-strip UI for assigning LED pixel ranges to canvas zones (Phase 19)
+- ✓ Shared channel-per-area mapping abstraction for Hue and WLED — Phase 17 (StreamingCoordinator + region_plan with COALESCE(MAX(...), 1))
+- [ ] Home Assistant REST endpoints: select camera, select zone, start/stop streaming (Phase 18)
 - [ ] Persist selected entertainment config per camera across page reloads
 - [ ] Dropdown reflects actual streaming state on reload
 
