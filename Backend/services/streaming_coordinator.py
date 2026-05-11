@@ -94,12 +94,24 @@ class StreamingCoordinator:
         """Current streaming state: idle | starting | streaming | stopping | error."""
         return self._state
 
-    async def start(self, config_id: str, target_hz: int = DEFAULT_HZ) -> None:
+    async def start(
+        self,
+        config_id: str,
+        target_hz: int = DEFAULT_HZ,
+        device_path_override: str | None = None,
+    ) -> None:
         """Start the streaming loop for the given entertainment config ID.
 
         No-op if already streaming (state not idle or error).
 
         Transitions: idle/error -> starting -> streaming (inside run loop).
+
+        ``device_path_override`` (Phase 18 D-08): when non-None, bypasses the
+        camera_assignments -> known_cameras -> CAPTURE_DEVICE resolution chain and
+        uses the provided path directly. The HA router (routers/ha.py) reads
+        ``ha_state.active_camera_stable_id`` and resolves it via
+        ``known_cameras.last_device_path`` before passing the result here, so D-07
+        (HA does not touch camera_assignments) stays clean.
         """
         if self._state not in ("idle", "error"):
             return
@@ -110,7 +122,7 @@ class StreamingCoordinator:
 
         # Resolve device path BEFORE broadcasting "starting" so the WS payload
         # carries the resolved active_device_path (Phase 16 D-05/D-06).
-        device_path = await self._resolve_device_path(config_id)
+        device_path = device_path_override or await self._resolve_device_path(config_id)
         self._device_path = device_path
 
         await self._broadcaster.push_state(
