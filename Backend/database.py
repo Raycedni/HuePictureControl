@@ -89,6 +89,17 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             updated_at TEXT NOT NULL
         )
     """)
+    # Phase 18 D-04: HA selection state (single-row, lazy-created).
+    # No eager INSERT seed — D-05 mandates lazy row creation by the first
+    # PUT /api/ha/zone or PUT /api/ha/camera via ON CONFLICT DO UPDATE.
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS ha_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            active_config_id TEXT,
+            active_camera_stable_id TEXT,
+            updated_at TEXT
+        )
+    """)
     # Phase 17 D-07: WLED device + channel + region-assignment schema.
     # FK clauses are documentation-as-code only — SQLite does not enforce them
     # without `PRAGMA foreign_keys = ON`, which the project intentionally omits
