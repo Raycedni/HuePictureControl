@@ -345,7 +345,7 @@ class HaZoneOut(BaseModel):
     id: str
     name: str
 
-class HaZonesResponse(BaseModel):
+class HaZoneListResponse(BaseModel):
     zones: list[HaZoneOut]
 
 class HaCameraOut(BaseModel):
@@ -353,7 +353,7 @@ class HaCameraOut(BaseModel):
     name: str
     connected: bool
 
-class HaCamerasResponse(BaseModel):
+class HaCameraListResponse(BaseModel):
     cameras: list[HaCameraOut]
 
 class HaStatusResponse(BaseModel):
