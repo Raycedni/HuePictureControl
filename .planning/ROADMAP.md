@@ -113,7 +113,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 **Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
 
 - [x] **Phase 16: Zone Persistence Bug Fixes** (3/3 plans) — completed 2026-04-20 — Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
-- [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
+- [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
 
@@ -168,7 +168,10 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   3. HA can select a specific camera via REST and a subsequent start uses that camera
   4. HA can select a specific entertainment zone via REST and a subsequent start activates that zone
   5. All HA endpoints are unauthenticated and accessible from within the local network, consistent with the rest of the API
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 18-01-PLAN.md — Wave 1 foundation: ha_state table DDL + StreamingCoordinator.start device_path_override (Option C)
+  - [ ] 18-02-PLAN.md — Wave 2 router: routers/ha.py with all 7 endpoints (POST start/stop, GET status/zones/cameras, PUT zone/camera) + main.py wiring
+  - [ ] 18-03-PLAN.md — Wave 3 tests: test_ha_router.py (23 unit tests) + test_ha_e2e.py (full PUT/POST/GET cross-cut) + VALIDATION.md map update
 
 ---
 
@@ -209,7 +212,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 15. Wireless Docker & Polish | v1.2 | 0/TBD | Not started | - |
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
-| 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
+| 18. Home Assistant Control Endpoints | v1.3 | 0/3 | Planned | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/TBD | Not started | - |
 
 ---
