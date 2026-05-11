@@ -1161,27 +1161,27 @@ async def _build_status_response(request: Request) -> HaStatusResponse:
 | A5 | No additional test file exists for `test_ha_*` already. | Test Patterns | Verified by Glob — only `test_wled_router.py` and `test_cameras_router.py` exist as routerXXX_router.py shaped fixtures. [VERIFIED] |
 | A6 | Existing `pytest-asyncio` config supports `@pytest.mark.asyncio` integration tests. | Test Patterns → Integration | `test_phase17_e2e.py:132` uses the marker and is shipped/passing per STATE.md "Phase 17 complete". [VERIFIED] |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Resolution of D-08 step 3a (coordinator-vs-router):**
    - What we know: D-07 says HA's PUT camera must NOT write `camera_assignments`. D-08 says HA's `/start` must honor `ha_state.active_camera_stable_id` over `camera_assignments`.
    - What's unclear: Should the coordinator gain a `device_path_override` param (clean) or should the router temporarily write+revert `camera_assignments` around the `coordinator.start` call (ugly)?
-   - **Recommendation:** Pick Option C (add `device_path_override` parameter). Planner can choose to defer if the API change feels too invasive — but Option B is messier under concurrent calls (the temp-write window leaks if `/start` is called twice quickly).
+   - **Recommendation:** RESOLVED: Pick Option C (add `device_path_override` parameter). Planner can choose to defer if the API change feels too invasive — but Option B is messier under concurrent calls (the temp-write window leaks if `/start` is called twice quickly).
 
 2. **`POST /api/ha/stop` response body when already idle:**
    - What we know: CONTEXT.md says "returns current status payload in body so HA gets immediate post-action state."
    - What's unclear: Should the response shape be `HaStatusResponse` (same as `GET /api/ha/status`) or a simpler `{"status": "ok"}`?
-   - **Recommendation:** Return `HaStatusResponse` for all three control endpoints (`/start`, `/stop`, plus `/zone`, `/camera` if helpful). HA can render the same template sensor from any response. Single response model = simpler HA-side YAML. This is implicit in CONTEXT.md Claude's Discretion "Both return the current status payload".
+   - **Recommendation:** RESOLVED: Return `HaStatusResponse` for all three control endpoints (`/start`, `/stop`, plus `/zone`, `/camera` if helpful). HA can render the same template sensor from any response. Single response model = simpler HA-side YAML. This is implicit in CONTEXT.md Claude's Discretion "Both return the current status payload".
 
 3. **Bridge pairing detection for `/api/ha/zones`:**
    - What we know: 503 if `bridge_config` is empty.
    - What's unclear: Should we also 503 if the bridge HTTP call times out, or stay 502?
-   - **Recommendation:** 503 for "unpaired" (no credentials), 502 for "paired but unreachable/timeout" (have credentials, can't connect). This matches `routers/hue.py` semantics by precedent (currently uses 400/502 — Phase 18 upgrades 400 → 503 for consistency).
+   - **Recommendation:** RESOLVED: 503 for "unpaired" (no credentials), 502 for "paired but unreachable/timeout" (have credentials, can't connect). This matches `routers/hue.py` semantics by precedent (currently uses 400/502 — Phase 18 upgrades 400 → 503 for consistency).
 
 4. **Should `/api/ha/cameras` include disconnected cameras?**
    - What we know: D-11 says `[{stable_id, name, connected}]`.
    - What's unclear: Does "connected: false" cameras appear in the list, or is the list filtered to only connected?
-   - **Recommendation:** Include disconnected ones, expose `connected: false`. Mirrors `GET /api/cameras` (line 194-215 of `routers/cameras.py`) which includes previously-seen-but-gone devices. HA users can filter on their side via templating.
+   - **Recommendation:** RESOLVED: Include disconnected ones, expose `connected: false`. Mirrors `GET /api/cameras` (line 194-215 of `routers/cameras.py`) which includes previously-seen-but-gone devices. HA users can filter on their side via templating.
 
 ## Environment Availability
 
