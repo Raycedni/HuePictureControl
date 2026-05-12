@@ -93,12 +93,42 @@ class WledScanResponse(BaseModel):
 def _row_to_out(row, health: dict) -> WledDeviceOut:
     """Merge a persisted device row with the live health_snapshot entry.
 
-    The "connected" field is derived from `last_success_at` per
-    17-RESEARCH.md Open Question 2: a device is considered connected when
-    the most recent successful UDP send is < 5.0s old. None / unparseable
-    timestamps surface as `connected=False`.
+    The "connected" field has two modes depending on whether the coordinator
+    is currently streaming (i.e. whether the WledStreamer has been started):
+
+    * Streamer idle (health dict empty or device absent from it): the device
+      is assumed reachable when it has a valid led_count > 0.  Registration
+      already proved reachability via a successful /json/info fetch, so there
+      is no need to require a recent UDP send.  Showing "Offline" at idle was
+      a bug — devices were never shown as connected unless streaming was active
+      AND a channel assignment existed (fix for wled-always-offline).
+
+    * Streamer running (device_id present in health dict): use the
+      last_success_at timestamp.  A device is connected when the most recent
+      successful UDP send is < 5.0 s old.  None / unparseable timestamps
+      surface as connected=False (e.g. the device is in the streamer but has
+      never successfully sent — no channel assignment or all sends failed).
     """
-    health_entry = health.get(row["id"], {}) if health else {}
+    health_entry = health.get(row["id"]) if health else None
+    if health_entry is None:
+        # Streamer is idle or this device is not yet in the live streamer.
+        # Derive connected from the persisted led_count: if the device was
+        # successfully registered (led_count > 0 is a registration invariant)
+        # treat it as connected.  The cooldown / last_error fields are absent.
+        connected = int(row["led_count"]) > 0
+        return WledDeviceOut(
+            id=row["id"],
+            ip=row["ip"],
+            name=row["name"],
+            led_count=int(row["led_count"]),
+            enabled=bool(row["enabled"]),
+            created_at=row["created_at"],
+            connected=connected,
+            last_error=None,
+            last_success_at=None,
+        )
+
+    # Streamer is running and has a health entry for this device.
     last_success_at = health_entry.get("last_success_at")
     connected = False
     if last_success_at is not None:

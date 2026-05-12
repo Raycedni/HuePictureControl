@@ -147,7 +147,11 @@ def test_add_device_zero_led_count_returns_422():
 
 
 def test_add_device_persists_and_auto_seeds_channel():
-    """Happy path: 201 + auto-seeded channel covering the full strip (D-09)."""
+    """Happy path: 201 + auto-seeded channel covering the full strip (D-09).
+
+    With no coordinator wired the health dict is empty, so connected is derived
+    from led_count > 0 (idle-state reachability; fix for wled-always-offline).
+    """
     app = _make_app()
     with TestClient(app) as client:
         with patch(
@@ -167,7 +171,8 @@ def test_add_device_persists_and_auto_seeds_channel():
         assert body["name"] == "My WLED"
         assert body["led_count"] == 300
         assert body["enabled"] is True
-        assert body["connected"] is False  # no coordinator -> no live success ts
+        # No coordinator -> health dict empty -> connected derived from led_count > 0.
+        assert body["connected"] is True
         dev_id = body["id"]
 
         # Auto-seeded channel covers [0 .. led_count-1]
