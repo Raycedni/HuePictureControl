@@ -5,7 +5,9 @@
 - ✅ **v1.0 Full Ambient Lighting** — Phases 1-6 (shipped 2026-03-24)
 - ✅ **v1.1 Multi-Camera Support** — Phases 7-11 (shipped 2026-04-14)
 - 🚧 **v1.2 Wireless Input** — Phases 12-15 (planned)
-- 📋 **v1.3 WLED Support, HA Control & Bug Fixes** — Phases 16-19 (planned)
+- ✅ **v1.3 (WLED + HA Control)** — Phases 16-18 (shipped 2026-05-12)
+- 📋 **v1.3 Home Assistant Integration Polish** — Phases 19-22 (planned)
+- 🗂️ **Deferred / Unscheduled** — WLED Strip Paint UI (WMAP-01..05) — formerly Phase 19, now unscheduled pending re-planning
 
 ## Phases
 
@@ -108,16 +110,15 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 ---
 
-## v1.3 WLED Support, HA Control & Bug Fixes (Planned)
+## v1.3 WLED Support, HA Control & Bug Fixes (Shipped)
 
 **Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
 
 - [x] **Phase 16: Zone Persistence Bug Fixes** (3/3 plans) — completed 2026-04-20 — Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
 - [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [x] **Phase 18: Home Assistant Control Endpoints** (3/3 plans) — completed 2026-05-12 — REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
-- [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
 
-## Phase Details (v1.3)
+## Phase Details (v1.3 shipped)
 
 ### Phase 16: Zone Persistence Bug Fixes
 **Goal**: The entertainment config selection persists correctly per camera across page reloads, and the dropdown accurately reflects the actual streaming state when the page loads.
@@ -175,17 +176,82 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 ---
 
-### Phase 19: WLED Strip Paint UI
-**Goal**: Users can visually paint LED channel ranges directly onto a strip representation in the UI, and the resulting channels appear in the light panel for assignment to canvas regions via the same drag-drop workflow used for Hue segments.
-**Depends on**: Phase 17
-**Requirements**: WMAP-01, WMAP-02, WMAP-03, WMAP-04, WMAP-05
+---
+
+## v1.3 Home Assistant Integration Polish (Planned)
+
+**Milestone Goal:** Make HuePictureControl a first-class Home Assistant citizen — zero-YAML setup for new users (MQTT auto-discovery) plus a documented YAML fallback. Builds on the unauthenticated REST endpoints shipped in Phase 18.
+
+**Build order (research-mandated, risk-ascending):** YAML docs → WLED health flattening → MQTT discovery (read-only) → MQTT command consumer.
+
+- [ ] **Phase 19: HA YAML Documentation** - Ship `docs/HOME_ASSISTANT.md` with ready-to-paste `rest_command:`, REST `sensor:`, and `input_select:` snippets for the non-MQTT path; explicit warning against mixing MQTT and YAML
+- [ ] **Phase 20: WLED Health Flattening in /api/ha/status** - Additive `wled_devices` array on `HaStatusResponse` (per-device `{name, connected, last_error, in_cooldown}`) sourced from existing `broadcaster._metrics["wled_devices"]`
+- [ ] **Phase 21: MQTT Auto-Discovery (Read-Only)** - `aiomqtt>=2.5,<3` dep, `HaMqttPublisher` service, `hpc_identity` table, `StatusBroadcaster` subscriber callback hook, LWT/retain/birth trifecta, 11 base entities + per-WLED binary_sensors
+- [ ] **Phase 22: MQTT Command Consumer** - Refactor `routers/ha.py` to extract pure async helpers; MQTT switch and select entities drive `start`/`stop`/`zone`/`camera` via the same helpers as the HTTP routes
+
+## Phase Details (v1.3 Polish)
+
+### Phase 19: HA YAML Documentation
+**Goal**: Users without an MQTT broker (or who want to verify the integration before enabling discovery) can configure HuePictureControl in Home Assistant entirely from a single Markdown file shipped in the repo.
+**Depends on**: Phase 18
+**Requirements**: HA-DOCS-01, HA-DOCS-02
 **Success Criteria** (what must be TRUE):
-  1. The WLED tab shows a visual horizontal strip for each device; user can click and drag to paint a named channel range onto the strip
-  2. Each painted channel appears in the light panel dropdown with a distinct color, assignable to canvas regions by drag-and-drop — identical workflow to Hue gradient segments
-  3. Adjacent channel zones are visually separated by color and the boundary handle can be dragged to resize them
-  4. Painted channel assignments persist across restarts; reopening the editor shows the same strip layout and region assignments
-  5. Removing a painted channel unassigns it from any regions it was linked to and updates the canvas immediately
+  1. A user can paste the snippets from `docs/HOME_ASSISTANT.md` into their `configuration.yaml` and, after an HA restart, see at least one HPC sensor populated and at least one `rest_command:` callable that successfully starts streaming
+  2. The same document contains a clearly-marked warning explaining that enabling MQTT auto-discovery (Phase 21) AND the REST `rest_command:` / `sensor:` snippets at the same time will create duplicate entities (HA-DOCS-02)
+  3. Every YAML snippet in the document uses defensive Jinja templating (e.g. `value_json.fps | default('unknown')`) so a missing optional field does not break HA template rendering
+  4. Every `rest_command:` URL/method pair in the document corresponds to an existing route on the `ha` router (verifiable by a doc-test that parses fenced ``` ```yaml ``` blocks)
 **Plans**: TBD
+
+---
+
+### Phase 20: WLED Health Flattening in /api/ha/status
+**Goal**: Home Assistant consumers of `GET /api/ha/status` can see per-device WLED connectivity, last error, and cooldown state inline with the existing status payload — without a second REST round-trip and without leaking internal `_metrics` shape changes.
+**Depends on**: Phase 19
+**Requirements**: HA-STAT-01
+**Success Criteria** (what must be TRUE):
+  1. With at least one WLED device registered, `GET /api/ha/status` returns a `wled_devices` array where each entry contains exactly `{name, connected, last_error, in_cooldown}` (no `packets_sent`/`packets_dropped`/`last_success_at` leakage from `_metrics`)
+  2. With no WLED devices registered, `GET /api/ha/status` returns `wled_devices: []` (empty array, never null) — additive contract amendment, no breaking changes to existing D-09 keys
+  3. A WLED device whose last UDP send raised an OSError shows `connected: false` and `last_error: "<error string>"` within one heartbeat tick; on next successful send, `connected: true` and `last_error: null`
+  4. The status endpoint completes in under 50 ms even with a WLED device that is hard-down (no synchronous probe — the field is sourced from `broadcaster._metrics["wled_devices"]` populated asynchronously by Phase 17)
+**Plans**: TBD
+
+---
+
+### Phase 21: MQTT Auto-Discovery (Read-Only)
+**Goal**: With a reachable MQTT broker and `MQTT_BROKER_HOST` set, Home Assistant automatically discovers HuePictureControl as a device with switch, sensors, selects, and per-WLED binary_sensors — no YAML required, no orphan entities across HPC restarts, and entities go `unavailable` when HPC crashes.
+**Depends on**: Phase 20
+**Requirements**: HA-MQTT-01, HA-MQTT-02, HA-MQTT-04, HA-MQTT-06, HA-MQTT-07, HA-MQTT-08, HA-MQTT-09, HA-MQTT-10
+**Success Criteria** (what must be TRUE):
+  1. With Mosquitto running and `MQTT_BROKER_HOST` set, HA shows HuePictureControl as a single device with the 11 base entities (Streaming switch, State sensor, Bridge paired binary_sensor, FPS, Latency, Active zone, Active camera, Selected zone select, Selected camera select, Last error, and per-WLED binary_sensors) within 30 seconds of HPC startup (HA-MQTT-02, HA-MQTT-04, HA-MQTT-10)
+  2. After restarting HPC, HA shows the same entities — no orphans, no new entity duplicates — because every `unique_id` derives from a persistent `hpc_identity.instance_uuid` SQLite row (HA-MQTT-06)
+  3. After killing HPC unexpectedly (`kill -9`), all HPC entities in HA show `unavailable` within the LWT delivery window because availability topic was published with `retain=True` and a `Will` was registered at client construction (HA-MQTT-07)
+  4. When `MQTT_BROKER_HOST` is unset, no MQTT connection is attempted at startup, no errors are logged, and `/api/health` reports `mqtt: {enabled: false}`; v1.2 behavior is byte-for-byte unchanged (HA-MQTT-01 graceful degrade)
+  5. When the broker is restarted (or HPC's connection drops), HPC reconnects with exponential backoff (1s → 60s cap) and republishes state + discovery; when `homeassistant/status: online` is received (HA birth), discovery republishes immediately (HA-MQTT-08)
+  6. Two HPC instances pointed at the same broker coexist without entity collisions — each has a distinct `instance_uuid` in `<node_id>` topic segment and in `device.identifiers` (HA-MQTT-09)
+**Plans**: TBD
+
+---
+
+### Phase 22: MQTT Command Consumer
+**Goal**: With MQTT enabled, users can flip the HPC `switch.streaming` entity, change the `select.selected_zone`, or change the `select.selected_camera` from Home Assistant and the HPC backend acts on it via the same helpers the HTTP routes use — no duplicate business logic, no auth weakening.
+**Depends on**: Phase 21
+**Requirements**: HA-MQTT-03, HA-MQTT-05
+**Success Criteria** (what must be TRUE):
+  1. Toggling the HA `switch.streaming` entity calls the same internal helper as `POST /api/ha/start` / `POST /api/ha/stop` — both surfaces share one implementation and the existing 26 unit tests for the HTTP routes continue to pass unchanged (HA-MQTT-03)
+  2. Selecting a different option in the HA `select.selected_zone` entity updates `ha_state.active_config_id` (verifiable in SQLite) and the next `POST /api/ha/start` (whether via REST or MQTT switch) uses that zone (HA-MQTT-05)
+  3. Selecting a different option in the HA `select.selected_camera` entity updates `ha_state.active_camera_stable_id` without touching `camera_assignments` (D-07 from Phase 18 CONTEXT.md preserved) (HA-MQTT-05)
+  4. Inbound MQTT commands are enqueued on a bounded asyncio queue so a broker disconnect mid-handler never wedges the FastAPI event loop or hangs `/api/ha/start` HTTP callers
+**Plans**: TBD
+
+---
+
+## Deferred / Unscheduled
+
+### WLED Strip Paint UI (formerly Phase 19)
+**Status**: Deferred — not in v1.3 scope, not yet rescheduled. Will be re-planned when prioritized.
+**Requirements**: WMAP-01, WMAP-02, WMAP-03, WMAP-04, WMAP-05
+**Goal (carry-over)**: Users can visually paint LED channel ranges directly onto a strip representation in the UI, and the resulting channels appear in the light panel for assignment to canvas regions via the same drag-drop workflow used for Hue segments.
+**Notes**: Originally placeholdered as Phase 19 in the v1.3 milestone outline. v1.3 HA Integration Polish (Phases 19-22) reclaimed the Phase 19 number on 2026-05-12. WMAP work moves to "Phase TBD (deferred)" in traceability until re-planned.
 **UI hint**: yes
 
 ---
@@ -210,11 +276,17 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 13. Miracast Receiver Integration | v1.2 | 0/TBD | Not started | - |
 | 14. scrcpy Android Fallback & Wireless UI | v1.2 | 0/TBD | Not started | - |
 | 15. Wireless Docker & Polish | v1.2 | 0/TBD | Not started | - |
-| 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
-| 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
-| 18. Home Assistant Control Endpoints | v1.3 | 3/3 | Complete    | 2026-05-12 |
-| 19. WLED Strip Paint UI | v1.3 | 0/TBD | Not started | - |
+| 16. Zone Persistence Bug Fixes | v1.3 (shipped) | 3/3 | Complete | 2026-04-20 |
+| 17. WLED Backend and Streaming | v1.3 (shipped) | 9/9 | Complete | 2026-04-27 |
+| 18. Home Assistant Control Endpoints | v1.3 (shipped) | 3/3 | Complete | 2026-05-12 |
+| 19. HA YAML Documentation | v1.3 (polish) | 0/TBD | Not started | - |
+| 20. WLED Health Flattening in /api/ha/status | v1.3 (polish) | 0/TBD | Not started | - |
+| 21. MQTT Auto-Discovery (Read-Only) | v1.3 (polish) | 0/TBD | Not started | - |
+| 22. MQTT Command Consumer | v1.3 (polish) | 0/TBD | Not started | - |
+| WLED Strip Paint UI (formerly P19) | Deferred | 0/TBD | Unscheduled | - |
 
 ---
 *Roadmap created: 2026-03-23*
 *v1.1 shipped: 2026-04-14*
+*v1.3 (WLED + HA Control, Phases 16-18) shipped: 2026-05-12*
+*v1.3 Home Assistant Integration Polish (Phases 19-22) planned: 2026-05-12*

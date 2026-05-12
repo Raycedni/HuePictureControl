@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Home Assistant Integration Polish
-status: defining_requirements
-stopped_at: Milestone v1.3 opened — gathering requirements
-last_updated: "2026-05-12T18:00:00.000Z"
+status: roadmap_ready
+stopped_at: Roadmap drafted — Phases 19-22 planned, awaiting plan-phase
+last_updated: "2026-05-12T18:30:00.000Z"
 last_activity: 2026-05-12
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-12)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** v1.3 milestone — Home Assistant Integration Polish (defining requirements)
+**Current focus:** v1.3 Home Assistant Integration Polish — Phases 19-22 planned, ready for `/gsd-plan-phase 19`
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap ready)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-05-12 — Milestone v1.3 (HA Integration Polish) started
+Status: Roadmap ready — next: `/gsd-plan-phase 19` (HA YAML Documentation)
+Last activity: 2026-05-12 — Roadmap drafted for v1.3 Home Assistant Integration Polish
 
 ## Performance Metrics
 
@@ -78,6 +78,11 @@ Recent decisions affecting current work:
 - Phase 18 Plan 02: ha_router imported alphabetically in main.py (between capture and health) to preserve the existing alphabetical convention; app.include_router(ha_router) placed after wled_router per plan spec — preserves both convention and intent
 - Phase 18 Plan 03 closed: 26 unit tests + 1 e2e test cover HASS-01..05 with named D-06/D-07/D-09 enforcement; modernised 4 asyncio.get_event_loop().run_until_complete calls in test_hue_router.py to asyncio.run (Rule 1 deviation — Python 3.12 latent bug exposed by alphabetical test-file collection order)
 - Phase 18 Plan 03: D-09 sealed-contract test relaxed from response-key exact-equality to a subset assertion because response_model_exclude_none=True drops null optional fields; subset check still rejects forbidden internal _metrics keys (packets_sent / seq / wled_devices) and requires the four non-nullable D-09 keys
+- [v1.3 polish roadmap]: Phase build order is risk-ascending per ARCHITECTURE.md — YAML docs (P19) → WLED health flattening (P20) → MQTT discovery read-only (P21) → MQTT command consumer (P22); unblocks broker-less users immediately while concentrating MQTT lifecycle/LWT/birth/retain trifecta into P21
+- [v1.3 polish roadmap]: WebSocket push for HA dropped as anti-feature — HA cannot consume external WS feeds from YAML (verified at HA developer WS API docs); MQTT delivers strictly better semantics (retained state, broker-buffered when HA is down). Reclaim phase budget.
+- [v1.3 polish roadmap]: Single new dependency `aiomqtt>=2.5,<3` (BSD-3-Clause; wraps paho-mqtt). Do NOT pin paho-mqtt separately in requirements.txt — let aiomqtt resolve the transitive
+- [v1.3 polish roadmap]: HA-MQTT-10 (per-WLED binary_sensors) maps to P21 (the MQTT publisher emits the entity); the underlying additive `wled_devices` array on `/api/ha/status` (HA-STAT-01) maps to P20 where it ships first as a REST-only deliverable
+- [v1.3 polish roadmap]: WMAP-01..05 (paint-on-strip UI) reclassified from "Phase 19" to "Phase TBD (deferred)" — formerly placeholdered as P19 in the v1.2/v1.3 outline, now superseded by v1.3 HA Integration Polish phases at 19-22. WMAP work is unscheduled pending re-planning.
 
 ### Pending Todos
 
@@ -90,15 +95,17 @@ None yet.
 - v1.1 archived 2026-04-14: 5 phases, 10 plans, 7 requirements left unchecked (known gaps)
 - Phase 16 closed 2026-04-20: 3 plans, BFIX-01 + BFIX-02 shipped
 - Phase 18 Plan 01 closed 2026-05-11: ha_state DDL + StreamingCoordinator.start device_path_override (8 min, 2 tasks, 2 files modified)
+- Phase 18 closed 2026-05-12: 3 plans, HASS-01..05 shipped
+- v1.3 Home Assistant Integration Polish opened 2026-05-12: 13 new requirements (HA-MQTT-01..10, HA-DOCS-01..02, HA-STAT-01) mapped to 4 new phases (P19-P22) in risk-ascending build order; WMAP-01..05 (formerly P19) reclassified to Phase TBD (deferred / unscheduled)
 
 ### Blockers/Concerns
 
-(None — Phase 16 clean close; ready for Phase 17 kickoff)
+None — roadmap drafted with 100% requirement coverage; ready for `/gsd-plan-phase 19`.
 
 ## Session Continuity
 
-Last session: 2026-05-12T17:37:41.269Z
-Stopped at: Completed 18-03-PLAN.md (Phase 18 closed)
+Last session: 2026-05-12T18:30:00.000Z
+Stopped at: Completed roadmap for v1.3 HA Integration Polish (Phases 19-22)
 Resume file: None
 
-**Planned Phase:** 18 (Home Assistant Control Endpoints) — 3 plans, 1 complete — next: 18-02 (routers/ha.py)
+**Planned Phase:** 19 (HA YAML Documentation) — TBD plans — next: `/gsd-plan-phase 19`
