@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
-status: verifying
+status: milestone_complete
 stopped_at: Completed 18-03-PLAN.md (Phase 18 closed)
 last_updated: "2026-05-12T17:37:41.275Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 10
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 32
   completed_plans: 32
   percent: 100
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 
 ## Current Position
 
-Phase: 18 (Home Assistant Control Endpoints) — EXECUTING
-Plan: 3 of 3 (next)
-Status: Phase complete — ready for verification
+Phase: 18
+Plan: Not started
+Status: Milestone complete
 Last activity: 2026-05-12
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 12 (Phase 16 full)
+- Total plans completed: 15 (Phase 16 full)
 - Average duration: ~30 min / plan
 - Total execution time: ~1.5 hours
 
@@ -44,6 +44,7 @@ Last activity: 2026-05-12
 |-------|-------|-------|----------|
 | 16 | 3 | ~1.5h | ~30 min |
 | 17 | 9 | - | - |
+| 18 | 3 | - | - |
 
 **Recent Trend:**
 
