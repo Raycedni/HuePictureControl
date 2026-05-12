@@ -1,680 +1,961 @@
-# Pitfalls Research
+# Domain Pitfalls — v1.3 Home Assistant Integration Polish
 
-**Domain:** Multi-camera video capture in Docker — adding per-zone camera selection to an existing single-camera ambient lighting system
-**Researched:** 2026-04-03
-**Confidence:** HIGH (findings grounded in existing codebase analysis + verified community sources)
+**Domain:** Adding HA MQTT auto-discovery, MQTT availability/state push, WS-push for `/api/ha/status`, and per-device WLED health to an existing FastAPI + aiosqlite + HA-REST app
+**Researched:** 2026-05-12
+**Confidence:** HIGH (all critical pitfalls verified against official HA docs, paho/aiomqtt source, real GitHub issues, and existing project code)
+**Build-on:** `.planning/phases/18-home-assistant-control-endpoints/18-RESEARCH.md` §Common Pitfalls (Pitfalls 1–6 there are still authoritative for REST-only path; this file extends to MQTT + WS push)
+
+---
+
+## How to read this file
+
+Every pitfall in this file is specific to **adding the four v1.3 features to THIS codebase**, not generic MQTT advice:
+
+- The codebase already has `StatusBroadcaster._metrics["wled_devices"]` populated (Phase 17 D-16) — pitfalls focus on consumption-side problems, not the source.
+- `StreamingCoordinator.start / stop / state` is locked (Phase 17/18 contract) — no pitfall here proposes touching it.
+- HA→HPC direction is locked (no outbound HA tokens) — every pitfall preserves that.
+- The MQTT broker is the only **new** outbound destination — pitfalls explicitly call out new firewall/connection failure modes.
+
+Each pitfall lists:
+1. **What goes wrong** (concrete symptom)
+2. **Why it happens** (root cause anchored in code or HA spec)
+3. **Warning signs** (what the developer sees in logs / HA UI / tests)
+4. **Prevention** (specific code pattern, config flag, or test)
+5. **Phase target** (which v1.3 phase owns the fix)
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Device Path Instability — /dev/videoN Shifts on Every Plug/Reboot
+Mistakes that cause user-visible entity loss, broken HA dashboards, or wedged streaming. Address before merging the relevant phase.
 
-**What goes wrong:**
-The system stores `/dev/video0` as the configured camera for a zone. After the user unplugs and replugs the USB capture card (or reboots), the kernel assigns a different minor number and the device becomes `/dev/video2`. The stored path silently points at nothing, or worse, at the wrong device (another UVC node from the same physical card, e.g. a metadata node that returns no frames).
+### Pitfall MQTT-1: Discovery messages not retained — HA loses every HPC entity on restart
 
-This is already documented in project memory (`feedback_docker_native.md`): "capture card device path shifts on USB re-attach." The multi-camera milestone multiplies this problem — with two or more devices, the shift probability is near 100% and the ordering between them is fully non-deterministic.
+**What goes wrong:** HPC publishes `homeassistant/sensor/hpc_state/config` without `retain=True`. User restarts Home Assistant Core. After HA reboots, the HPC switch / sensors / select entities are gone (or shown as "unavailable") until HPC happens to republish.
 
-**Why it happens:**
-Linux V4L2 assigns `/dev/videoN` sequentially at device-attach time. No ordering is guaranteed. One physical UVC capture card typically creates two nodes (one for video capture, one for device metadata), so two cards produce four nodes with arbitrary numbering. Docker's `devices:` section maps the path at container-start time; if the path changes on the host, the in-container path still resolves to the old inode, which may now be dead or reassigned.
-
-**How to avoid:**
-- Store the camera identity using a stable key: USB vendor ID + product ID + serial number. This is available from `/sys/class/video4linux/videoX/device/` or via `udevadm info`.
-- Create a udev rule on the host that assigns a persistent symlink (e.g. `/dev/capture-hdmi-1`) based on `idVendor` + `idProduct` + `serial`.
-- In `docker-compose.yaml`, mount the symlink path instead of the raw `/dev/videoN` path. Combine with `device_cgroup_rules: ["c 81:* rmw"]` so the rule follows major number 81 (all V4L2 devices) rather than a specific minor.
-- In the enumeration API, return both the stable key and the current resolved path. Save the stable key to the database, resolve to current path at runtime.
+**Why it happens:** HA's MQTT integration only knows about an entity if it received the discovery payload after MQTT subscribed. Without the broker holding a retained copy, a restarted HA sees zero discovery messages for HPC. Official HA docs ([MQTT integration](https://www.home-assistant.io/integrations/mqtt/)) explicitly state: *"A discovery payload can be sent with a retain flag set. In that case, the discovery message will be stored at the MQTT broker and processed automatically when the MQTT integrations start."* Without retention, *"all existing MQTT devices, entities, tags, and device triggers, will be unavailable until a discovery message is received and processed."*
 
 **Warning signs:**
-- User reports "camera shows no image" after unplugging/replugging without changing any config.
-- Enumeration API returns different indices across two calls 30 seconds apart.
-- `/dev/video0` and `/dev/video1` swap identity between Docker restarts.
+- HA → Settings → Devices & Services → MQTT shows "0 devices" after HA restart
+- User reports "my HPC entities disappeared from my dashboard"
+- HA log `Discovery for entity ... unavailable` after a HA Core upgrade
+- `mosquitto_sub -t 'homeassistant/#'` shows no retained config messages on a fresh subscriber
 
-**Phase to address:**
-Device enumeration phase (the first implementation phase). Device identity design must be settled before any persistence of camera selection is built.
+**Prevention:**
+
+1. **Always publish discovery config with `retain=True`** AND **subscribe to `homeassistant/status` to republish on HA reboot.** Belt-and-suspenders. Retention covers MQTT broker survival; birth-message rediscovery covers users who manually clear retained topics or run brokers without persistence.
+
+```python
+# Backend/services/ha_mqtt_publisher.py — recommended pattern
+DISCOVERY_PREFIX = "homeassistant"
+
+async def publish_discovery(client, payload: dict, component: str, object_id: str) -> None:
+    topic = f"{DISCOVERY_PREFIX}/{component}/hpc/{object_id}/config"
+    await client.publish(topic, json.dumps(payload), qos=1, retain=True)  # MUST be retain=True
+
+async def on_ha_birth(client, message) -> None:
+    """Subscribe to homeassistant/status; on 'online' payload, republish all discovery messages."""
+    if message.topic == "homeassistant/status" and message.payload.decode() == "online":
+        logger.info("HA birth detected — republishing discovery")
+        await republish_all_discovery(client)
+```
+
+2. **Cleanup on un-register:** publishing an empty retained payload to the same config topic removes the entity from HA. Reference: [HA MQTT docs](https://www.home-assistant.io/integrations/mqtt/) — *"To remove a previously discovered device, send a message with an empty payload to the discovery topic."*
+
+```python
+await client.publish(topic, payload=b"", qos=1, retain=True)  # tombstone
+```
+
+3. **Test:** integration test that publishes discovery → disconnects publisher → starts a fresh subscriber → asserts the retained config arrives. Pseudocode:
+
+```python
+async def test_discovery_survives_publisher_disconnect(broker_url):
+    async with Client(broker_url) as pub:
+        await pub.publish("homeassistant/sensor/hpc/state/config", payload=b'{"unique_id":"hpc_state"}', retain=True)
+    # publisher gone
+    async with Client(broker_url) as sub:
+        await sub.subscribe("homeassistant/sensor/hpc/state/config")
+        async with sub.messages() as messages:
+            msg = await asyncio.wait_for(anext(messages), timeout=2)
+            assert json.loads(msg.payload)["unique_id"] == "hpc_state"
+```
+
+**Anti-pattern:**
+
+```python
+# BAD — entities vanish on HA restart
+await client.publish(topic, json.dumps(payload))  # default retain=False, no birth listener
+```
+
+**Phase target:** MQTT publisher phase (the phase that introduces `ha_mqtt_publisher.py`).
+
+**Sources:**
+- [HA MQTT integration docs](https://www.home-assistant.io/integrations/mqtt/) — retain-or-birth requirement, HIGH confidence
+- [Community: MQTT Discovery: to retain or not?](https://community.home-assistant.io/t/mqtt-discovery-to-retain-or-not/310734) — real users describing the bug, MEDIUM confidence
+- [Issue #920 docker-wyze-bridge — MQTT discovery should be re-sent on HA birth](https://github.com/mrlt8/docker-wyze-bridge/issues/920) — concrete bug from a peer project, HIGH confidence
 
 ---
 
-### Pitfall 2: Multiple /dev/videoN Nodes Per Physical Device — Metadata Node Confusion
+### Pitfall MQTT-2: Unstable `unique_id` produces orphan entities, broken automations
 
-**What goes wrong:**
-The device enumeration routine scans indices 0–9 and reports every found `/dev/videoN` as a valid camera option. The user sees four entries in the dropdown for two physical capture cards. Two of those entries are metadata-capture nodes: opening them succeeds (V4L2 returns no error on open), but `VIDIOC_QUERYCAP` reveals they have `VIDEO_CAPTURE` capability absent. Trying to capture from them either hangs or returns corrupt frames.
+**What goes wrong:** HPC restarts → generates a new `unique_id` per sensor (e.g., `uuid4()` regenerated at startup). HA sees two entities for the same sensor: the old one (now "unavailable" since the old discovery topic is no longer retained or republished) and the new one. User's automations referencing `sensor.hpc_state` break because the new entity gets ID `sensor.hpc_state_2`.
 
-The existing `V4L2Capture._setup_device()` already checks `device_caps & 0x01` (VIDEO_CAPTURE flag), but the enumeration layer runs before any capture object is created, so without explicit capability probing the UI will show phantom devices.
-
-**Why it happens:**
-Modern UVC capture cards and webcams register one node for video streaming and one for metadata (UVC XU controls, per-frame metadata). Both appear as `/dev/videoX`. The V4L2 architecture explicitly supports multiple nodes per physical device for this reason. The kernel's `VIDIOC_QUERYCAP` `device_caps` field distinguishes them, but only if you ask.
-
-**How to avoid:**
-- In the enumeration endpoint, open each candidate device path, issue `VIDIOC_QUERYCAP`, and check `device_caps & V4L2_CAP_VIDEO_CAPTURE (0x1)`. Discard nodes that lack this flag before returning them to the frontend.
-- Additionally check `device_caps & V4L2_CAP_STREAMING (0x4000000)` — non-streaming nodes cannot be used with the mmap capture path.
-- Use `v4l2-ctl --list-devices` output structure as a reference: it groups sibling nodes under the same physical device name. Reproduce this grouping in the API so the dropdown shows "HDMI Capture Card" with sub-options rather than four raw device paths.
-- Alternatively, read `/sys/class/video4linux/videoX/name` and group by device name to collapse siblings.
+**Why it happens:** HA uses `unique_id` (from the discovery payload) as the **permanent** registry key for the entity. The entity_id (`sensor.hpc_state`) is a presentation layer derived once on first discovery. If `unique_id` changes, HA treats it as a brand-new entity. Per [HA MQTT Sensor docs](https://www.home-assistant.io/integrations/sensor.mqtt/): *"To prevent multiple identical entries if a device reconnects, a unique identifier is necessary. If two sensors have the same unique ID, Home Assistant will raise an exception."*
 
 **Warning signs:**
-- Dropdown shows an even number of devices where you expect an odd number of physical cameras.
-- Opening a device in enumeration probe succeeds but `get_frame()` immediately raises "No frame available."
-- `VIDIOC_DQBUF` hangs indefinitely after successful `VIDIOC_STREAMON`.
+- After backend restart, HA shows `sensor.hpc_state_2` alongside the original `sensor.hpc_state` (now unavailable)
+- User reports "my dashboard tile shows 'unavailable' but I see a duplicate sensor"
+- HA log `Platform mqtt does not generate unique IDs. ID ... already exists` (when ID accidentally **doesn't** change)
+- `homeassistant/sensor/<old_id>/config` is still retained but `/<new_id>/config` was just published
 
-**Phase to address:**
-Device enumeration phase. The capability check must be part of the enumeration implementation, not a later hardening step.
+**Prevention:**
+
+Build `unique_id` from **persistent, deterministic** inputs. For HPC there are good seeds:
+
+1. **HPC instance ID** — generate **once**, persist in a new single-row table (or reuse a hash of the SQLite DB file path). Never regenerate.
+
+   ```python
+   # database.py — append to existing CREATE TABLE blocks
+   await db.execute("""
+       CREATE TABLE IF NOT EXISTS hpc_identity (
+           id INTEGER PRIMARY KEY CHECK (id = 1),
+           instance_uuid TEXT NOT NULL,
+           created_at TEXT NOT NULL
+       )
+   """)
+   # On first lifespan startup only, insert uuid4() if row is missing.
+   ```
+
+2. **Object-level unique_id = `f"{instance_uuid}_{object}"`**
+
+   ```python
+   # GOOD — stable across restarts
+   payload = {
+       "unique_id": f"{instance_uuid}_state",        # e.g. "hpc-7f3e_state"
+       "object_id": "hpc_state",                     # display-side hint (see Pitfall MQTT-9 — moves to default_entity_id)
+       "name": "Streaming State",
+       ...
+   }
+   ```
+
+3. **For per-WLED-device sensors, derive from the WLED device's persisted UUID** (Phase 17 D-07 — `wled_devices.id TEXT PRIMARY KEY`). That ID is already stable across HPC restarts.
+
+   ```python
+   unique_id = f"{instance_uuid}_wled_{wled_device.id}_health"
+   ```
+
+4. **Test:** restart the app inside a test, capture the second `unique_id` for every sensor, assert equality with the first.
+
+```python
+async def test_unique_id_stable_across_restart(tmp_path):
+    db_path = tmp_path / "hpc.sqlite"
+    async with lifespan_app(db_path) as app1:
+        ids_1 = collect_published_unique_ids(app1)
+    async with lifespan_app(db_path) as app2:  # same DB → same instance UUID
+        ids_2 = collect_published_unique_ids(app2)
+    assert ids_1 == ids_2
+```
+
+**Anti-pattern:**
+
+```python
+# BAD — new UUID every startup
+payload = {"unique_id": str(uuid.uuid4()), ...}
+
+# ALSO BAD — hostname can change (DHCP, mDNS rename, Docker rename)
+payload = {"unique_id": f"{socket.gethostname()}_state", ...}
+
+# ALSO BAD — IP address as ID
+payload = {"unique_id": f"hpc_{get_local_ip()}_state", ...}
+```
+
+**Phase target:** MQTT publisher phase (same phase as MQTT-1; the `hpc_identity` table is a new piece of DB schema).
+
+**Sources:**
+- [HA MQTT Sensor docs — unique_id semantics](https://www.home-assistant.io/integrations/sensor.mqtt/) — HIGH confidence
+- [Issue #97450 home-assistant/core — duplicate entity IDs from MQTT discovery](https://github.com/home-assistant/core/issues/97450) — real bug confirming the symptom, HIGH confidence
+- [Community: How to clear duplicate MQTT entities](https://homeassistant.jongriffith.com/Tutorials/Trouble-Shooting/How-To-Clear-Duplicate-MQTT-Entities-In-Home-Assistant/) — recovery procedure, MEDIUM confidence
 
 ---
 
-### Pitfall 3: Blocking V4L2/OpenCV Open Calls Stall the asyncio Event Loop
+### Pitfall MQTT-3: No availability topic with LWT — HA shows stale data when HPC crashes
 
-**What goes wrong:**
-`V4L2Capture.open()` and `DirectShowCapture.open()` are synchronous blocking calls. Opening a V4L2 device includes device setup ioctls, buffer allocation, and `VIDIOC_STREAMON` — this takes 200–1500ms. When the user switches a zone's camera from the UI, the API handler calls `capture.open()` directly, stalling the FastAPI event loop for up to 1.5 seconds and blocking all concurrent WebSocket frames and API requests.
+**What goes wrong:** HPC backend crashes or its native systemd unit stops. HA dashboard continues to show the last `state_topic` value (e.g., "streaming" with last fps=60) **forever** because nothing told HA the source is dead. User assumes streaming is active when it's actually offline. Worse: HA automations triggered by `state == 'streaming'` keep firing.
 
-**Why it happens:**
-The existing `StreamingService._capture_reconnect_loop()` already wraps `self._capture.open` with `asyncio.to_thread()` — this was an explicit design decision. However, adding a second capture instance or switching an active capture mid-stream may bypass this discipline if new code paths call `open()` synchronously.
+**Why it happens:** MQTT is a retained-message protocol. The last published state stays on the broker. HA needs an explicit availability signal — either:
+- **Last Will and Testament (LWT)** set at MQTT `CONNECT` time, published by the broker when the publisher disconnects ungracefully, OR
+- **Birth message** (`online`) on connect, paired with a matching **LWT** (`offline`)
 
-**How to avoid:**
-- All calls to `CaptureBackend.open()`, `release()`, and any new `enumerate_devices()` that probes hardware must go through `asyncio.to_thread()`.
-- Enumerate via `VIDIOC_QUERYCAP` (lightweight, 1–5ms per device) rather than full open-configure-stream cycles (200–1500ms).
-- For the `PUT /api/capture/device` endpoint that switches cameras, the current implementation at `capture.py:99` calls `capture_service.open(body.device_path)` directly — this must be converted to `await asyncio.to_thread(capture_service.open, body.device_path)`.
+Per [Zigbee2MQTT availability docs](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html) and [HA MQTT docs](https://www.home-assistant.io/integrations/mqtt/): HA supports an `availability` list per entity with `availability_mode: all|any|latest`.
 
 **Warning signs:**
-- UI freezes for 1–2 seconds after selecting a different camera in the zone dropdown.
-- WebSocket status frames stop arriving during camera switch.
-- FastAPI access log shows a request taking >500ms for what should be a fast response.
+- User reports "my HA card says HPC is streaming but the backend has been off for 3 hours"
+- HA card never shows the "unavailable" pill even when `curl http://hpc-host:8000/api/health` fails
+- LWT message never appears at `mosquitto_sub -t 'hpc/availability'` because the publisher never registered one
+- After HPC `kill -9`, HA entity stays `state: streaming` indefinitely
 
-**Phase to address:**
-Camera-switch API implementation phase. Review every new code path that touches `CaptureBackend.open()`.
+**Prevention:**
+
+1. **Set LWT at connect time** using paho's `will_set` / aiomqtt's `will=` parameter. The LWT publishes to a HPC-specific availability topic with `offline` payload, **retained**.
+
+```python
+# Backend/services/ha_mqtt_publisher.py — aiomqtt example
+import aiomqtt
+
+AVAILABILITY_TOPIC = "hpc/availability"  # NOT under homeassistant/ — separate namespace
+
+async def run_publisher():
+    will = aiomqtt.Will(
+        topic=AVAILABILITY_TOPIC,
+        payload=b"offline",
+        qos=1,
+        retain=True,
+    )
+    async with aiomqtt.Client("mqtt.local", will=will) as client:
+        # Birth message — publish online IMMEDIATELY after connect
+        await client.publish(AVAILABILITY_TOPIC, b"online", qos=1, retain=True)
+        # ... rest of publisher
+```
+
+2. **Every discovery payload includes `availability`**:
+
+```python
+discovery_payload = {
+    "unique_id": f"{instance_uuid}_state",
+    "name": "Streaming State",
+    "state_topic": "hpc/state",
+    "availability": [
+        {"topic": "hpc/availability", "payload_available": "online", "payload_not_available": "offline"}
+    ],
+    "device": {...},
+}
+```
+
+3. **Graceful shutdown publishes `offline` explicitly** before disconnecting (so HA gets the update without waiting for broker LWT timeout, which is typically `keepalive * 1.5`).
+
+```python
+# In FastAPI lifespan shutdown:
+await client.publish(AVAILABILITY_TOPIC, b"offline", qos=1, retain=True)
+await client.disconnect()  # only AFTER the offline publish has flushed
+```
+
+4. **Multi-source availability:** if HPC is online but its capture loop is degraded, expose a second availability source. Match the Zigbee2MQTT pattern with `availability_mode: all`:
+
+```python
+"availability": [
+    {"topic": "hpc/availability", "payload_available": "online", "payload_not_available": "offline"},
+    {"topic": "hpc/streaming/health", "payload_available": "ok", "payload_not_available": "degraded"},
+],
+"availability_mode": "all",  # both must be "online" for entity to be available
+```
+
+**Anti-pattern:**
+
+```python
+# BAD — no LWT, no availability_topic, no birth message
+async with aiomqtt.Client("mqtt.local") as client:
+    await client.publish("hpc/state", "streaming", retain=True)  # set and forget — HA never knows when HPC dies
+```
+
+**Phase target:** MQTT publisher phase. LWT must be in the **same** phase that introduces the MQTT publisher class — it cannot be added later without re-publishing all retained configs.
+
+**Sources:**
+- [HA MQTT docs — availability](https://www.home-assistant.io/integrations/mqtt/) — HIGH confidence
+- [Zigbee2MQTT availability docs](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html) — proven LWT pattern, HIGH confidence
+- [paho-mqtt client docs — will_set](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html) — API reference, HIGH confidence
 
 ---
 
-### Pitfall 4: Shared Single CaptureBackend — Two Zones, One Camera Object, Race Conditions
+### Pitfall MQTT-4: MQTT broker disconnect wedges the FastAPI lifespan / blocks `/api/ha/start`
 
-**What goes wrong:**
-Currently `app.state.capture` is a single `CaptureBackend` instance shared by the streaming service, preview WebSocket, and snapshot endpoint. When multi-camera support allows two different zones to select two different devices, the temptation is to manage this with one capture object and call `open(new_path)` when zone B's camera differs from zone A's. This creates a race: zone A's reader thread is writing `_latest_frame` while zone B forces a `release()`, leaving zone A's frame loop calling `get_frame()` on a released device and crashing.
+**What goes wrong:** The MQTT broker is on a separate host. Network blip → broker becomes unreachable. The MQTT publisher's `publish()` call blocks (paho-mqtt 1.x default) or queues unbounded (paho-mqtt 2.x), and the next `POST /api/ha/start` hangs because the HA endpoint awaits the publisher's state update. Worse: if MQTT loop is integrated naively into the FastAPI event loop, the entire app stops processing requests.
 
-**Why it happens:**
-The single-capture architecture is a clean design for single-camera. Extending it by switching the device path in-place rather than maintaining per-device instances is the "least code" approach but violates the one-writer-per-object contract assumed by `_frame_lock`.
+**Why it happens:** paho-mqtt's synchronous `loop_*` calls block. The community [aiomqtt v3](https://pypi.org/project/aiomqtt/) is pure asyncio (no threads, uses `mqtt5` sans-io under the hood) and is the recommended choice for new asyncio code. Even with aiomqtt, `client.publish()` returns immediately but the underlying network write may stall; reconnects must be explicit. Per paho [issue #331](https://github.com/eclipse-paho/paho.mqtt.python/issues/331), reconnect can take >40 seconds with default settings.
 
-**How to avoid:**
-- Move from one shared `CaptureBackend` to a `CaptureRegistry` — a dict mapping device path to `CaptureBackend` instance.
-- Open a new instance when a zone selects a device not already in the registry; reuse (reference-count) existing instances when multiple zones share a camera.
-- Release an instance only when its reference count drops to zero.
-- The registry itself must be concurrency-safe: protect mutations with `asyncio.Lock`, not threading locks, since callers are async.
-- `StreamingService` becomes a consumer of the registry, not the owner of a capture object.
+This codebase already uses `asyncio.to_thread` for blocking syscalls (capture ioctls per `capture_v4l2.py`). The same isolation discipline is mandatory for MQTT.
 
 **Warning signs:**
-- Intermittent `RuntimeError("Capture device is not open")` in the frame loop during zone switching.
-- `_reader_error` event fires immediately after switching a zone.
-- Two zones both configured to `/dev/video0` but one silently gets no frames.
+- `POST /api/ha/start` hangs >5 seconds when MQTT broker is unreachable
+- `curl http://localhost:8000/api/health` times out during broker outage
+- Backend log shows MQTT reconnect attempts piling up (`Connection refused: 111`) but no other endpoints respond
+- Test `test_ha_start_works_when_mqtt_broker_down` fails
 
-**Phase to address:**
-Architecture / capture registry design phase — must be settled before any multi-camera frame loop code is written.
+**Prevention:**
+
+1. **MQTT publisher MUST be a sibling background task, never inline in request handlers.** No `await client.publish(...)` inside `routers/ha.py` — those handlers must remain MQTT-agnostic. Mirror the `StatusBroadcaster` pattern:
+
+```python
+# Backend/services/ha_mqtt_publisher.py
+class HaMqttPublisher:
+    """Background MQTT publisher. Resilient to broker disconnect.
+
+    NEVER blocks request handlers. State and discovery publishes are
+    fire-and-forget into an asyncio.Queue; a single background task drains
+    the queue and survives broker reconnects with exponential backoff.
+    """
+    def __init__(self, broker_url: str, broadcaster: StatusBroadcaster):
+        self._queue: asyncio.Queue[tuple[str, bytes, bool]] = asyncio.Queue(maxsize=1024)
+        self._task: asyncio.Task | None = None
+        self._broker_url = broker_url
+        self._broadcaster = broadcaster
+
+    def publish_nowait(self, topic: str, payload: bytes, retain: bool = False) -> None:
+        """Called from anywhere — including request handlers. Non-blocking."""
+        try:
+            self._queue.put_nowait((topic, payload, retain))
+        except asyncio.QueueFull:
+            logger.warning("MQTT queue full — dropping publish to %s", topic)
+
+    async def _run(self) -> None:
+        backoff = 1.0
+        while True:
+            try:
+                async with aiomqtt.Client(self._broker_url, will=LWT) as client:
+                    await client.publish(AVAILABILITY_TOPIC, b"online", retain=True)
+                    await self._publish_all_discovery(client)
+                    await client.subscribe("homeassistant/status")
+                    backoff = 1.0  # reset on successful connect
+                    await self._drain_loop(client)
+            except aiomqtt.MqttError as exc:
+                logger.warning("MQTT disconnect: %s — reconnecting in %.1fs", exc, backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)  # exponential, capped at 60s
+```
+
+2. **Bounded queue** (e.g., 1024 entries). Per [paho-mqtt docs](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html), *"A client will never discard its own outgoing messages on disconnect"* — unbounded growth during a multi-hour broker outage can OOM the backend. Drop oldest / log on full queue.
+
+3. **Exponential backoff with cap.** 1s → 2s → 4s → 8s → … → 60s. Reset on successful reconnect. Anchored to the same pattern the Hue bridge reconnect uses today.
+
+4. **Health-check exposure:** `GET /api/health` should include `mqtt_connected: bool` if MQTT is configured. Failures must NOT 500 the endpoint — same graceful-degradation pattern as Phase 18 Pitfall 4 (bridge errors).
+
+5. **Lifespan teardown:**
+
+```python
+# main.py lifespan — startup
+publisher = HaMqttPublisher(broker_url, broadcaster)
+publisher._task = asyncio.create_task(publisher._run())
+app.state.mqtt_publisher = publisher
+
+yield
+
+# shutdown — explicit offline + cancel
+publisher.publish_nowait(AVAILABILITY_TOPIC, b"offline", retain=True)
+await asyncio.sleep(0.1)  # give the drain loop one tick
+publisher._task.cancel()
+with suppress(asyncio.CancelledError):
+    await publisher._task
+```
+
+**Anti-pattern:**
+
+```python
+# BAD — request handler awaits MQTT directly
+@router.post("/start")
+async def ha_start(request: Request):
+    await coordinator.start(...)
+    await request.app.state.mqtt.publish("hpc/state", "streaming")  # blocks if broker down
+    return ...
+
+# ALSO BAD — paho's blocking loop_forever() inside asyncio
+import paho.mqtt.client as mqtt
+client = mqtt.Client()
+client.loop_forever()  # blocks the entire event loop
+```
+
+**Phase target:** MQTT publisher phase.
+
+**Sources:**
+- [aiomqtt PyPI / GitHub](https://pypi.org/project/aiomqtt/) — recommended asyncio-first client, HIGH confidence
+- [paho-mqtt Issue #331 — reconnect takes >40s](https://github.com/eclipse-paho/paho.mqtt.python/issues/331) — verifies the symptom, HIGH confidence
+- [paho-mqtt Issue #276 — fails to reconnect when heavily publishing QoS 2](https://github.com/eclipse-paho/paho.mqtt.python/issues/276) — known wedge mode, HIGH confidence
+- [EMQX 2025 Python MQTT client comparison](https://www.emqx.com/en/blog/comparision-of-python-mqtt-client) — aiomqtt as the 2025 production choice, MEDIUM confidence
 
 ---
 
-### Pitfall 5: Docker compose.yaml Device List Must Be Updated Manually for Each New Camera
+### Pitfall MQTT-5: Topic-namespace collisions when user runs two HPC instances on one broker
 
-**What goes wrong:**
-The current `docker-compose.yaml` has the `devices:` section commented out (due to WSL2 limitations) with only `/dev/video0` mentioned in comments. When running on a native Linux host with two capture cards, both device paths must appear in the `devices:` section. Forgetting to add `/dev/video1` means the backend container cannot open the second camera, but the enumeration API (which reads `/dev/`) may still list it — causing a misleading "device found but cannot open" error.
+**What goes wrong:** User has two HPC instances (e.g., living room + bedroom). Both publish `homeassistant/sensor/hpc_state/config` to the same broker. The second one overwrites the first's retained config. HA shows only one entity that flip-flops between the two backends. Confusion ensues.
 
-**Why it happens:**
-Docker device passthrough is declared statically at compose file creation time. Dynamic hotplug is only possible via `device_cgroup_rules` + mounting `/dev` as a volume (which has its own security and permission surface). Developers test with one camera and forget the compose file when adding a second.
-
-**How to avoid:**
-- Switch from static `devices:` entries to `device_cgroup_rules: ["c 81:* rmw"]` + mounting `/dev/v4l` (or `/dev/video*` via a tmpfs bind). This grants access to all major-81 devices without listing them individually.
-- Alternatively, document a setup script that auto-generates the `devices:` list by scanning `/dev/video*` on the host before starting the stack.
-- The enumeration endpoint should propagate the actual `open()` failure as a device status ("found but not accessible") rather than silently omitting it or treating it identically to a working device.
+**Why it happens:** MQTT topics are flat strings; the broker doesn't know which client published what. If two HPC instances share an `object_id` slot (`hpc`), the last writer wins. The Phase 18 endpoints use `/api/ha/` for the HTTP namespace, but MQTT topics are a different namespace that needs equal care.
 
 **Warning signs:**
-- `v4l2-ctl --list-devices` inside the container shows fewer devices than on the host.
-- `open("/dev/video1", O_RDWR)` returns `ENOENT` inside the container despite the host having the device.
-- Adding a second camera works natively but fails inside Docker without explanation.
+- User reports "I added a second HPC and now my dashboard alternates between them"
+- `mosquitto_sub -t 'homeassistant/sensor/+/config'` shows the same `unique_id` published from two distinct `device.identifiers`
+- HA → MQTT integration → "Devices" tab shows only one device when there should be two
 
-**Phase to address:**
-Docker/infrastructure phase — update `docker-compose.yaml` before any multi-camera testing.
+**Prevention:**
+
+1. **Always include the persistent `instance_uuid` in the MQTT object_id segment** (the `<object_id>` in `<discovery_prefix>/<component>/[<node_id>/]<object_id>/config`):
+
+```python
+# GOOD — instance-scoped
+def discovery_topic(component: str, object_id: str) -> str:
+    return f"homeassistant/{component}/hpc-{INSTANCE_UUID_SHORT}/{object_id}/config"
+
+# Result: homeassistant/sensor/hpc-7f3e/state/config
+```
+
+2. **`device.identifiers` must include the same instance UUID** so HA's device registry treats them as separate devices:
+
+```python
+"device": {
+    "identifiers": [f"hpc-{INSTANCE_UUID}"],  # unique per HPC instance
+    "name": INSTANCE_DISPLAY_NAME,            # user-editable, e.g. "HPC Living Room"
+    "manufacturer": "HuePictureControl",
+    "model": "v1.3",
+    "sw_version": APP_VERSION,
+},
+```
+
+3. **`device.name` should be user-configurable** via a new env var or settings field (e.g., `HPC_INSTANCE_NAME=Living Room`). Without this, two instances show as "HuePictureControl" / "HuePictureControl" — visually identical.
+
+4. **Test:** spin up two `HaMqttPublisher` instances with different `INSTANCE_UUID` against an embedded broker; assert four retained configs, two distinct `device.identifiers`.
+
+**Anti-pattern:**
+
+```python
+# BAD — hard-coded object_id collides between instances
+topic = "homeassistant/sensor/hpc/state/config"
+
+# ALSO BAD — IP-based device.identifier (changes with DHCP)
+"device": {"identifiers": [f"hpc-{local_ip}"]}
+```
+
+**Phase target:** MQTT publisher phase. The `INSTANCE_UUID` is the same persistent value introduced for Pitfall MQTT-2.
+
+**Sources:**
+- [HA MQTT discovery topic format docs](https://www.home-assistant.io/integrations/mqtt/) — `<discovery_prefix>/<component>/[<node_id>/]<object_id>/config`, HIGH confidence
+- [HA MQTT Sensor — device registry block](https://www.home-assistant.io/integrations/sensor.mqtt/) — HIGH confidence
 
 ---
 
-### Pitfall 6: Zone Camera Selection Persisted as /dev Path — Breaks After Re-attach
+### Pitfall MQTT-6: Using deprecated `object_id` field (will break in HA Core 2026.4)
 
-**What goes wrong:**
-The zone configuration database stores `camera_device = "/dev/video0"` for zone A. After the user unplugs the HDMI capture card and replugs it, the device reappears as `/dev/video2`. The streaming service opens `/dev/video0` — which now belongs to the built-in webcam — and zone A lights synchronize to the laptop camera instead of the HDMI source. No error is raised because the device opened successfully.
+**What goes wrong:** HPC publishes discovery payloads using `"object_id"` to set the default entity ID. HA 2025.10+ logs deprecation warnings. HA 2026.4 (April 2026 — **within this milestone's likely production lifespan**) removes the field entirely. After a HA upgrade, all HPC entities lose their custom entity IDs and revert to auto-generated names.
 
-This is a silent correctness failure, harder to detect than an outright crash.
-
-**Why it happens:**
-Storing a kernel-assigned path is only safe for a single session. The assumption is that path = identity, but V4L2 provides no such guarantee across attach/detach cycles.
-
-**How to avoid:**
-- Store camera identity as `(idVendor, idProduct, serial)` in the database. Resolve to current `/dev/videoN` at startup or when streaming starts.
-- If no device matching the stored identity is found, surface a clear error ("Camera for zone A not found — was it disconnected?") rather than silently falling back to `/dev/video0`.
-- Provide a "re-scan and reassign" UI action so the user can remap zones without losing other configuration.
+**Why it happens:** HA introduced `default_entity_id` to replace `object_id` (which had overloaded semantics — sometimes a topic component, sometimes an entity-ID default). The deprecation warning appears in HA Core 2025.10.0b0; complete removal targets 2026.4. Zigbee2MQTT, EMS-ESP, and other major MQTT projects have migrated.
 
 **Warning signs:**
-- Zone lights react to wrong content (laptop camera instead of HDMI source).
-- Log shows capture opened successfully but colors are obviously wrong.
-- Changing a zone's camera selection in the UI fixes the problem temporarily, until the next replug.
+- HA log shows `The configuration for entity hpc_state uses the deprecated option 'object_id' to set the default entity id`
+- After upgrading HA to 2026.4+, entity IDs change from `sensor.hpc_state` to `sensor.<unique_id>` (typically a UUID-looking blob)
+- User automations referencing the old entity ID break
 
-**Phase to address:**
-Database schema design for camera identity (must precede the UI implementation for zone-camera assignment).
+**Prevention:**
 
----
+Use `default_entity_id` with the **fully qualified** entity ID (including the entity type prefix):
 
-## Technical Debt Patterns
+```python
+# GOOD — works in 2025.10+ and 2026.4+
+discovery_payload = {
+    "unique_id": f"{INSTANCE_UUID}_state",
+    "default_entity_id": "sensor.hpc_state",  # full prefix required
+    "name": "Streaming State",
+    "state_topic": "hpc/state",
+    ...
+}
+```
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Store `/dev/videoN` path directly in DB | Zero schema change | Silent wrong-camera failures after re-attach | Never — affects correctness silently |
-| One global `CaptureBackend`, switch device in-place | Minimal refactor | Race conditions when two zones switch cameras concurrently | Never — crashes under concurrent use |
-| Skip `VIDIOC_QUERYCAP` check in enumeration | Faster enumeration code | Metadata nodes appear as valid cameras in UI | Never — confuses users immediately |
-| Static `devices:` list in compose | Simple compose file | Must manually update for every new capture card | Acceptable for single-camera permanent setups only |
-| Probe cameras by iterating indices 0–9 with `cv2.VideoCapture` | Simple Python code | Blocks event loop 200ms per probe × 10 = 2s; opens/closes devices wastefully | Acceptable only in a one-shot CLI tool, not in an API |
-| Call `capture.open()` synchronously in API handler | Less wrapper code | Stalls FastAPI event loop during camera switch | Never — existing code already wraps this correctly |
+**Anti-pattern:**
 
----
+```python
+# BAD — will be removed in HA 2026.4
+discovery_payload = {
+    "unique_id": f"{INSTANCE_UUID}_state",
+    "object_id": "hpc_state",  # deprecated; warning since 2025.10
+    ...
+}
+```
 
-## Integration Gotchas
+**Important nuance:** the `object_id` *URL segment* in the **discovery topic** (`homeassistant/sensor/<node>/<object_id>/config`) is NOT deprecated — only the `object_id` *field* inside the discovery payload. Pitfall MQTT-5's topic-namespacing recommendation still uses the URL segment correctly.
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| V4L2 device enumeration | Treat every `/dev/videoN` as a streamable camera | Check `device_caps & 0x1` (VIDEO_CAPTURE) via `VIDIOC_QUERYCAP` before listing |
-| Docker device passthrough | Add only `/dev/video0` to compose `devices:` | Use `device_cgroup_rules: ["c 81:* rmw"]` for dynamic multi-device access |
-| USB device identity | Store kernel path (`/dev/videoN`) as device key | Store `(idVendor, idProduct, serial)` from sysfs; resolve path at runtime |
-| udev symlinks inside Docker | Expect host udev symlinks to appear inside container | udev rules create symlinks on host only; must explicitly mount them or use cgroup rules |
-| Multiple `CaptureBackend` instances | Open two instances on same `/dev/videoN` path | V4L2 allows only one exclusive open per node; second open returns `EBUSY` |
-| Preview WebSocket with multi-camera | One WebSocket serves frames from a single global capture | Per-zone preview requires routing the WebSocket to the correct `CaptureBackend` instance |
+**Phase target:** MQTT publisher phase. Catch this before merge — easy to miss because HA pre-2025.10 silently accepted it.
 
----
-
-## Performance Traps
-
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Probing all camera indices on every `/api/cameras` request | API call takes 2–5 seconds; event loop stalls | Cache enumeration results; invalidate on explicit re-scan only | On first call with ≥3 cameras |
-| Opening a V4L2 device synchronously in the API path | HTTP 200 response delayed by 500ms–1.5s | Wrap all `open()` calls in `asyncio.to_thread()` | Every camera-switch request |
-| One reader thread per camera at 640×480 MJPEG | Two cameras = 2 × 30 fps × ~50KB/frame = ~3 MB/s decode load | Use hardware MJPEG decode path; don't re-encode to JPEG after decode | At 4K resolution or ≥4 cameras |
-| Frame sharing between two zones on the same camera | Two `asyncio.to_thread(get_frame)` calls per loop iteration | Use the `CaptureRegistry` reference-count design; one reader thread per device, multiple consumers | Immediately — doubles reader thread overhead if not shared |
-| Streaming loop holds a reference to a released capture object | `RuntimeError` on next `get_frame()` mid-stream | `CaptureRegistry` lifecycle must outlive `StreamingService` | On any camera switch during active streaming |
+**Sources:**
+- [Issue #157763 home-assistant/core — `object_id` deprecation](https://github.com/home-assistant/core/issues/157763) — HIGH confidence
+- [Issue #28728 zigbee2mqtt — 2025.10.0b0 deprecation warnings](https://github.com/Koenkk/zigbee2mqtt/issues/28728) — HIGH confidence
+- [Community: MQTT object_id vs default_entity_id warning](https://community.home-assistant.io/t/mqtt-object-id-vs-default-entity-id-warning/937665) — migration guide, HIGH confidence
 
 ---
 
-## UX Pitfalls
+### Pitfall WS-1: WS subscriber leaks / race when multiple HA clients connect to one broadcaster
 
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Show raw `/dev/video0`, `/dev/video1`, `/dev/video2`, `/dev/video3` in dropdown | User cannot identify which entry is their HDMI capture card | Show device name from `VIDIOC_QUERYCAP` (e.g. "USB Video: UVC Camera") + device path as secondary label |
-| Include metadata nodes in camera list | User selects a camera that produces no frames, confused | Filter to VIDEO_CAPTURE-capable nodes only (see Pitfall 2) |
-| No feedback when selected camera is not accessible in Docker | User selects camera, nothing happens, no error shown | Surface a clear "device not accessible — check Docker compose" error message |
-| Camera selection lost after replug | User must reconfigure zones after every cable re-attach | Persist camera by stable identity; resolve at runtime; auto-reattach if device returns |
-| Zone preview shows wrong camera after switch | User thinks lighting will follow wrong source | Preview WebSocket must immediately reflect the zone's newly selected camera, not the global capture |
+**What goes wrong:** Multiple HA dashboards (or a HA Core + a NodeRED instance) open WS connections to `/ws/ha-status`. One client's network drops silently (mobile dashboard backgrounded). The broadcaster's `_send_to_all` loop hits a slow/dead socket and either (a) blocks all other subscribers behind the dead one, or (b) raises an exception that takes down the heartbeat task, freezing every dashboard.
+
+**Why it happens:** Per the existing `StatusBroadcaster._send_to_all` ([Backend/services/status_broadcaster.py:101](Backend/services/status_broadcaster.py)), the loop iterates connections **sequentially**:
+
+```python
+for ws in list(self._connections):
+    try:
+        await ws.send_text(payload)
+    except Exception:
+        dead.append(ws)
+```
+
+This is safe for the current usage (web UI clients on LAN, low count), but the **new HA WS push** endpoint may receive subscribers from HA's REST→WS adapter or NodeRED's MQTT-via-WS proxies that hold sockets open without sending pings. Per [2025 FastAPI WS patterns](https://websocket.org/guides/frameworks/fastapi/), *"the broadcast method should catch send failures and clean up dead connections, otherwise a single disconnected client that hasn't triggered WebSocketDisconnect yet blocks the entire broadcast loop."*
+
+**Warning signs:**
+- HA dashboard A updates in real-time, dashboard B never updates (stuck on old payload)
+- Backend log shows `WebSocket send failed, marking for removal` only after a minute-long delay
+- Backend RAM grows steadily because dead WS connection objects accumulate
+- `len(broadcaster._connections)` reported via diagnostic endpoint grows beyond expected count
+
+**Prevention:**
+
+1. **Add a per-client `asyncio.Queue` and per-client sender task.** Fan-out via queue rather than direct iteration. Each slow client blocks only itself.
+
+```python
+# Backend/services/ha_ws_pusher.py — sibling to StatusBroadcaster, dedicated to HA WS clients
+class HaWsPusher:
+    def __init__(self) -> None:
+        self._clients: dict[WebSocket, asyncio.Queue[str]] = {}
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=16)  # bounded — drop on slow client
+        self._clients[ws] = q
+        asyncio.create_task(self._sender(ws, q))
+
+    async def _sender(self, ws: WebSocket, q: asyncio.Queue) -> None:
+        try:
+            while True:
+                payload = await q.get()
+                await ws.send_text(payload)
+        except (WebSocketDisconnect, RuntimeError, ConnectionClosed):
+            pass
+        finally:
+            self._clients.pop(ws, None)
+
+    async def broadcast(self, payload: dict) -> None:
+        text = json.dumps(payload)
+        for ws, q in list(self._clients.items()):
+            try:
+                q.put_nowait(text)
+            except asyncio.QueueFull:
+                # drop frame for this slow client; do not block others
+                logger.debug("WS queue full for HA client; dropping frame")
+```
+
+2. **Add a `WebSocketDisconnect` handler explicitly** in the route handler. Don't rely on `Exception` catches alone — uvicorn raises `WebSocketDisconnect`, which is a `Starlette` exception not a `ConnectionError`.
+
+3. **Bounded queue per client** (16 frames is plenty for status; the broadcaster only emits state transitions + 1 Hz heartbeats). On full queue, drop the new frame — the client will catch up on next heartbeat.
+
+4. **Same `_metrics` source as existing `/ws/status`.** Do not duplicate metric collection. Hook `HaWsPusher.broadcast` into `StatusBroadcaster.push_state` and the existing 1 Hz heartbeat so both channels stay consistent.
+
+5. **Test:** open three WS clients, kill one with `socket.shutdown()` mid-stream, assert the other two still receive the next push within 1s.
+
+**Anti-pattern:**
+
+```python
+# BAD — single dead client blocks everyone
+async def broadcast(self, payload):
+    for ws in self._clients:
+        await ws.send_text(payload)  # blocks here if one client is slow
+
+# ALSO BAD — exception in one client kills the task
+async def heartbeat_loop(self):
+    while True:
+        await asyncio.sleep(1)
+        for ws in self._clients:
+            await ws.send_text(payload)  # uncaught exception terminates the loop
+```
+
+**Phase target:** WS push phase. Note: this is **not** a refactor of the existing `StatusBroadcaster` — that one stays for the web UI. The HA WS push is a new sibling endpoint. (See PITFALL-INTEGRATION-2 below for why.)
+
+**Sources:**
+- [FastAPI WebSocket patterns 2025](https://websocket.org/guides/frameworks/fastapi/) — fan-out and dead-client cleanup, HIGH confidence
+- [Existing `StatusBroadcaster._send_to_all`](Backend/services/status_broadcaster.py) — current sequential loop, code review, HIGH confidence
+- [2025 FastAPI WS scaling article](https://hexshift.medium.com/how-to-incorporate-advanced-websocket-architectures-in-fastapi-for-high-performance-real-time-b48ac992f401) — per-client queue pattern, MEDIUM confidence
 
 ---
 
-## "Looks Done But Isn't" Checklist
+## Moderate Pitfalls
 
-- [ ] **Camera enumeration:** Does it filter metadata nodes? Verify with `v4l2-ctl --list-devices` and confirm counts match.
-- [ ] **Device identity:** Is it stored as stable key (VID/PID/serial) or raw path? Check the DB schema.
-- [ ] **Async discipline:** Does every `CaptureBackend.open()` call in new code go through `asyncio.to_thread()`? Grep for direct `capture.open(` calls outside `to_thread`.
-- [ ] **Docker compose:** Are all expected capture devices accessible inside the container? Run `ls /dev/video*` from inside the backend container.
-- [ ] **Reference counting:** Do two zones selecting the same device create one reader thread or two? Confirm with `ps aux | grep capture-reader`.
-- [ ] **Preview routing:** When zone A uses camera 1 and zone B uses camera 2, does the preview WebSocket for zone B show camera 2's frames? Test explicitly.
-- [ ] **Error propagation:** If a zone's selected camera is disconnected mid-stream, does the UI show an error or silently continue with stale frames? Verify the stale-frame timeout triggers and surfaces an error.
-- [ ] **Reconnect loop:** Does the existing `_capture_reconnect_loop` work correctly when only one of two cameras disconnects? The loop currently calls `self._capture.open()` — with a registry, it must target the correct instance.
+Mistakes that confuse users or produce edge-case bugs but don't break the system.
+
+### Pitfall MQTT-7: Mixing MQTT discovery with HA REST `rest_command:` doubles every entity
+
+**What goes wrong:** A power user followed the Phase 18 docs to set up HA YAML `rest_command:` and template sensors **and** turned on MQTT auto-discovery. Now their HA UI has two of everything: `sensor.hpc_state` (from YAML template) and `sensor.hpc_streaming_state` (from MQTT discovery). Automations trigger twice.
+
+**Why it happens:** The two integration paths are independent — HPC doesn't know HA has YAML configured, and HA doesn't dedupe across config sources. The Phase 18 design intentionally left both paths open ("MQTT for zero-YAML users, REST+YAML for power users") — but didn't define behavior when both are configured.
+
+**Warning signs:**
+- User reports duplicate entities (mirror image of MQTT-2 but from different cause — distinguishable because both entities are *available*, not one orphaned)
+- Two switch entities both toggle the same backend state
+- HA log shows two state updates per change (one from MQTT push, one from REST polling result)
+
+**Prevention:**
+
+1. **Explicit opt-in for MQTT.** MQTT publishing is OFF by default and requires `HPC_MQTT_BROKER` env var (or settings UI toggle) to enable. Without the env var, HPC never connects.
+
+2. **Document the choice clearly** in the HA YAML snippet docs:
+
+> Use **either** the MQTT integration **or** the REST/YAML approach. Do not configure both. If you want the zero-YAML experience and have an MQTT broker available, set `HPC_MQTT_BROKER=mqtt://...`. If you want full control over entity IDs, areas, and templates, use the YAML approach and leave the MQTT env var unset.
+
+3. **Add a startup log line:** `MQTT publisher enabled — HA YAML rest_command/sensor entries are redundant and should be removed`. Visible in the systemd journal so users notice.
+
+4. **Don't try to detect the YAML configuration server-side.** HPC has no way to read HA's YAML files. Documentation + opt-in is the right design.
+
+**Phase target:** YAML documentation phase (where the YAML snippet docs are written) — the warning text and opt-in env var ship there.
+
+**Sources:**
+- Phase 18 RESEARCH.md — both paths designed independently, HIGH confidence (verified in `.planning/phases/18-home-assistant-control-endpoints/18-RESEARCH.md`)
 
 ---
 
-## Recovery Strategies
+### Pitfall MQTT-8: WLED-device sensor explosion overwhelms HA UI with 50+ entities
 
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Device paths stored as raw `/dev/videoN` in DB | MEDIUM | Add a migration that backfills VID/PID/serial; add a UI "remap cameras" flow |
-| Metadata nodes exposed in UI | LOW | Add `VIDIOC_QUERYCAP` filter to enumeration endpoint; no DB changes needed |
-| Event loop stall from blocking `open()` | LOW | Wrap call in `asyncio.to_thread()`; no architectural change |
-| Two zones competing for one `CaptureBackend` | HIGH | Introduce `CaptureRegistry`; refactor `StreamingService` to use registry; update tests |
-| Docker compose missing second device | LOW | Add `device_cgroup_rules` line; rebuild and restart stack |
-| Preview WebSocket shows wrong camera | MEDIUM | Add `zone_id` parameter to preview WebSocket; route to registry instance |
+**What goes wrong:** User has 8 WLED devices. The MQTT publisher creates one sensor per `wled_devices[device_id]` × per field (`last_error`, `last_success_at`, `in_cooldown`). That's 24 sensors just for WLED, plus the core HPC sensors, totaling 30+. HA dashboard becomes cluttered; user can't find the entities they care about.
+
+**Why it happens:** A naive 1:1 mapping of `broadcaster._metrics["wled_devices"]` to individual sensors produces explosion. Each WLED device has 3 fields tracked (`last_error`, `last_success_at`, `in_cooldown` per Phase 17 D-16) which would naively become 3 entities each.
+
+Worse: each new WLED device add triggers a new round of `/config` publishes. The user might not even realize they're adding 3 entities every time they register a strip.
+
+**Warning signs:**
+- User reports "my MQTT integration has 47 HPC entities, what do I do?"
+- HA → MQTT → Devices → "HuePictureControl" shows dozens of entities marked `diagnostic`
+
+**Prevention:**
+
+1. **Group per-WLED fields under ONE entity using JSON attributes.** HA's `json_attributes_topic` makes this trivial: one sensor per WLED device, attributes for the fields:
+
+```python
+# GOOD — one sensor per WLED device with all fields as attributes
+discovery_payload = {
+    "unique_id": f"{INSTANCE_UUID}_wled_{wled_id}",
+    "default_entity_id": f"sensor.hpc_wled_{slugify(wled_name)}",
+    "name": f"WLED {wled_name}",
+    "state_topic": f"hpc/wled/{wled_id}/state",        # "ok" | "error" | "cooldown"
+    "json_attributes_topic": f"hpc/wled/{wled_id}/attrs",  # {last_error, last_success_at, in_cooldown}
+    "entity_category": "diagnostic",                   # collapses into device's "diagnostic" section
+    "availability": [...],
+    "device": {"identifiers": [f"hpc-{INSTANCE_UUID}"], ...},
+}
+```
+
+This collapses 3N → N entities. User sees one sensor per WLED device; attributes are inspectable via the entity dialog.
+
+2. **`entity_category: diagnostic`** on per-device sensors. HA renders diagnostic entities in a collapsed section by default, reducing dashboard clutter. Reference: [HA MQTT Sensor docs](https://www.home-assistant.io/integrations/sensor.mqtt/) — `entity_category` is supported and used by mature integrations.
+
+3. **Aggregate sensor: `sensor.hpc_wled_devices_healthy`** — a single counter showing `N healthy / M total` for users who don't want device-level detail.
+
+4. **Discovery throttling:** when the user adds N WLED devices in rapid succession (zeroconf scan returns 12 devices, user clicks "Add all"), batch the discovery publishes with `asyncio.gather` rather than per-add. Spread by ~50ms to avoid broker QoS-1 backlog spikes.
+
+5. **Test:** registering a WLED device produces exactly 1 sensor in HA, with the per-field state as attributes:
+
+```python
+async def test_wled_sensor_groups_fields_as_attributes(mqtt_broker, hpc_app):
+    await register_wled(hpc_app, ip="192.168.1.50")
+    configs = await collect_published_configs(mqtt_broker, prefix="homeassistant/sensor/hpc-")
+    wled_configs = [c for c in configs if "wled" in c["unique_id"]]
+    assert len(wled_configs) == 1, f"Expected 1 WLED sensor, got {len(wled_configs)}: {[c['unique_id'] for c in wled_configs]}"
+    assert "json_attributes_topic" in wled_configs[0]
+```
+
+**Anti-pattern:**
+
+```python
+# BAD — 3 entities per WLED device
+for device_id, health in wled_devices.items():
+    for field in ("last_error", "last_success_at", "in_cooldown"):
+        publish_discovery(f"sensor/{device_id}_{field}", ...)
+```
+
+**Phase target:** WLED-per-device phase (the one extending `/api/ha/status` and MQTT to cover the existing `broadcaster._metrics["wled_devices"]` dict).
+
+**Sources:**
+- [HA MQTT Sensor — json_attributes_topic, entity_category](https://www.home-assistant.io/integrations/sensor.mqtt/) — HIGH confidence
+- Phase 17 `StatusBroadcaster._metrics["wled_devices"]` shape — verified in `Backend/services/status_broadcaster.py:36`
 
 ---
 
-## Pitfall-to-Phase Mapping
+### Pitfall HA-1: Template sensors break dashboards on missing keys / null values
 
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| Device path instability (Pitfall 1) | Device enumeration + DB schema phase | After phase: replug camera, restart, confirm stored zone still captures from correct device |
-| Metadata node confusion (Pitfall 2) | Device enumeration phase | After phase: verify camera list count matches physical device count, not node count |
-| Blocking `open()` in event loop (Pitfall 3) | Camera-switch API phase | After phase: switch camera via API while streaming; verify WS frames continue without gap |
-| Shared CaptureBackend race (Pitfall 4) | Architecture / CaptureRegistry phase | After phase: two zones on different devices, switch one while streaming; no errors in other |
-| Docker compose devices incomplete (Pitfall 5) | Infrastructure / Docker phase | After phase: run `ls /dev/video*` inside container; count matches host |
-| Zone camera selection as raw path (Pitfall 6) | DB schema phase | After phase: replug camera, stream; lights follow correct source without UI intervention |
+**What goes wrong:** HA YAML snippet docs ship a template sensor referencing `{{ value_json.fps }}`. After v1.4 adds a new top-level field, the JSON shape changes. Or — in v1.3 — HPC returns `fps: null` when idle. The template sensor evaluates to `unknown`, dashboard tile turns gray, conditional cards disappear.
+
+**Why it happens:** Jinja2 templates fail loudly on missing keys (`UndefinedError`) and silently on null arithmetic (`null + 1 → null → 'unknown'`). HA template sensors render `unknown` for both — but the cascade effect on dashboards is the same regardless of cause.
+
+This isn't theoretical — Phase 18 [Pitfall 4](.planning/phases/18-home-assistant-control-endpoints/18-RESEARCH.md) already addresses one variant (bridge timeout → null `active_config_name`). v1.3's per-WLED additions to `/api/ha/status` and the WS push are new vectors.
+
+**Warning signs:**
+- HA log: `Template sensor sensor.hpc_fps_avg encountered TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'`
+- Dashboard card "HPC Status" shows `unknown` instead of `Idle`
+- Conditional card `state == 'streaming'` disappears entirely (because state is `unknown`, not `streaming` or anything else)
+
+**Prevention:**
+
+1. **YAML snippets MUST use defensive Jinja:**
+
+```yaml
+# GOOD — defensive
+sensor:
+  - platform: rest
+    resource: http://hpc.local:8000/api/ha/status
+    name: hpc_state
+    value_template: "{{ value_json.state | default('unknown') }}"
+    json_attributes_path: "$"
+    json_attributes:
+      - state
+      - active_config_name
+      - active_camera_name
+      - fps
+      - latency_ms
+
+# BAD — breaks the moment a field is missing
+value_template: "{{ value_json.state }}"
+
+# BAD — null arithmetic
+value_template: "{{ (value_json.fps + value_json.latency_ms) | round(0) }}"
+```
+
+2. **Stable JSON contract.** The Phase 18 D-09 status payload is **locked**. v1.3 additions (`wled_devices`) MUST be **additive only**:
+
+   - Add new top-level keys; never rename or remove existing ones.
+   - New keys default to safe values: `wled_devices: {}` (empty dict, not null), `wled_devices_healthy: 0`, etc.
+   - Document the contract version in the response (`schema_version: 1`).
+
+3. **`/api/ha/status` response schema:**
+
+```python
+class HaStatusResponse(BaseModel):
+    # Phase 18 locked fields — DO NOT change
+    state: str
+    active_config_id: str | None = None
+    # ... (rest as in Backend/routers/ha.py:66-80)
+
+    # v1.3 ADDITIVE fields — safe defaults, not None
+    wled_devices: dict[str, dict] = Field(default_factory=dict)  # NOT None, ALWAYS a dict
+    wled_devices_healthy: int = 0
+    wled_devices_total: int = 0
+```
+
+4. **`response_model_exclude_none=True`** is already used (line 185 of `routers/ha.py`) — keep using it for **optional** fields, but **NOT** for the new WLED additions. Those should always be present (defaulting to `{}` / `0`), so HA templates can rely on them.
+
+5. **Test the YAML snippets in CI.** Ship a `tests/ha_yaml/` directory with sample YAML; lint/validate via `python -c "import yaml; yaml.safe_load(open('rest_command.yaml'))"` and a Jinja test that runs each value_template against a sample payload.
+
+**Phase target:** YAML documentation phase (defensive Jinja) + WLED per-device phase (additive JSON contract).
+
+**Sources:**
+- [Community: How to prevent NULL values in template sensor](https://community.home-assistant.io/t/how-to-prevent-null-values-in-template-sensor/98207) — HIGH confidence
+- Phase 18 Pitfall 4 — bridge timeout → null name (already documented), HIGH confidence
+- [Backend/routers/ha.py:80](Backend/routers/ha.py) — current `response_model_exclude_none=True` usage, HIGH confidence
+
+---
+
+### Pitfall INTEGRATION-1: MQTT broker as new outbound destination violates the "no outbound" constraint expectation
+
+**What goes wrong:** Project constraint per `CLAUDE.md` and PROJECT.md says "no outbound network connections except to user-configured Hue Bridge / WLED devices." Adding MQTT introduces a third outbound destination. A user with a strict firewall rule (Hue Bridge IP + WLED subnet) finds HPC trying to connect to a different IP and either (a) reports it as a bug or (b) silently fails because the firewall blocks it.
+
+**Why it happens:** Project documentation hasn't been updated for the new design. A user reading PROJECT.md / CLAUDE.md sees an obsolete constraint.
+
+**Warning signs:**
+- User issue: "Why is HPC trying to connect to 192.168.1.100:1883? That's not in my allowed list."
+- Mosquitto broker silently rejects HPC connections due to ACL not yet updated for new client
+- HPC logs show MQTT reconnect failures with `[Errno 113] No route to host` because firewall drops outbound to broker IP
+
+**Prevention:**
+
+1. **Update `CLAUDE.md` "What Already Exists" → Constraints** explicitly:
+
+   > **Network (v1.3+):** Hue Bridge must be reachable. WLED devices must be reachable. **If MQTT discovery is enabled** via `HPC_MQTT_BROKER`, the configured broker IP must also be reachable (default port 1883, or 8883 for TLS).
+
+2. **MQTT broker config is opt-in** (already covered in MQTT-7 prevention) — no broker env var = no outbound MQTT connection attempts. Default behavior is unchanged from v1.2.
+
+3. **Log the broker URL at startup** so users can verify what HPC is trying to connect to:
+
+```python
+logger.info("MQTT publisher enabled, target broker=%s", broker_url_redacted)  # mask username:password
+```
+
+4. **Surface broker status in `/api/health`:**
+
+```json
+{
+  "status": "ok",
+  "mqtt": {
+    "enabled": true,
+    "connected": true,
+    "broker_host": "192.168.1.10",
+    "last_error": null
+  }
+}
+```
+
+**Phase target:** MQTT publisher phase. Update CLAUDE.md and PROJECT.md in the same PR.
+
+---
+
+### Pitfall INTEGRATION-2: Repurposing `/ws/status` for HA push leaks internal metric churn into the HA contract
+
+**What goes wrong:** Tempting shortcut: "HA WS push is just another subscriber to `StatusBroadcaster`; let's reuse `/ws/status`." Six months later, a frontend refactor adds `packets_sent_by_lane` to `_metrics`. HA template sensors that were keyed off the raw `_metrics` shape break — exactly the surface Phase 18 D-09 went out of its way to insulate via the curated `/api/ha/status` response.
+
+**Why it happens:** The Phase 18 design (D-09) deliberately separates the **internal `_metrics`** shape from the **external HA contract**. Reusing the raw `/ws/status` endpoint for HA undoes that separation. Per Phase 18 RESEARCH.md State-of-the-Art table: *"_metrics exposed raw via /ws/status to existing consumers; /api/ha/status projects a curated subset — HA dashboards insulated from internal metric churn."*
+
+**Warning signs:**
+- After a frontend feature merges, HA template sensors start showing `unknown` for fields the user wasn't aware existed
+- Frontend developer adds a new metric and breaks HA without realizing it
+- Phase 18 D-09 lock is silently violated
+
+**Prevention:**
+
+1. **Add a NEW WS endpoint** `/ws/ha-status` — sibling to `/ws/status`, not a refactor of it.
+
+2. **The HA WS pusher consumes `StatusBroadcaster`** but emits the **curated HaStatusResponse JSON shape**, the same one `GET /api/ha/status` returns:
+
+```python
+# Backend/routers/ws_ha.py
+@router.websocket("/ws/ha-status")
+async def ws_ha_status(websocket: WebSocket):
+    pusher = websocket.app.state.ha_ws_pusher
+    await pusher.connect(websocket)
+    # send initial snapshot (curated, NOT raw _metrics)
+    initial = await _build_status_response(websocket)  # reuse ha.py helper
+    await websocket.send_text(initial.model_dump_json(exclude_none=True))
+    try:
+        while True:
+            await asyncio.sleep(60)  # keepalive
+            await websocket.send_text(b"")  # ping
+    except WebSocketDisconnect:
+        pusher.disconnect(websocket)
+```
+
+3. **`StatusBroadcaster.push_state` hook:** when the broadcaster pushes (state transition or 1 Hz heartbeat), the new `HaWsPusher` builds a curated payload and broadcasts to HA subscribers. This means the broadcaster needs to know about the pusher (via constructor injection) OR the pusher subscribes to broadcaster events via a callback hook.
+
+4. **Same Pydantic model as REST.** The WS push payload **MUST** be `HaStatusResponse.model_dump_json(exclude_none=True)` — identical to the REST shape. Then YAML / template sensors work identically whether the user is on REST polling or WS push.
+
+**Anti-pattern:**
+
+```python
+# BAD — HA receives raw _metrics
+@router.websocket("/ws/status")  # existing endpoint
+async def ws_status(websocket: WebSocket):
+    broadcaster = websocket.app.state.broadcaster
+    await broadcaster.connect(websocket)  # raw _metrics flows through — HA breaks on internal changes
+```
+
+**Phase target:** WS push phase.
+
+**Sources:**
+- Phase 18 RESEARCH.md State-of-the-Art table — HIGH confidence
+- Phase 18 D-09 contract lock — HIGH confidence
+
+---
+
+## Minor Pitfalls
+
+Small mistakes worth catching in code review.
+
+### Pitfall MINOR-1: MQTT username/password leaked into logs / health endpoint
+
+**What goes wrong:** Startup log: `MQTT publisher enabled, broker=mqtt://admin:hunter2@192.168.1.10:1883`. The broker password ends up in journalctl, GitHub bug reports, screenshots.
+
+**Prevention:** Strip credentials from the URL before logging. Use `urllib.parse.urlparse` and reassemble without password:
+
+```python
+def redact_url(url: str) -> str:
+    u = urlparse(url)
+    netloc = f"{u.hostname}:{u.port}" if u.port else u.hostname
+    if u.username:
+        netloc = f"{u.username}:***@{netloc}"
+    return f"{u.scheme}://{netloc}{u.path}"
+```
+
+Apply the same redaction to `/api/health` MQTT block.
+
+**Phase target:** MQTT publisher phase.
+
+---
+
+### Pitfall MINOR-2: Discovery payload sent before broker subscription confirmed
+
+**What goes wrong:** Publisher connects, immediately publishes 20 discovery messages, then subscribes to `homeassistant/status` — but the broker processes the subscribe-AFTER scenario such that the next HA birth message during reconnect is missed because the `_run` loop hasn't reached `subscribe` yet.
+
+**Prevention:** Subscribe **before** publishing the first config:
+
+```python
+async with aiomqtt.Client(...) as client:
+    await client.subscribe("homeassistant/status")  # FIRST
+    await client.publish(AVAILABILITY_TOPIC, b"online", retain=True)
+    await self._publish_all_discovery(client)  # THEN
+```
+
+**Phase target:** MQTT publisher phase.
+
+---
+
+### Pitfall MINOR-3: Discovery payload exceeds MQTT broker max-packet-size when bundling many WLED devices
+
+**What goes wrong:** With 16 WLED devices and full `device` blocks per discovery message, the cumulative retained config size on the broker exceeds Mosquitto's default `message_size_limit` (varies by broker config). Some configs get rejected silently.
+
+**Prevention:** Each config is its own retained message — they don't bundle. But individual payloads can grow. Keep `device.identifiers` to a single string, avoid embedding long `sw_version` strings, and use short topic names. Test against Mosquitto's default 268435456-byte limit but be aware some embedded brokers (HiveMQ Lite) limit to 4 KB.
+
+**Phase target:** MQTT publisher phase.
+
+---
+
+## Phase-Specific Warnings
+
+| Phase Topic | Likely Pitfall | Mitigation |
+|-------------|---------------|------------|
+| MQTT publisher introduction | MQTT-1 (retention), MQTT-2 (unique_id), MQTT-3 (LWT), MQTT-4 (reconnect), MQTT-5 (topic namespace), MQTT-6 (object_id deprecation), MINOR-1, MINOR-2 | Implement birth-LWT + retained discovery + persistent `INSTANCE_UUID` + bounded queue all in the FIRST cut. Adding any of these later means re-publishing all retained configs. |
+| WS push for HA status | WS-1 (per-client queue), INTEGRATION-2 (don't reuse `/ws/status`) | New endpoint `/ws/ha-status` with `HaWsPusher` sibling class. Same Pydantic `HaStatusResponse` shape as REST. |
+| Per-device WLED health in `/api/ha/status` | HA-1 (additive JSON contract), MQTT-8 (sensor explosion) | New fields default to `{}` / `0`, never `None`. MQTT side groups per-device fields under `json_attributes_topic` + `entity_category: diagnostic`. |
+| HA YAML docs | MQTT-7 (avoid mixing paths), HA-1 (defensive Jinja in snippets) | Document "either MQTT or YAML, not both"; ship `default()` filters in every value_template. |
+
+---
+
+## Quick Checklist for MQTT Implementation Review
+
+Before merging the MQTT publisher PR:
+
+- [ ] Every `client.publish(...)` for a `homeassistant/+/+/config` topic has `retain=True`
+- [ ] Subscribed to `homeassistant/status` and republishes discovery on `online` payload
+- [ ] `Will` set at `aiomqtt.Client` construction time with `retain=True`, payload `offline`
+- [ ] `INSTANCE_UUID` persisted to `hpc_identity` table; never regenerated
+- [ ] `unique_id` for every entity derives from `INSTANCE_UUID`
+- [ ] `default_entity_id` used (NOT `object_id`) for entity-ID defaults
+- [ ] `device.identifiers` includes `INSTANCE_UUID`; same value across all entities for one HPC instance
+- [ ] Every entity has `availability` block pointing at the HPC availability topic
+- [ ] Publisher runs in a background `asyncio.Task` with reconnect + exponential backoff
+- [ ] Publisher queue is bounded (e.g., 1024) with drop-on-full
+- [ ] Lifespan shutdown publishes `offline` to availability topic BEFORE disconnect
+- [ ] Request handlers never `await` MQTT operations directly
+- [ ] `/api/health` exposes `mqtt.connected` and `mqtt.broker_host` (redacted)
+- [ ] Broker URL is opt-in via `HPC_MQTT_BROKER` env var; absent = no MQTT
+- [ ] `CLAUDE.md` and `PROJECT.md` updated to mention MQTT broker as new outbound destination
+- [ ] Per-WLED-device fields collapsed into one entity per device via `json_attributes_topic`
+- [ ] `entity_category: diagnostic` set on per-WLED-device sensors
+- [ ] At least one integration test verifies discovery messages survive publisher disconnect (retention)
+- [ ] At least one integration test verifies `unique_id` stable across two app starts on the same DB
 
 ---
 
 ## Sources
 
-- Project codebase: `Backend/services/capture_service.py`, `capture_v4l2.py`, `capture_dshow.py`, `streaming_service.py`, `routers/capture.py`
-- Project memory: `feedback_docker_native.md` — device path shift on USB re-attach
-- [Assign v4l2 device a static name — Formant docs](https://docs.formant.io/docs/assign-v4l2-device-a-static-name) — udev persistent symlinks for V4L2
-- [Multiple /dev/video for one physical device — Ubuntu Launchpad](https://answers.launchpad.net/ubuntu/+question/683647) — metadata node behavior
-- [V4L2 device internal representation — kernel.org](https://docs.kernel.org/driver-api/media/v4l2-dev.html) — device_caps field, VIDEO_CAPTURE flag
-- [How to Share Webcams with Docker — FunWithLinux.net](https://www.funwithlinux.net/blog/sharing-devices-webcam-usb-drives-etc-with-docker/) — device_cgroup_rules for major 81
-- [Docker device_cgroup_rules — Baeldung](https://www.baeldung.com/ops/docker-access-host-devices) — cgroup rules format
-- [VideoCapture freezes if camera is busy — OpenCV GitHub #15074](https://github.com/opencv/opencv/issues/15074) — blocking open behavior
-- [Does cv::VideoCapture have thread lock — OpenCV GitHub #24229](https://github.com/opencv/opencv/issues/24229) — thread-safety behavior
-- [Stop trusting /dev/ttyUSB0 — Medium](https://medium.com/@dynamicy/stop-trusting-dev-ttyusb0-using-udev-rules-for-stable-device-naming-on-linux-adc878f19ee9) — udev rule pattern (applies equally to video devices)
-
----
-*Pitfalls research for: multi-camera Docker V4L2 capture — HuePictureControl v1.1*
-*Researched: 2026-04-03*
-
----
----
-
-# Pitfalls Research — Milestone v1.3
-
-**Domain:** WLED UDP streaming, Home Assistant control endpoints, LED strip mapping UI, channel abstraction, zone persistence
-**Researched:** 2026-04-14
-**Confidence:** HIGH for WLED protocol specifics (verified against official WLED docs + GitHub issues); MEDIUM for HA design and React persistence patterns (verified against official docs + community sources)
-
----
-
-## Critical Pitfalls (v1.3)
-
-### Pitfall W1: DRGB Packet Hard-Cap — 490 LEDs Maximum Without Protocol Switch
-
-**What goes wrong:**
-The DRGB protocol (WLED UDP realtime, type byte `0x02`) sends RGB data for every LED starting from LED 0 with no indexing. The maximum packet size is one UDP datagram, which caps DRGB at 490 LEDs. A 300-LED strip fits, but a common 5m strip of 300 LEDs at 60 LED/m is fine — the problem emerges when users chain strips or use higher-density strips. Any attempt to stream more than 490 LEDs via DRGB silently truncates: WLED processes the packet without error but the last (N - 490) LEDs receive no update and hold their previous colors or go dark.
-
-**Why it happens:**
-DRGB assumes one packet covers the entire strip. Developers copy the DRGB example from tutorials, calculate 3 bytes × N LEDs, and don't notice the silent truncation because the first 490 LEDs look correct.
-
-**How to avoid:**
-- Use DNRGB (type byte `0x04`) for all strips, not just those exceeding 490 LEDs. DNRGB includes a 2-byte start index, allowing arbitrary strip lengths via multiple packets per frame.
-- Packet 1: bytes `[0x04, timeout, 0x00, 0x00, R0, G0, B0, R1, G1, B1, ...]` (up to 489 LEDs)
-- Packet 2: bytes `[0x04, timeout, 0x01, 0xDD, R489, G489, B489, ...]` (remainder)
-- The start index is big-endian 16-bit: high byte first.
-- Adopt DNRGB from the start even for small strips — it is a strict superset of DRGB with two extra header bytes.
-
-**Warning signs:**
-- Last N LEDs on strip show wrong color or are stuck at the color from before streaming started.
-- Behavior is correct with 100 LEDs but wrong with 300 LEDs.
-- No error on the Python side; no error logged by WLED.
-
-**Phase to address:**
-WLED UDP sender implementation phase. Lock in DNRGB from the first prototype, not as a later upgrade.
-
----
-
-### Pitfall W2: UDP Timeout Byte Governs Revert-to-Effect Behavior — Wrong Value Causes Sticky Black Frames
-
-**What goes wrong:**
-The second byte of every DRGB/DNRGB packet is a timeout in seconds: after this many seconds with no new packet, WLED exits realtime mode and returns to its previous effect/preset. Two wrong choices cause symptoms that look unrelated:
-
-- **Timeout = 0:** Documented as "immediate exit on stop" in some guides but WLED treats 0 as a no-timeout (stays in realtime forever). When streaming stops, the strip stays at the last-sent color until a user manually changes something.
-- **Timeout = 255:** Infinite timeout — same permanent-last-frame behavior. Intentional when you want frames to persist, but fatal if you want the strip to cleanly return to ambient/preset mode on streaming stop.
-- **Timeout = 1–2:** Correct for ambient lighting — strip returns to effect mode within 1–2 seconds of stream silence. BUT if the frame loop pauses >2 seconds (CPU spike, container restart), the strip drops out of realtime mode mid-stream and reverts to its preset, creating a jarring effect-interruption even though streaming is still "active."
-
-**Why it happens:**
-Developers copy timeout = 255 from examples designed for static color control, not for streaming applications where clean exit matters.
-
-**How to avoid:**
-- Use timeout = 2 for ambient streaming. This balances clean exit (reverts to preset within 2s of stop) against brief pauses (the loop runs at 30–60 Hz; a 2s window tolerates brief GIL contention or network hiccup).
-- Send a keepalive packet (same frame data or all-black) on `stop()` to force an immediate transition to black before the timeout fires naturally.
-- Never use 0 or 255 in a streaming context.
-
-**Warning signs:**
-- Strip stays lit with the last frame color after streaming is explicitly stopped.
-- Strip randomly reverts to its "sunrise" or "rainbow" preset mid-session.
-- Behavior changes after lowering target Hz from 60 to 10 (packet gaps exceed timeout).
-
-**Phase to address:**
-WLED UDP sender implementation phase. The timeout value should be a named constant (`WLED_REALTIME_TIMEOUT_S = 2`), not a magic byte.
-
----
-
-### Pitfall W3: JSON API and UDP Realtime Are Mutually Exclusive While Streaming Is Active
-
-**What goes wrong:**
-WLED disables its JSON API (and web UI) while UDP realtime is active. This means calls to `GET /json/state`, `POST /json`, or the WLED HTTP API sent while the streaming loop is running will either be silently ignored or cause a known race condition (WLED GitHub issue #3589): the strip gets stuck on the last UDP frame color, stops reverting on timeout, and ignores all subsequent JSON commands until power-cycled or WLED firmware-reset.
-
-For this project, this affects:
-- The WLED device management tab: reading `GET /json/info` to populate the device list will race with the streaming loop.
-- Any Home Assistant automation that uses WLED's own HA integration (which calls the JSON API) while HuePictureControl is also streaming to the same device.
-
-**Why it happens:**
-WLED's realtime mode takes exclusive control of the LED output. The JSON API path attempts to write to the same LED buffer. The firmware does not queue or serialize these accesses; the result is undefined behavior that looks like a firmware hang.
-
-**How to avoid:**
-- Never call WLED's JSON API on a device while that device is in the active streaming target list.
-- In the WLED device manager, poll `GET /json/state` only at startup (when streaming is idle) and after streaming stops, not while streaming is running.
-- Expose WLED device configuration (LED count, segment layout) as read-once-and-cache data. Do not refresh it mid-stream.
-- For the Home Assistant integration: document that HA's WLED integration must be disabled for any device that HuePictureControl is streaming to. They cannot coexist.
-
-**Warning signs:**
-- WLED strip stops responding after streaming stops; JSON API calls return nothing.
-- WLED web UI shows "Live" badge indefinitely after the Python process exits.
-- `GET /json/state` succeeds before streaming but times out after first streaming session.
-
-**Phase to address:**
-WLED device management + streaming loop phases. The device manager must be aware of which devices are currently streaming and suppress API calls to them.
-
----
-
-### Pitfall W4: WLED mDNS Discovery Fails Inside Docker Bridge Network
-
-**What goes wrong:**
-WLED devices advertise themselves via mDNS (multicast DNS, UDP port 5353) on the local LAN. Docker's default bridge network (`172.17.0.0/16`) does not forward multicast traffic to the host LAN. A mDNS-based auto-discovery scan from inside the backend container will find zero WLED devices even though all of them are visible from the host machine.
-
-This is the same network topology issue as the Hue Bridge — which is why the project already requires `network_mode: host` for Hue DTLS/UDP streaming. WLED discovery has the same constraint.
-
-**Why it happens:**
-Docker bridge networks isolate containers from the host's LAN multicast domain. mDNS relies on `224.0.0.251` multicast, which does not traverse the Docker bridge NAT layer.
-
-**How to avoid:**
-- The backend already uses `network_mode: host` for Hue DTLS. WLED discovery benefits from this automatically — no additional change needed.
-- Do not offer mDNS auto-discovery as a primary flow. Offer it as a convenience scan, with manual IP entry as the always-available fallback.
-- Document that auto-discovery requires `network_mode: host` (already the case).
-- If ever moving away from host networking, use `--net=host` on the discovery call or proxy discovery through the host.
-
-**Warning signs:**
-- Auto-discovery returns empty list even though WLED devices are reachable by direct IP.
-- `ping wled-device.local` fails from inside the container but works from the host.
-- Discovery works when tested natively (outside Docker) but not in the container.
-
-**Phase to address:**
-WLED device management phase. Do not implement mDNS discovery before confirming it works under host networking.
-
----
-
-### Pitfall W5: Shared Channel Abstraction Leaks Hue-Specific Concepts Into WLED Code
-
-**What goes wrong:**
-The existing streaming pipeline passes `channel_id` (a Hue Entertainment API concept — integer 0–N assigned by the bridge) to the color output layer. When WLED support is added, the temptation is to alias WLED LED indices as "channels." This leaks the assumption that a channel is a Hue DTLS stream slot into WLED code. The divergence becomes critical when:
-
-- Hue channels are sparse (e.g., channel IDs `0, 1, 5, 6`) while WLED indices are always dense and contiguous (0, 1, 2, ..., N-1).
-- A canvas zone maps to a Hue channel that the bridge assigned, but to a WLED LED range that the user painted — the data model is fundamentally different.
-- The `light_assignments` table uses `channel_id INTEGER` as the key. This works for Hue but requires a different key type for WLED (a start/end range, not a single int).
-
-**Why it happens:**
-The existing `_load_channel_map()` method returns `{channel_id: mask}` — a Hue-specific shape. The path of least resistance is to make WLED use the same dict shape, which forces a conceptual mapping that doesn't fit.
-
-**How to avoid:**
-- Define a device-agnostic output abstraction: `{output_target: mask}` where `output_target` is a typed union:
-  - `HueChannel(id: int)` for Hue DTLS
-  - `WledRange(device_ip: str, start_led: int, end_led: int)` for WLED
-- The streaming loop iterates `output_targets`, computes color per target, and dispatches to the appropriate sender (DTLS or UDP) based on the type.
-- Keep the `light_assignments` table for Hue. Add a separate `wled_assignments` table with columns `(region_id, device_ip, start_led, end_led, entertainment_config_id)`.
-- Do not repurpose `channel_id` for WLED.
-
-**Warning signs:**
-- WLED LED mapping code has a comment like "channel_id is repurposed as LED index here."
-- The same `light_assignments` table stores both Hue and WLED data with a type discriminator column.
-- WLED strip shows color from the wrong region because LED index 5 happens to equal Hue channel 5 by coincidence.
-
-**Phase to address:**
-Shared abstraction design phase — must precede both the WLED sender and any UI changes to the assignment model. This is the highest-risk architectural decision in v1.3.
-
----
-
-### Pitfall W6: Paint-on-Strip UI Off-by-One — WLED Uses Zero-Based Exclusive-End Indexing
-
-**What goes wrong:**
-WLED's segment and realtime addressing is zero-indexed with exclusive end: a strip of 300 LEDs has valid indices 0–299. Sending data to "LED 300" is a no-op (silently dropped). The UI shows users a 1-to-300 range because humans count from 1. The translation layer computes `start = user_start - 1`, `end = user_end - 1`, which is wrong: it produces an off-by-one where the last LED in a painted range receives no data.
-
-The correct translation is: `start_led = user_start - 1`, `end_led = user_end` (exclusive). Or store zero-based internally and subtract 1 only in the UI display layer.
-
-**Why it happens:**
-WLED documentation uses 0-based indices. UI design instinctively uses 1-based for user-facing counts. The boundary between these two worlds is where the off-by-one lives, and it is invisible in testing (a 1-LED difference at the edge is hard to spot visually).
-
-**How to avoid:**
-- Store all LED indices zero-based in the database and in-memory.
-- Display layer only: add 1 to start and end for user-visible labels.
-- DNRGB packet: use stored zero-based start_led directly as the start index field.
-- Write a unit test: "if user paints LEDs 1–300 on a 300-LED strip, exactly 300 bytes of RGB data are sent, and the last 3 bytes correspond to LED 299."
-
-**Warning signs:**
-- Last LED in a painted range is always the same color as the LED before it (color from the adjacent range bleeds in).
-- Painting "all LEDs" (1 to 300) still leaves the last LED uncontrolled.
-- Off-by-one only manifests at range boundaries; middle of the strip looks correct.
-
-**Phase to address:**
-Paint-on-strip UI implementation phase. Define the index convention as a project constant before any UI or packet code is written.
-
----
-
-### Pitfall W7: Konva.js Re-render Thrash — Rendering 300 Individual Rect Nodes at 60 Hz
-
-**What goes wrong:**
-The paint-on-strip UI uses a Konva `Stage` with one `Rect` per LED (300 rects). Each Konva shape is a React component. On every color update during live preview (showing what color each LED is currently being sent), React renders 300 components → Konva redraws the canvas layer → 300 paint calls per frame at 60 fps = 18,000 draw operations per second. This saturates a mid-range GPU within seconds and pins the browser at 100% CPU.
-
-**Why it happens:**
-The existing region editor (EditorCanvas.tsx) already uses Konva for the polygon canvas, and it works fine because polygons are infrequent and user-driven. LED preview is continuous and data-driven — a fundamentally different usage pattern.
-
-**How to avoid:**
-- Do not represent each LED as a separate Konva `Rect` node.
-- Use a single `Konva.Image` node backed by an offscreen `HTMLCanvasElement`. Write pixel colors to the offscreen canvas using `ImageData` (one `Uint8ClampedArray` write per frame), then call `konvaImage.image(offscreenCanvas)` and `layer.batchDraw()` once per frame.
-- This reduces 300 draw calls to 1 canvas write + 1 layer redraw per frame.
-- For the interactive paint affordance (drag to assign range), use a separate thin `Konva.Rect` overlay layer that is only redrawn on mouse interaction, not on color data updates.
-- Separate concerns: data layer (color updates, fast) vs. interaction layer (drag handles, slow).
-
-**Warning signs:**
-- Browser DevTools Profiler shows "Recalculate Style" and "Paint" events every 16ms for 300 items.
-- UI becomes sluggish after enabling the live preview toggle on the strip editor.
-- CPU usage jumps to 80–100% when the strip editor is open.
-
-**Phase to address:**
-Paint-on-strip UI implementation phase. Validate the canvas architecture with a 300-element render benchmark before building the full interaction layer.
-
----
-
-### Pitfall H1: Home Assistant Endpoint Design — Action Verbs as GET Requests
-
-**What goes wrong:**
-The HA control endpoints are implemented as `GET /api/ha/start` and `GET /api/ha/stop` because GET is the simplest to call from HA's `rest_command` or a browser. This violates REST semantics: GET must be idempotent and side-effect-free. Some HA automation engines, HTTP proxies, and caching layers will cache or deduplicate GET requests, causing the stop command to be swallowed.
-
-Additionally, HA's `rest_command` integration uses POST by default. Deviating from this requires extra YAML configuration that users will get wrong.
-
-**Why it happens:**
-GET is the path of least resistance for quick testing in a browser. It feels like a "control API" (click a link = trigger an action). The consequences only appear when HA's automation engine starts caching responses.
-
-**How to avoid:**
-- Use `POST /api/ha/start`, `POST /api/ha/stop`. Accept a JSON body with optional parameters (camera, zone).
-- In HA, configure via `rest_command`:
-  ```yaml
-  hpc_start:
-    url: http://hpc-backend:8000/api/ha/start
-    method: POST
-    content_type: application/json
-    payload: '{"config_id": "{{ config_id }}"}'
-  ```
-- Return a clear JSON response body (`{"status": "starting", "config_id": "..."}`) so HA automations can condition on the result.
-- Document example HA YAML alongside each endpoint — this prevents integration errors from day 1.
-
-**Warning signs:**
-- HA `rest_command` reports 405 Method Not Allowed when calling start/stop.
-- Clicking "start" twice in quick succession appears to do nothing the second time.
-- A reverse proxy in front of the backend caches the GET response and the stop command never reaches the service.
-
-**Phase to address:**
-Home Assistant endpoints phase. Establish HTTP method conventions before writing any HA-callable endpoint.
-
----
-
-### Pitfall H2: HA Long-Lived Access Token Stored in Database — Security Regression
-
-**What goes wrong:**
-The Home Assistant endpoint implementation needs to push state updates back to HA (e.g., "streaming started" → update an HA sensor). To call HA's REST API, an outbound HTTP call from the backend needs a Long-Lived Access Token (LLAT). The token gets stored in SQLite alongside Hue credentials, following the existing `bridge_config` pattern. This is a security regression: the Hue `client_key` is a local API key with no external privileges; a HA LLAT grants access to every device and automation in the user's home.
-
-**Why it happens:**
-The existing DB pattern (store credentials in `bridge_config`) makes it natural to extend with a `ha_config` table. The difference in privilege scope between the two credential types is not obvious.
-
-**How to avoid:**
-- For v1.3, HuePictureControl is a control target for HA, not a HA controller. HA calls HPC's endpoints; HPC does not call HA back. This is the correct direction — it avoids the LLAT problem entirely.
-- Do not implement outbound HA calls in v1.3. If bi-directional sync is needed in a future milestone, use webhooks (HA pushes to HPC's webhook) rather than HPC polling HA.
-- If a LLAT is ever stored, put it in an environment variable (`HA_TOKEN`), not in the database.
-
-**Warning signs:**
-- `ha_config` table appears in `database.py` with a `token` or `api_key` column.
-- Backend code contains `httpx.get("http://homeassistant.local:8123/api/states/...")` with a bearer token.
-
-**Phase to address:**
-Home Assistant endpoints phase. Establish the integration direction (HA calls HPC, not the reverse) as an explicit design decision before writing any code.
-
----
-
-### Pitfall P1: Entertainment Zone Persistence Bug — Dropdown Initialized From Stale React State, Not From Backend
-
-**What goes wrong:**
-The zone/config dropdown (which entertainment configuration is selected) initializes from React component state or Zustand store. On page reload, the store re-initializes to its defaults (e.g., `selectedConfigId: null`). The actual streaming state — which config the backend is currently streaming to — is never fetched on mount. Result: user reloads, dropdown shows "None selected," but streaming is still active on the backend. The start/stop button is in an incorrect state.
-
-The `useStatusStore` in the codebase stores `isStreaming: false` as a default. On WebSocket reconnect it gets updated, but the `selectedConfigId` (whichever config was streaming) is never restored.
-
-**Why it happens:**
-The WebSocket `ws/status` pushes streaming state (`isStreaming`, `fps`, etc.) but does not push `config_id`. The frontend has no way to know which config was selected when it reconnects. The config_id is stored in `StreamingService._config_id` on the backend but never exposed via a REST endpoint.
-
-**How to avoid:**
-- Add `GET /api/capture/status` that returns `{"state": "streaming"|"idle", "config_id": "...|null"}`.
-- On app mount and WebSocket reconnect, call this endpoint and initialize the Zustand store from it.
-- Do not persist `selectedConfigId` to localStorage — derive it from backend state, not from browser storage. localStorage can be stale if the user stopped streaming from another tab or directly via API.
-
-**Warning signs:**
-- Reload the page while streaming; the "Start Streaming" button is available instead of "Stop Streaming."
-- The dropdown shows the last-selected config from before the reload only if localStorage persists it — but stopping from another session makes this wrong.
-- Backend logs show `streaming_service.state = streaming` but frontend shows `isStreaming = false`.
-
-**Phase to address:**
-Zone persistence bug fix phase. Add `GET /api/capture/status` before touching any frontend dropdown code.
-
----
-
-### Pitfall P2: Zustand Persist Middleware Writes selectedConfig to localStorage — Diverges From Backend Truth
-
-**What goes wrong:**
-Using `zustand/middleware/persist` on `useStatusStore` or a config store to remember the selected entertainment config across reloads appears to solve the persistence bug. It does not: the persisted value reflects the last UI selection, not the last backend state. If the user stops streaming from the HA integration, from the CLI, or from Docker restart, localStorage still says "streaming to config XYZ" and the UI shows the wrong state.
-
-**Why it happens:**
-Zustand persist is well-documented and easy to add. Developers reach for it as the obvious "persist across reload" solution without considering that this data has an authoritative backend source.
-
-**How to avoid:**
-- Never use `persist` for streaming state or selected config. These are derived from backend state.
-- `persist` is only appropriate for pure UI preferences (e.g., theme, panel layout) that have no backend equivalent.
-- Initialize streaming state from `GET /api/capture/status` on mount. Update it from the WebSocket. Never store it in localStorage.
-
-**Warning signs:**
-- `localStorage.getItem('hpc-store')` exists in the browser and contains `selectedConfigId`.
-- UI shows "streaming" after Docker container restart (because localStorage says so, not because it is true).
-
-**Phase to address:**
-Zone persistence bug fix phase. Add the guard "is this state derived from backend?" before adding persist to any store key.
-
----
-
-## Technical Debt Patterns (v1.3)
-
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Use DRGB instead of DNRGB | 2 fewer bytes per packet | Silent truncation above 490 LEDs | Never — DNRGB is strictly better |
-| Repurpose `channel_id` for WLED LED indices | No new DB tables | Silent wrong-LED mapping when Hue and WLED co-exist | Never — the types are incompatible |
-| One Konva `Rect` per LED for live preview | Simple declarative React code | Browser freeze at 60 Hz with 300 LEDs | Never in live preview; acceptable for static assignment display |
-| Store HA LLAT in SQLite `ha_config` table | Consistent with Hue credential storage | Exposes full HA admin token in plaintext DB | Never — use env var if LLAT ever needed |
-| `GET /api/ha/start` instead of `POST` | Easier to test in browser | HA automations need extra YAML; HTTP caches may swallow idempotent calls | Acceptable only for internal debugging endpoints, not production |
-| `zustand/persist` for selectedConfigId | Zero backend change needed | UI diverges from backend state after external stop (HA, CLI, restart) | Never — backend is the source of truth |
-| mDNS as only WLED discovery method | "Zero config" UX | Fails in Docker bridge networks; ESP32 mDNS is unreliable | Never as the sole method; combine with manual IP entry |
-
----
-
-## Integration Gotchas (v1.3)
-
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| WLED DRGB UDP | Send DRGB for all strips | Use DNRGB; it handles any length with identical overhead for strips ≤ 490 LEDs |
-| WLED UDP timeout | Copy `timeout = 255` from examples | Use `timeout = 2` for ambient streaming; send explicit stop packet on stream end |
-| WLED JSON API during streaming | Read device state while UDP loop is active | Cache device info at startup; suppress JSON API calls during active streaming |
-| WLED mDNS discovery from Docker | Expect mDNS to work in bridge network | Require `network_mode: host`; offer manual IP as fallback |
-| HA `rest_command` | Use GET endpoints for state mutations | Use POST; return JSON body; document example HA YAML |
-| Entertainment config dropdown | Restore last selection from localStorage | Restore from `GET /api/capture/status` on mount; backend is authoritative |
-
----
-
-## Performance Traps (v1.3)
-
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| One Konva `Rect` per LED, React-rendered | Browser CPU at 100%, UI freezes during live preview | Use single `Konva.Image` backed by offscreen canvas; write `ImageData` per frame | Immediately with ≥100 LEDs at 30+ Hz |
-| UDP `socket.sendto()` called from `asyncio.to_thread()` for every packet | Thread pool exhaustion at 60 Hz with multiple WLED devices | Use `asyncio.DatagramTransport` (native async UDP); or create one thread per WLED device | At 3+ WLED devices at 60 Hz |
-| WLED device list polled on every `/api/wled/devices` call | API latency spikes; WLED JSON API races with streaming | Cache device metadata; invalidate on explicit re-scan | On every page load with ≥2 WLED devices |
-| DNRGB multi-packet send not atomic | Color tearing — first half of strip shows new color, second half shows previous frame | Pre-compute all packets for a frame, send in burst without yield; keep burst < 1ms | Any strip > 489 LEDs with visible color gradients |
-
----
-
-## UX Pitfalls (v1.3)
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| LED range editor shows indices 0–299 | Users count LEDs as 1–300; they paint the wrong range | Display 1-based labels; store 0-based internally; unit-test the boundary |
-| WLED device tab does not warn about JSON API conflict | User opens device tab while streaming and triggers the "stuck strip" bug | Disable the device configuration tab while any WLED device is actively streaming; show inline warning |
-| Stop button leaves strip at last frame color | User thinks the strip is still "on" even after stopping | Send explicit black-out packet on stop; apply timeout = 2 so strip auto-clears |
-| Entertainment config dropdown initializes to "None" on reload | User re-selects config every time they open the UI | Initialize dropdown from `/api/capture/status` on mount |
-| Home Assistant automation silently does nothing if config_id is wrong | User sets up HA automation, it never starts streaming | Return `422` with a clear `{"error": "config_id not found"}` body from start endpoint |
-
----
-
-## "Looks Done But Isn't" Checklist (v1.3)
-
-- [ ] **WLED protocol:** Is DNRGB used (not DRGB)? Check packet byte 0: must be `0x04`, not `0x02`.
-- [ ] **WLED timeout:** Is timeout byte set to 2 (not 0 or 255)? Verify by stopping streaming and confirming strip reverts to preset within 3 seconds.
-- [ ] **Strip > 490 LEDs:** Does streaming a 500-LED strip send two packets per frame? Confirm with a network capture (`tcpdump -i any udp port 21324`).
-- [ ] **JSON API conflict:** Does the WLED device tab suppress config calls while streaming? Open the tab during an active stream and verify no `GET /json` request fires.
-- [ ] **Shared abstraction:** Does any WLED code import from `hue_client.py` or reference `channel_id` directly? Grep for this.
-- [ ] **HA endpoints:** Are all state-mutating HA endpoints POST? Check with `curl -X GET /api/ha/start` — it must return 405.
-- [ ] **Config dropdown on reload:** Reload the page while streaming. Does the dropdown show the correct active config? Does the start/stop button reflect actual backend state?
-- [ ] **LED index convention:** Do the DNRGB packets produce the correct pixel output? Test: paint LEDs 1–10 (user-facing), confirm exactly LEDs 0–9 (zero-based) are lit, not 1–10.
-- [ ] **Canvas performance:** Open the strip editor with 300 LEDs and enable live preview. Does browser CPU stay below 30%?
-
----
-
-## Recovery Strategies (v1.3)
-
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| DRGB used instead of DNRGB, strips > 490 broken | LOW | Swap type byte from `0x02` to `0x04`; add 2-byte index; split packets; no DB change |
-| Hue channel_id reused for WLED indices | HIGH | Add `wled_assignments` table; migrate existing WLED assignments; update `_load_channel_map()` |
-| Konva per-LED Rect performance | MEDIUM | Refactor preview to `Konva.Image` + `ImageData`; existing assignment UI (static) unaffected |
-| selectedConfigId in localStorage diverged | LOW | Remove `persist` middleware key; add `GET /api/capture/status` endpoint; update mount hook |
-| Strip stuck in live mode after JSON API call | LOW | Cycle WLED device power or call `POST /json {"live": false}`; then fix the code path that caused the race |
-| HA endpoint using GET method | LOW | Rename routes to POST; update HA YAML examples in docs; no DB change |
-
----
-
-## Pitfall-to-Phase Mapping (v1.3)
-
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| DRGB 490 LED cap (W1) | WLED UDP sender implementation | Verify with 500-LED test: tcpdump shows 2 UDP packets per frame |
-| UDP timeout wrong value (W2) | WLED UDP sender implementation | Stop streaming; strip reverts to preset within 3s |
-| JSON API conflict during streaming (W3) | WLED device manager + streaming loop | Open device tab while streaming; no JSON API calls fired |
-| mDNS discovery fails in Docker (W4) | WLED device management phase | Discovery scan from inside container finds devices; manual IP entry tested as fallback |
-| Leaky Hue/WLED channel abstraction (W5) | Shared abstraction design — before any implementation | No WLED code references `channel_id` or `light_assignments` table |
-| Paint-on-strip off-by-one (W6) | Paint-on-strip UI phase | Unit test: paint LEDs 1–300, verify 900 bytes of RGB data sent, LED 0 and LED 299 both receive data |
-| Konva 300-Rect render thrash (W7) | Paint-on-strip UI phase | Live preview with 300 LEDs; browser CPU < 30% |
-| HA GET vs POST (H1) | HA endpoints phase | `curl -X GET /api/ha/start` returns 405 |
-| HA LLAT in DB (H2) | HA endpoints phase | Grep `database.py` for `ha_config` table or `token` column; neither must exist |
-| Config dropdown stale on reload (P1) | Zone persistence bug fix phase | Reload while streaming; dropdown and button match backend state |
-| Zustand persist for streaming state (P2) | Zone persistence bug fix phase | `localStorage.getItem('hpc-store')` does not contain `selectedConfigId` or `isStreaming` |
-
----
-
-## Sources (v1.3)
-
-- [WLED UDP Realtime documentation — kno.wled.ge](https://kno.wled.ge/interfaces/udp-realtime/) — DRGB/DNRGB packet format, 490 LED limit, timeout behavior; HIGH confidence
-- [WLED UDP Realtime Control — GitHub Wiki](https://github.com/Aircoookie/WLED/wiki/UDP-Realtime-Control) — byte-level packet specification; HIGH confidence
-- [WLED DDP documentation — kno.wled.ge](https://kno.wled.ge/interfaces/ddp/) — DDP port 4048, timecode note; HIGH confidence
-- [WLED GitHub issue #3589 — JSON API stuck after UDP realtime](https://github.com/wled/WLED/issues/3589) — confirmed JSON API/UDP race condition; HIGH confidence (issue closed, marked fixed in master)
-- [WLED GitHub issue #2356 — WLED times out despite live mode](https://github.com/wled-dev/WLED/issues/2356) — timeout behavior edge case; MEDIUM confidence
-- [WLED GitHub issue #3770 — No mDNS from ESP32](https://github.com/Aircoookie/WLED/issues/3770) — ESP32-specific mDNS unreliability; MEDIUM confidence
-- [WLED GitHub issue #1768 — Realtime brightness option](https://github.com/wled/WLED/issues/1768) — segment brightness during realtime mode; MEDIUM confidence
-- [Konva.js performance tips — konvajs.org](https://konvajs.org/docs/performance/All_Performance_Tips.html) — layer caching, image nodes vs. shape nodes; HIGH confidence
-- [FastAPI race conditions — datasciocean.com](https://datasciocean.com/en/other/fastapi-race-condition/) — shared mutable state in asyncio; MEDIUM confidence
-- [Home Assistant REST API developer docs — developers.home-assistant.io](https://developers.home-assistant.io/docs/api/rest/) — authentication, endpoint format; HIGH confidence
-- [Home Assistant RESTful Command integration](https://www.home-assistant.io/integrations/rest_command/) — POST method requirement for `rest_command`; HIGH confidence
-- [Zustand persist discussion — pmndrs/zustand #1569](https://github.com/pmndrs/zustand/discussions/1569) — persist middleware behavior on reload; MEDIUM confidence
-- Project codebase: `streaming_service.py` — `_config_id` private field not exposed via API; `useStatusStore.ts` — no `selectedConfigId` key; direct codebase analysis
-
----
-*Pitfalls research for: WLED UDP streaming, HA control, LED strip UI, channel abstraction, zone persistence — HuePictureControl v1.3*
-*Researched: 2026-04-14*
+### Authoritative
+- [Home Assistant MQTT integration docs](https://www.home-assistant.io/integrations/mqtt/) — discovery topic format, retention, birth message, availability_mode (HIGH)
+- [Home Assistant MQTT Sensor docs](https://www.home-assistant.io/integrations/sensor.mqtt/) — required fields, unique_id, json_attributes_topic, entity_category (HIGH)
+- [Zigbee2MQTT availability docs](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html) — proven LWT + birth pattern (HIGH)
+- [aiomqtt PyPI](https://pypi.org/project/aiomqtt/) — recommended asyncio client, v2.4.0 (May 2025) (HIGH)
+- [paho-mqtt docs](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html) — outgoing message retention semantics (HIGH)
+
+### Real-world bug reports
+- [home-assistant/core #157763 — object_id deprecation in 2026.4](https://github.com/home-assistant/core/issues/157763) (HIGH)
+- [home-assistant/core #97450 — duplicate entity IDs from MQTT](https://github.com/home-assistant/core/issues/97450) (HIGH)
+- [Koenkk/zigbee2mqtt #28728 — 2025.10 deprecation warnings](https://github.com/Koenkk/zigbee2mqtt/issues/28728) (HIGH)
+- [Koenkk/zigbee2mqtt #27458 — birth message rediscovery missing](https://github.com/Koenkk/zigbee2mqtt/issues/27458) (HIGH)
+- [mrlt8/docker-wyze-bridge #920 — MQTT discovery should be re-sent on HA birth](https://github.com/mrlt8/docker-wyze-bridge/issues/920) (HIGH)
+- [eclipse-paho/paho.mqtt.python #331 — reconnect takes >40s](https://github.com/eclipse-paho/paho.mqtt.python/issues/331) (HIGH)
+- [eclipse-paho/paho.mqtt.python #276 — reconnect fails under heavy QoS 2](https://github.com/eclipse-paho/paho.mqtt.python/issues/276) (HIGH)
+
+### Community guidance
+- [Community: MQTT Discovery: to retain or not?](https://community.home-assistant.io/t/mqtt-discovery-to-retain-or-not/310734) (MEDIUM)
+- [Community: MQTT object_id vs default_entity_id warning](https://community.home-assistant.io/t/mqtt-object-id-vs-default-entity-id-warning/937665) (MEDIUM)
+- [Community: How to prevent NULL values in template sensor](https://community.home-assistant.io/t/how-to-prevent-null-values-in-template-sensor/98207) (MEDIUM)
+- [Community: Duplicate entities for MQTT and other integrations](https://community.home-assistant.io/t/duplicate-entities-for-mqtt-and-other-integrations/747021) (MEDIUM)
+
+### Internal references
+- `.planning/phases/18-home-assistant-control-endpoints/18-RESEARCH.md` §Common Pitfalls (Pitfalls 1–6) — REST endpoint pitfalls, build on these (HIGH)
+- `.planning/phases/17-wled-backend-and-streaming/17-CONTEXT.md` D-16 — `_metrics["wled_devices"]` shape (HIGH)
+- `Backend/services/status_broadcaster.py:101` — current `_send_to_all` sequential loop (HIGH)
+- `Backend/routers/ha.py:185-263` — current curated status assembly (HIGH)
+- `CLAUDE.md` "What NOT to Use" section — pre-existing build-not-buy stance applies to MQTT layer (HIGH)

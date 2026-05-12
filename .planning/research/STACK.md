@@ -1,200 +1,120 @@
-# Stack Research
+# Stack Research — v1.3 Home Assistant Integration Polish
 
-**Domain:** Real-time ambient lighting — WLED UDP streaming, Home Assistant REST control, LED strip paint UI (v1.3)
-**Researched:** 2026-04-14
-**Confidence:** HIGH for WLED protocols (official docs verified); HIGH for HA REST API; MEDIUM for zeroconf/mDNS in Docker bridge; HIGH for frontend (Konva.js already in use)
+**Domain:** Home Assistant integration for an existing FastAPI service
+**Researched:** 2026-05-12
+**Confidence:** HIGH
+**Scope:** ONLY new capabilities for v1.3 (MQTT discovery, YAML docs, HA-status WebSocket push, per-device WLED health). v1.0–v1.2 stack is fixed — see "Already Have" below.
 
----
+## TL;DR
 
-## Context: What Already Exists (Do Not Re-Research)
+| New capability | Recommended addition | Verdict |
+|----------------|----------------------|---------|
+| MQTT auto-discovery publisher | **`aiomqtt>=2.5,<3`** (BSD 3-clause; wraps `paho-mqtt`) | Add |
+| HA discovery topic/payload formatting | **stdlib `json` + Pydantic models** (already present) | No new dep |
+| WebSocket push for HA status | **FastAPI WebSocket + existing `StatusBroadcaster`** | No new dep |
+| Per-device WLED health in `/api/ha/status` | **Existing `httpx` + WLED `/json/info`** | No new dep |
+| YAML snippet docs | **Plain `.md` files in `docs/home-assistant/`** | No new dep |
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Backend framework | FastAPI | >=0.115 |
-| Async DB | aiosqlite | >=0.20 |
-| HTTP client | httpx | >=0.27 |
-| Frame capture (Linux) | Custom V4L2 ctypes/ioctl + mmap | in `capture_v4l2.py` |
-| Frame decode | opencv-python-headless | >=4.10 |
-| Hue streaming | hue-entertainment-pykit | 0.9.4 |
-| Python | 3.12 (pinned) | 3.12 |
-| Frontend | React 19 + TypeScript + Konva.js + Zustand | — |
-| Device enumeration | linuxpy | >=0.24 (added in v1.1) |
+**One library added.** Everything else is recomposition of code already in the tree.
 
 ---
 
 ## Recommended Stack Additions
 
-### Core Technologies (Backend — New)
+### Core Technology (Backend — New)
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| Python `socket` stdlib (UDP) | stdlib (3.12) | WLED DRGB/DNRGB realtime packet sending | No library needed. WLED UDP realtime is a 2-byte header + raw RGB bytes over `SOCK_DGRAM`. This codebase already builds protocols from scratch (see `capture_v4l2.py`, `hue_client.py`). One `WledStreamer` class with `socket.socket(AF_INET, SOCK_DGRAM)` is the complete implementation — ~30 lines of Python. |
-| `zeroconf` | `>=0.148,<2` | WLED device discovery via mDNS (`_wled._tcp.local.`) | Pure Python, no system Bonjour/Avahi/D-Bus dependency. WLED devices advertise as `_wled._tcp.local.`; `AsyncServiceBrowser` integrates with the existing asyncio event loop. Version 0.148.0 released Oct 2025. Python 3.9+ compatible, no conflict with existing requirements. See Docker caveat below — only useful if backend uses `network_mode: host`. |
-| `httpx` (already present) | `>=0.27` | WLED JSON API queries + Home Assistant REST API | Already a dependency. WLED's `GET /json/info` returns `leds.count` (needed at device registration for strip UI). HA REST API uses the same bearer-token HTTP pattern. Zero new libraries needed for either integration. |
+| `aiomqtt` | `>=2.5,<3` | Publish HA MQTT discovery configs + state/availability updates from inside the FastAPI event loop | (1) **Idiomatic asyncio** — `async with aiomqtt.Client(...) as client:` plus `await client.publish(...)` slots directly into the existing `lifespan` context manager pattern used in `Backend/main.py` for `db`, `registry`, `broadcaster`, `coordinator`. (2) **Thin wrapper, not a fork** — internally uses Eclipse Paho's `paho-mqtt 2.1.0` (EPL-2.0/BSD-3-Clause) as the protocol engine, so we inherit Mosquitto/EMQX/HiveMQ compatibility for free. (3) **No callback hell** — pure async iterators for incoming messages, exceptions for errors. Aligns with how `services/status_broadcaster.py` already uses asyncio queues. (4) **MQTT 5 + 3.1.1** support — needed because some HA Mosquitto deployments still run 3.1.1 defaults. (5) **License-compatible** — BSD-3-Clause stacks cleanly with HuePictureControl's existing deps (FastAPI/MIT, paho/EPL-2.0 or BSD-3, OpenCV/Apache-2.0). |
 
-### Core Technologies (Frontend — New)
+### Supporting Libraries (Backend — All Already Present)
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| `react-konva` (already in use) | current | Paint-on-strip LED range selector UI | Already the established canvas primitive. The strip UI is a horizontal canvas showing one cell per LED (or one rect per zone range). Click-drag paints a zone color assignment. Same pointer event model as the existing freeform region editor — no new library needed. |
+| Library | Already at version | Purpose for v1.3 |
+|---------|--------------------|------------------|
+| `httpx` | `>=0.27,<1` | Per-device WLED health probe — `GET http://<wled-ip>/json/info` returns `live`, `leds.count`, `ver`, `name`, `fxname`. Same pattern as Phase 17's WLED registration code. Refreshed lazily inside `/api/ha/status` with a short `httpx.Timeout(connect=0.5, read=0.5)` so a down WLED never blocks the status endpoint (Pitfall 4 in `routers/ha.py` already established this convention). |
+| `fastapi` WebSocket | `>=0.115,<1` (via Starlette) | New `WS /ws/ha-status` route. Use the existing `StatusBroadcaster` pattern from `routers/streaming_ws.py` verbatim — register a second connection set, push the same payload `_build_status_response()` returns today, debounce to ~5 Hz (matches `StreamingCoordinator` metric cadence). Zero new libs. |
+| `pydantic` | `>=2.10,<3` | New `HaDiscoveryPayload`, `WledHealthEntry` models. Validation + JSON serialization for both MQTT payloads and `/api/ha/status` extensions. |
+| `aiosqlite` | `>=0.20,<1` | Persist MQTT broker config in a new `mqtt_config` table (host, port, username, password_ref, base_topic, discovery_prefix, last_published_at). Single-row table consistent with `bridge_config` and `ha_state`. |
+| `python-multipart`, `uvicorn[standard]`, `pytest`, `pytest-asyncio`, `opencv-python-headless`, `zeroconf`, `hue-entertainment-pykit` | as pinned in `requirements.txt` | Untouched. No interaction with v1.3 surface. |
+
+### Frontend Additions
+
+**None.** v1.3 surfaces are HA-facing (MQTT topics + new WS endpoint) plus markdown docs. No new UI is in scope — only a thin settings card to enter MQTT broker host/port/credentials, which renders with existing `shadcn/ui` `Input` + `Button` + the existing Zustand store pattern.
+
+### Documentation Tooling
+
+| Tool | Purpose | Notes |
+|------|---------|-------|
+| Plain Markdown in `docs/home-assistant/` | Ship `rest_command.yaml`, `sensors.yaml`, `input_select.yaml`, `automations.yaml` examples + a top-level `README.md` | No static-site generator, no Sphinx, no MkDocs. The project doesn't publish docs anywhere; it's a local LAN tool. Markdown next to the code is the lowest-friction format and renders correctly on GitHub if the repo ever gets pushed there. |
 
 ---
 
-## Protocol Specifications (Build-Not-Buy)
+## Already Have (Do Not Re-Research)
 
-### WLED UDP Realtime — Packet Formats
+The v1.0–v1.2 stack is the foundation v1.3 sits on. None of these are revisited.
 
-**Port:** 21324 (default, user-configurable per device; read from `/json/info` or let user override when adding device)
-
-**DRGB (protocol byte = 2) — up to 490 LEDs:**
-```
-Byte 0:   0x02            protocol = DRGB
-Byte 1:   0x02            timeout seconds before WLED returns to normal mode (use 2)
-Bytes 2+: R G B R G B ... 3 bytes per LED, from LED 0 upward
-```
-Use DRGB for strips with <= 490 LEDs. One packet per frame. Max UDP payload = 490 * 3 + 2 = 1472 bytes (fits in one Ethernet MTU).
-
-**DNRGB (protocol byte = 4) — unlimited LEDs via chunked packets:**
-```
-Byte 0:   0x04            protocol = DNRGB
-Byte 1:   0x02            timeout seconds
-Byte 2:   start >> 8      high byte of 16-bit starting LED index
-Byte 3:   start & 0xFF    low byte of starting LED index
-Bytes 4+: R G B R G B ... 3 bytes per LED from start_index
-```
-Use DNRGB for strips > 490 LEDs. Send multiple packets per frame: packet 0 starts at 0, packet 1 starts at 490, etc. A 300-LED strip needs one DRGB packet; a 1200-LED strip needs three DNRGB packets.
-
-**Decision rule for implementation:**
-```python
-if led_count <= 490:
-    use DRGB (single packet)
-else:
-    use DNRGB (chunked, 490 LEDs per packet)
-```
-
-**Timeout semantics:** byte 1 = seconds WLED waits after last packet before reverting to its own effects. Use `2` during streaming. Send at ~25–50 Hz to keep WLED in realtime mode. WLED handles up to 15ms delivery intervals on ESP32 without issue.
-
-### WLED JSON API (Device Registration)
-
-```
-GET  http://[WLED_IP]/json/info
-     → {"leds": {"count": 300}, "name": "TV Strip", "ver": "0.14.x", ...}
-
-POST http://[WLED_IP]/json/state
-     Body: {"on": true}
-     → confirmation of state
-```
-
-Called once at device add time to read `leds.count` and `name`. Not called per-frame. Reachable via existing `httpx.AsyncClient` already used in `hue_client.py`.
-
-### Home Assistant REST API (Inbound — HA Calls HuePictureControl)
-
-The HA integration goes in one direction: **HA calls HuePictureControl via its `rest_command` integration**. HuePictureControl does NOT call HA outbound. This means:
-
-- No HA token stored in HuePictureControl config
-- No outbound firewall rules needed
-- HA user configures `rest_command:` in their `configuration.yaml` pointing at `http://[HPC_HOST]:8001/api/ha/...`
-- HuePictureControl exposes new unauthenticated REST endpoints (consistent with existing no-auth design)
-
-Example HA `configuration.yaml`:
-```yaml
-rest_command:
-  hpc_start:
-    url: "http://192.168.178.x:8001/api/ha/start"
-    method: POST
-    content_type: "application/json"
-    payload: '{"config_id": "{{ config_id }}"}'
-  hpc_stop:
-    url: "http://192.168.178.x:8001/api/ha/stop"
-    method: POST
-```
-
-New HuePictureControl endpoints:
-```
-POST /api/ha/start         Body: {"config_id": "..."}  — start streaming
-POST /api/ha/stop          Body: {}                    — stop streaming
-PUT  /api/ha/camera        Body: {"stable_id": "..."}  — switch active camera
-PUT  /api/ha/zone          Body: {"config_id": "..."}  — switch entertainment zone
-```
+| Layer | Technology | Version | Used For (in v1.3) |
+|-------|-----------|---------|---------------------|
+| Web framework | `fastapi` | `>=0.115,<1` | Existing routers + new `/ws/ha-status` |
+| ASGI server | `uvicorn[standard]` | `>=0.32,<1` | Hosts the new WS endpoint; existing `--reload` dev workflow unchanged |
+| Async DB | `aiosqlite` | `>=0.20,<1` | New `mqtt_config` table |
+| HTTP client | `httpx` | `>=0.27,<1` | WLED `/json/info` health probes for `/api/ha/status` |
+| HDMI capture (Linux V4L2) | custom ctypes/ioctl + mmap in `services/capture_v4l2.py` | n/a | Untouched |
+| Frame decode | `opencv-python-headless` | `>=4.10,<5` | Untouched |
+| Hue streaming | `hue-entertainment-pykit` | `==0.9.4` | Untouched |
+| Python runtime | `3.12` (pinned — `hue-entertainment-pykit` incompatible with 3.13+) | 3.12 | Untouched |
+| Frontend | React 19 + TypeScript + Konva.js + Zustand + shadcn/ui | — | New settings card only |
+| Device enumeration | `linuxpy` | `>=0.24` | Untouched |
+| Pydantic | `pydantic` | `>=2.10,<3` | New discovery/health models |
+| WS infra | `StatusBroadcaster` in `services/status_broadcaster.py` | n/a | Pattern copied for HA status fan-out |
+| mDNS | `zeroconf` | `>=0.148,<2` | Untouched; v1.3 does not auto-discover Mosquitto |
 
 ---
 
 ## Integration Points with Existing Code
 
-### New `WledStreamingService` (sibling to `StreamingService`)
+### `Backend/main.py` — `lifespan` extension
 
-Do NOT extend the existing `StreamingService`. The protocols are fundamentally different:
-
-| Aspect | Hue (existing) | WLED (new) |
-|--------|---------------|------------|
-| Transport | DTLS/UDP via `hue-entertainment-pykit` | Raw UDP `socket.SOCK_DGRAM` |
-| Color space | xyb (CIE 1931) | Raw RGB bytes |
-| Activation | REST call to Bridge required | None — UDP is stateless |
-| Reconnect | Bridge socket re-activate | Reconnect UDP socket (trivial) |
-| Config | Entertainment config UUID | WLED device IP + LED count |
-
-`WledStreamingService` shares the same lifecycle contract as `StreamingService` (`start()`/`stop()`/state machine) but is independent. Both services run concurrently on the same frame from `CaptureRegistry.acquire()`.
-
-Shared logic (color extraction, polygon masks) should move to a utility module both call.
-
-### `database.py` — Three New Tables
-
-```sql
--- WLED device registry
-CREATE TABLE IF NOT EXISTS wled_devices (
-    id       TEXT PRIMARY KEY,   -- UUID generated at add time
-    name     TEXT NOT NULL,      -- from /json/info "name"
-    ip       TEXT NOT NULL UNIQUE,
-    port     INTEGER NOT NULL DEFAULT 21324,
-    led_count INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
--- LED range → canvas region mapping for each WLED device
-CREATE TABLE IF NOT EXISTS wled_assignments (
-    wled_device_id TEXT NOT NULL,  -- FK → wled_devices.id
-    region_id      TEXT NOT NULL,  -- FK → regions.id
-    led_start      INTEGER NOT NULL,  -- 0-indexed, inclusive
-    led_end        INTEGER NOT NULL,  -- 0-indexed, inclusive
-    PRIMARY KEY (wled_device_id, region_id)
-);
-
--- Persist selected entertainment config per camera (bug fix)
-CREATE TABLE IF NOT EXISTS entertainment_config_selections (
-    camera_stable_id       TEXT PRIMARY KEY,
-    entertainment_config_id TEXT NOT NULL,
-    updated_at             TEXT NOT NULL
-);
-```
-
-All use the existing `ALTER TABLE ... ADD COLUMN` migration pattern for additive schema changes.
-
-### `main.py` — App State Addition
+The aiomqtt client lives in `app.state` exactly like `db`, `coordinator`, and `broadcaster` do today:
 
 ```python
-from services.wled_streaming_service import WledStreamingService
+# Startup (after broadcaster/coordinator init)
+mqtt_cfg = await load_mqtt_config(db)  # may return None — feature off
+if mqtt_cfg and mqtt_cfg.enabled:
+    publisher = HaDiscoveryPublisher(mqtt_cfg, broadcaster=broadcaster)
+    await publisher.start()  # connects, publishes discovery, subscribes to homeassistant/status
+    app.state.ha_mqtt = publisher
+else:
+    app.state.ha_mqtt = None
 
-wled_streaming = WledStreamingService(db=db, capture_registry=registry, broadcaster=broadcaster)
-app.state.wled_streaming = wled_streaming
+yield
+
+# Shutdown — BEFORE coordinator.stop() so LWT/availability "offline" lands first
+if app.state.ha_mqtt is not None:
+    await app.state.ha_mqtt.stop()
 ```
 
-Follows the exact `app.state.streaming` pattern already established.
+The publisher owns one persistent `aiomqtt.Client` for the app lifetime. It subscribes to `homeassistant/status` to re-publish discovery on HA reboot (HA birth message convention), and subscribes to `<base>/cmd/start`, `<base>/cmd/stop`, etc. as the MQTT analogues of the existing `/api/ha/start`, `/api/ha/stop` REST endpoints.
 
-### New Router Files
+### `Backend/routers/ha.py` — additions, no rewrites
 
-- `routers/wled.py` — CRUD for WLED devices, start/stop WLED streaming, paint assignments (`/api/wled/...`)
-- `routers/ha.py` — HA control endpoints (`/api/ha/start`, `/api/ha/stop`, `/api/ha/camera`, `/api/ha/zone`)
-- No changes to `routers/capture.py`, `routers/hue.py`, or `routers/regions.py`
+- Extend `HaStatusResponse` with `wled_devices: list[WledHealthEntry] | None = None`. `response_model_exclude_none=True` is already set on the route, so existing HA installations without WLED don't see the field.
+- `_build_status_response()` gains a parallel `asyncio.gather()` of WLED `/json/info` probes (one `httpx.AsyncClient` reused, timeout 500ms each). Failures degrade to `online=False` per the existing Pitfall 4 convention — never raises.
 
----
+### New router: `Backend/routers/ha_ws.py`
 
-## Supporting Libraries
+Mirrors `routers/streaming_ws.py` line-for-line. The `StatusBroadcaster` already supports multiple connection groups; add a `connect_ha()` / `disconnect_ha()` pair that fans out the curated `HaStatusResponse` shape (not the raw metrics dict). Push trigger: any time `_build_status_response()` would change — bridge-pair events, coordinator state transitions, WLED health changes.
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| `zeroconf` | `>=0.148,<2` | WLED auto-discovery on LAN via `_wled._tcp.local.` | Only during user-initiated device scan in the WLED tab. `AsyncServiceBrowser` with 3-second timeout. Not continuous background browsing. Only useful with `network_mode: host` in Docker — see caveat. |
-| Python `socket` stdlib | stdlib | WLED UDP DRGB/DNRGB packet send | Per-frame during streaming. One `SOCK_DGRAM` socket per WLED device created at stream start, reused for the session, closed on stop. |
-| `httpx` (existing) | `>=0.27` | WLED `/json/info` fetch, HA REST calls | At device registration and on-demand refresh. Not per-frame. |
+### New service: `Backend/services/ha_mqtt.py`
+
+~250 LOC class `HaDiscoveryPublisher`:
+- `start()` — connect, publish device-bundle discovery topic (`homeassistant/device/huepicturecontrol_<host>/config`) with `switch.streaming`, `sensor.state`, `sensor.fps`, `sensor.latency_ms`, `select.zone`, `select.camera` components in a single payload, then publish initial state + `availability: online`.
+- `_state_loop()` — async task: `async for change in broadcaster.subscribe_ha_changes(): await client.publish(...)`.
+- `_command_loop()` — async task: `async for msg in client.messages: await dispatch(msg.topic, msg.payload)`. Topic-to-handler map calls the same internal logic as the REST handlers in `routers/ha.py` (refactor those handlers to call shared helpers — already partially done; `_build_status_response` is the precedent).
+- `_on_birth()` — when `homeassistant/status == "online"` arrives, re-publish discovery + state.
+- `stop()` — publish `availability: offline` (one shot, retain=true is fine here), then exit the `async with` block.
+
+LWT (Last Will and Testament) is set in the `aiomqtt.Client(...)` constructor with `will=aiomqtt.Will(topic=f"{base}/availability", payload="offline", qos=1, retain=True)` — handled entirely by `paho-mqtt`'s wire-level setup; no extra library.
 
 ---
 
@@ -202,13 +122,14 @@ Follows the exact `app.state.streaming` pattern already established.
 
 | Recommended | Alternative | Why Not |
 |-------------|-------------|---------|
-| Raw `socket` stdlib for WLED UDP | `python-wled` (PyPI v0.21.0) | `python-wled` wraps the JSON API only — no UDP realtime protocol support. Confirmed from source. Adding a 3+ dependency library for HTTP calls already covered by `httpx` is unjustified. |
-| DNRGB for strips > 490 LEDs | DDP protocol (port 4048) | DDP has a 10-byte header with push IDs, flags, and offset fields. WLED explicitly states it ignores optional timecodes in DDP headers. DNRGB achieves the same segmented addressing with a 4-byte header. Lower complexity, same result for this use case. |
-| DRGB for strips <= 490 LEDs | WARLS (protocol byte = 1) | WARLS has a 255 LED limit and requires per-LED index bytes. DRGB covers 490 LEDs, has a simpler packet format (no indices), and is the recommended WLED realtime protocol for full-strip updates. |
-| HA calls HuePictureControl (`rest_command`) | HuePictureControl calls HA REST API | Storing an HA long-lived access token in HuePictureControl adds a configuration burden and an outbound dependency. `rest_command` is purpose-built for HA→external service control. Simpler, no secrets stored in HPC. |
-| Sibling `WledStreamingService` class | Extend `StreamingService` with WLED support | Extending entangles DTLS and UDP codepaths, making each harder to test. `StreamingService` has Hue-specific activation/deactivation; WLED has none. Same lifecycle interface, separate classes. |
-| `react-konva` (existing) for strip paint UI | Dedicated LED strip React component | No suitable package exists for this specific interaction pattern. The Konva canvas already handles pointer drag events and zone coloring in this project. A custom component using `Rect` nodes per LED range is ~150 lines of TSX. |
-| Manual IP entry as primary discovery | mDNS-only discovery | mDNS multicast does not propagate through Docker bridge networks. Manual IP entry works reliably regardless of Docker network mode. |
+| `aiomqtt>=2.5,<3` | **`paho-mqtt` raw** | `paho-mqtt 2.1.0` runs its own thread by default (`loop_start()` spawns a daemon thread) or requires manual `loop()` ticks from an asyncio task — neither matches the rest of HPC's pure-asyncio pattern. The `paho.mqtt.python/examples/loop_asyncio.py` example exists but is rough: bare `add_reader`/`add_writer` integration with no built-in reconnect-with-backoff, no async iteration over messages, manual queue plumbing. `aiomqtt` is ~1.5k LOC wrapping paho and is the path Home Assistant Core itself takes for its MQTT integration. Choosing `aiomqtt` over raw paho saves ~200 LOC of glue code we'd otherwise rewrite. |
+| `aiomqtt>=2.5,<3` | **`gmqtt 0.7.0`** | Pure-Python MQTT 5 client with native asyncio API. Verdict: **inactive** per Snyk's package-health analysis (no PR activity in the last month, low repo cadence, only released versions occasionally in the past year). Wialon maintains it for their internal product. For a feature that touches the LWT/birth/discovery flow that HA users will exercise hard, betting on an inactive client is a risk. `aiomqtt` ships releases monthly (2.5.0 Jan 2026, 2.5.1 Mar 2026, 3.0.0a1 Apr 2026) and is the de-facto Python asyncio MQTT client today. |
+| `aiomqtt>=2.5,<3` | **`fastapi-mqtt`** | Wraps `gmqtt`. Inherits gmqtt's maintenance risk. Adds a FastAPI-specific API surface (decorators, dependency providers) that's nice but ties HA discovery code to FastAPI lifecycle assumptions. We already manage lifecycle explicitly in `main.py:lifespan`; no extra abstraction needed. |
+| `aiomqtt>=2.5,<3` | **`asyncio-mqtt`** (PyPI predecessor) | Same code base — `asyncio-mqtt` was renamed to `aiomqtt` in 2023 when the project moved namespaces. PyPI `asyncio-mqtt` now redirects/deprecates. Use the new name. |
+| `aiomqtt>=2.5,<3` | **`asyncio-paho`** | Thin asyncio shim over paho. Less idiomatic than aiomqtt (still callback-flavored API surface) and less popular (~150 stars vs aiomqtt ~1.1k). No advantage. |
+| **Markdown in `docs/home-assistant/`** | **MkDocs / Sphinx site** | The user explicitly scopes this as a local LAN tool with no public website. A static-site generator would add CI complexity for zero benefit — the YAML snippets ship as text users copy/paste into their own `configuration.yaml`. |
+| **`StatusBroadcaster` second channel** | **`websockets` library directly** | FastAPI's WebSocket support is Starlette-based; we'd be reinventing what already works in `routers/streaming_ws.py`. Plus `websockets` would mean a separate event-loop client list to track. |
+| **Extend `HaStatusResponse`** | **Separate `/api/ha/wled` endpoint** | Each HA REST poll cost is one HTTP round-trip. Adding a second endpoint forces HA users to make two `rest_command:` definitions or two `sensor:` polls instead of one. Field-additive on the existing payload is strictly better. |
 
 ---
 
@@ -216,26 +137,55 @@ Follows the exact `app.state.streaming` pattern already established.
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `python-wled` (PyPI) | JSON API only, no UDP realtime streaming. Adds indirect dependencies for functionality `httpx` already covers. | `httpx` for JSON API; raw `socket` for UDP |
-| DDP over DNRGB | More complex header, no benefit for this use case. WLED ignores optional DDP timecodes anyway. | DNRGB chunked packets for > 490 LEDs |
-| WARLS protocol (byte 0 = 1) | 255 LED limit. Superseded by DRGB/DNRGB. Most WS2812B strips are 300–1200 LEDs. | DRGB or DNRGB |
-| Polling `/json/state` per frame | HTTP polling destroys latency. WLED does not confirm UDP receipt. | Fire-and-forget UDP only during streaming |
-| `zeroconf` with Docker bridge network mode | Multicast does not propagate through Docker bridge. `AsyncServiceBrowser` will find zero devices. | Manual IP entry; mDNS only if backend switches to `network_mode: host` |
-| Storing HA long-lived access token in HuePictureControl | Adds secret management burden; violates no-auth local tool design. | HA calls HPC via `rest_command`; HPC exposes unauthenticated control endpoints |
-| New camera manager service / process for WLED camera | The existing `CaptureRegistry` pattern is sufficient. WLED streaming uses the same frame as Hue streaming — no second capture needed for the same device. | Extend `app.state` with `wled_streaming` that calls `registry.acquire()` on the same device path |
+| `homeassistant-api` (PyPI, GrandMoff100) | Wraps **HA's outbound REST/WebSocket API** — i.e., HPC would call HA to read entity states and call services. That's the inverse of v1.3's design (HA calls HPC; HPC publishes MQTT discovery so HA pulls it). Would also force storing an HA long-lived access token in HPC, violating the no-auth-no-secrets boundary already documented in v1.2's STACK.md "What NOT to Use" line. | (a) HA's MQTT integration consumes our retained discovery messages; (b) HA's `rest_command:` calls our existing `/api/ha/*` endpoints. Both are pull-from-HA, not push-from-HPC. |
+| `hass-client` / `hassapi` / `HomeAssistant API` | Same reason as above — all are HA outbound API wrappers, not "be a Home Assistant integration" libraries. None of them help us publish HA-conformant MQTT topics. | Direct `aiomqtt.Client.publish(topic, payload)` of HA discovery JSON. |
+| `python-homeassistant` | Does not exist as a publicly maintained package on PyPI. The name occasionally appears in search results for `homeassistant` (the Home Assistant Core distribution itself, which would pull in 100+ MB of irrelevant Core dependencies). | Not applicable — there is nothing here to install. |
+| `homeassistant` (HA Core itself, PyPI) | This is the entire HA Core supervisor/runtime as a PyPI package. Pulls hundreds of dependencies. Designed to be a HA install, not a library. | Direct MQTT discovery message publishing with `aiomqtt`. |
+| `paho-mqtt` raw threading mode (`loop_start()`) | Spawns a non-daemon background thread that runs paho's own select() loop. Cleanup ordering against asyncio shutdown is fragile (LWT may or may not flush). | `aiomqtt` async context manager — clean `async with` shutdown publishes the offline availability message reliably. |
+| Retained discovery messages without LWT planning | HA docs explicitly warn: "retained messages can create ghost entities that keep coming back" if HPC ever changes its discovery prefix or device id. | Pair `retain=True` discovery with a documented `unique_id` per entity that **never changes** for the install (suggest `huepicturecontrol_<sha256-of-hostname-or-machine-id>[:12]`). Re-publish on `homeassistant/status == "online"` birth message. |
+| `mqtt://broker:1883` insecure auth over WAN | Out of scope; HPC is LAN-only by design. | Document MQTT username/password in plain HPC config; explicitly note in the YAML doc that this is for trusted LAN brokers only — same trust boundary as the rest of HPC. |
+| Static-site doc generator (Sphinx, MkDocs, Docusaurus) | No public docs site exists for this project. Adds CI/build complexity. | Plain `.md` files alongside the YAML snippets. GitHub renders them natively if/when the repo is published. |
+| Background reconnect loop hand-rolled in HPC | `aiomqtt 2.x` does NOT auto-reconnect — the `async with Client(...)` block exits on disconnect by design. Hand-rolling a `while True: try: async with Client(...): ... except MqttError: await asyncio.sleep(backoff)` is the documented pattern in `aiomqtt`'s "Alongside FastAPI" guide. | Use the documented `aiomqtt` reconnect loop pattern verbatim — ~10 lines, well-trodden. Don't import a "reconnect helper" library. |
 
 ---
 
-## Docker / Network Considerations
+## MQTT 5.0 vs 3.1.1 Decision
 
-**mDNS in Docker bridge mode (current `docker-compose.yaml`):** Multicast does NOT propagate through Docker bridge networks. `zeroconf.AsyncServiceBrowser` will find zero WLED devices. Options:
+**Recommendation:** **Connect with MQTT 5.0 (`aiomqtt.Client(..., protocol=aiomqtt.ProtocolVersion.V5)`), fall back to 3.1.1 only on connect failure.**
 
-1. **Switch backend to `network_mode: host`** — mDNS works immediately. Removes port mapping syntax (must use `expose:` instead). The Hue DTLS connection and WLED UDP both benefit from host network.
-2. **Manual IP entry only** — Ship v1.3 without mDNS. User enters WLED IP + optional port. `/json/info` verifies the device. Sufficient for home use with static DHCP leases.
+Rationale:
+- Mosquitto 2.x defaults to MQTT 5 since 2020; almost all HA deployments use Mosquitto 2.x or EMQX (5.0-native).
+- HA's MQTT integration handles both transparently. HA discovery payloads are identical on the wire.
+- MQTT 5 gives us reason codes (better error reporting) and richer LWT properties (will-delay-interval — useful so a quick HPC restart doesn't flap entities to offline-then-online).
+- The fallback is one extra try block; `aiomqtt` doesn't make this fall through automatically because the protocol-version mismatch is detected at TCP connect time, not later.
 
-**Recommendation:** Ship v1.3 with manual IP entry as the only discovery path. Add mDNS as an optional v1.4 enhancement conditioned on `network_mode: host` migration. Do not block the milestone on network topology changes.
+---
 
-**UDP to WLED from Docker bridge:** Standard outbound UDP from Docker bridge to LAN works without `network_mode: host`. The streaming packets reach WLED devices on the LAN without any changes to `docker-compose.yaml`.
+## License Compatibility
+
+| Package | License | Compatible With HPC? |
+|---------|---------|----------------------|
+| `aiomqtt` | BSD 3-clause | Yes. Pure permissive. |
+| `paho-mqtt` (transitive via aiomqtt) | Dual: EPL-2.0 OR BSD-3-Clause | Yes. Either branch is permissive; choose BSD-3 to match the rest. |
+| `fastapi` (existing) | MIT | Compatible with everything above. |
+| `pydantic` (existing) | MIT | Compatible. |
+| `aiosqlite` (existing) | MIT | Compatible. |
+| Eclipse Mosquitto (broker, user-supplied) | EPL-2.0 / EDL-1.0 | n/a — we don't link Mosquitto. We just talk MQTT to it over TCP. |
+
+**Net:** No new license obligations. The project remains permissively licensed.
+
+---
+
+## Mosquitto / Broker Compatibility
+
+`aiomqtt` is a pure-protocol MQTT client — it talks to any MQTT 3.1.1 / 5.0 conformant broker. Verified compatibility (per `aiomqtt` README + HA docs):
+
+- Eclipse Mosquitto 2.x — primary HA OS add-on broker, verified by HA's own docs.
+- EMQX 5.x — verified by EMQX's 2025 Python MQTT comparison article.
+- HiveMQ CE / Cloud — same protocol surface.
+- AWS IoT Core — same (with TLS + client cert; out of scope for v1.3).
+
+For the recommended deployment (HA Mosquitto add-on on the same LAN), zero configuration is required beyond pointing HPC at `<ha-host>:1883` with the broker credentials.
 
 ---
 
@@ -243,39 +193,48 @@ Follows the exact `app.state.streaming` pattern already established.
 
 | Package | Compatible With | Notes |
 |---------|-----------------|-------|
-| `zeroconf>=0.148,<2` | Python 3.9–3.14, asyncio | Pure Python, no C extension required. Optional Cython for performance (not needed). No conflict with any existing requirement. |
-| `zeroconf>=0.148,<2` | `fastapi>=0.115`, `uvicorn[standard]` | No interaction. Used only in a FastAPI route handler via `asyncio.to_thread` or `AsyncServiceBrowser`. |
-| Python `socket` stdlib | Python 3.12, asyncio | Use `asyncio.to_thread(sock.sendto, data, addr)` for non-blocking sends — same pattern as `capture_v4l2.py` uses `asyncio.to_thread` for blocking ioctl calls. Consistent with existing codebase. |
+| `aiomqtt>=2.5,<3` | Python 3.8–3.13 (HPC pins 3.12) | Pure async/await, no threading shim required. Uses `paho-mqtt` internally for wire-protocol parsing. |
+| `aiomqtt>=2.5,<3` | `fastapi>=0.115`, `uvicorn[standard]>=0.32` | No interaction. Lives in `app.state.ha_mqtt` and is driven from `lifespan` — exactly like `coordinator`. |
+| `aiomqtt>=2.5,<3` | `pytest-asyncio>=0.24` | Tests can spin up a Mosquitto container fixture or use `aiomqtt` against an in-process mock. The codebase already uses pytest-asyncio; no change. |
+| `aiomqtt>=2.5,<3` | `hue-entertainment-pykit==0.9.4` | No interaction whatsoever — separate sockets, separate event-loop tasks. The DTLS streaming path (Hue) and the MQTT publisher coexist as peers of `coordinator`. |
+| `paho-mqtt 2.1.0` (transitive) | Python 3.7+ | Pulled in automatically; do NOT list separately in `requirements.txt` — version-pinning the transitive directly causes upgrade lock-step issues. |
+| **Avoid pinning** `paho-mqtt` in `requirements.txt` | — | Let `aiomqtt` resolve it. Pinning both creates a dependency-resolver footgun when `aiomqtt 2.6` or 3.0 changes its paho requirement range. |
 
 ---
 
 ## Installation
 
-```bash
-# Add to Backend/requirements.txt:
-zeroconf>=0.148,<2
+Add to `Backend/requirements.txt` (one line):
 
-# Install in venv:
-source /tmp/hpc-venv/bin/activate
-pip install "zeroconf>=0.148,<2"
+```
+aiomqtt>=2.5,<3
 ```
 
-No frontend packages needed. `react-konva` and `zustand` (both already present) cover all UI requirements for the strip editor and WLED device management tab.
+Install:
+
+```bash
+source /tmp/hpc-venv/bin/activate && pip install -r Backend/requirements.txt
+```
+
+No system packages required (`paho-mqtt` is pure Python). No Docker rebuild beyond the standard `pip install` step.
 
 ---
 
 ## Sources
 
-- [WLED UDP Realtime docs](https://kno.wled.ge/interfaces/udp-realtime/) — WARLS/DRGB/DNRGB/DRGBW packet formats, port 21324, LED count limits, HIGH confidence
-- [WLED Wiki UDP Realtime Control](https://github.com/Aircoookie/WLED/wiki/UDP-Realtime-Control) — Protocol byte values (1=WARLS, 2=DRGB, 3=DRGBW, 4=DNRGB), timeout semantics, exact byte offsets, HIGH confidence
-- [WLED DDP docs](https://kno.wled.ge/interfaces/ddp/) — DDP port 4048, WLED does not read optional timecodes, HIGH confidence
-- [WLED JSON API docs](https://kno.wled.ge/interfaces/json-api/) — `/json/info` endpoint, `leds.count` field structure, HIGH confidence
-- [python-wled GitHub](https://github.com/frenck/python-wled) — v0.21.0, JSON API only, no UDP realtime, confirmed via README, HIGH confidence
-- [zeroconf PyPI](https://pypi.org/project/zeroconf/) — v0.148.0 (Oct 2025), Python 3.9+, pure Python with optional Cython, HIGH confidence
-- [WLED mDNS service type issue #103](https://github.com/Aircoookie/WLED/issues/103) — `_wled._tcp.local.` service type confirmed, HIGH confidence
-- [Home Assistant REST API developer docs](https://developers.home-assistant.io/docs/api/rest/) — Bearer token auth, `/api/services/` endpoint format, HIGH confidence
-- [wledcast reference implementation](https://github.com/ppamment/wledcast) — DDP streaming from Python, MEDIUM confidence (reference only, uses wxPython GUI not relevant here)
+- [aiomqtt on PyPI](https://pypi.org/project/aiomqtt/) — v2.5.1 (Mar 2026), v3.0.0a1 (Apr 2026); BSD-3-Clause; Python 3.8–3.13; depends on `paho-mqtt`; supports MQTT 5.0/3.1.1/3.1. **HIGH confidence.**
+- [empicano/aiomqtt GitHub README](https://github.com/empicano/aiomqtt) — idiomatic asyncio MQTT, no callbacks, `async with` lifecycle. **HIGH confidence.**
+- [aiomqtt Alongside FastAPI guide](https://aiomqtt.bo3hm.com/alongside-fastapi-and-co.html) — canonical FastAPI lifespan integration pattern, reconnect-loop recipe. **HIGH confidence.**
+- [paho-mqtt on PyPI](https://pypi.org/project/paho-mqtt/) — v2.1.0 (Apr 2024); EPL-2.0 OR BSD-3-Clause; threaded + asyncio-glue examples but no native async API. **HIGH confidence.**
+- [Home Assistant MQTT integration docs](https://www.home-assistant.io/integrations/mqtt/) — discovery topic format `<discovery_prefix>/<component>/[<node_id>/]<object_id>/config`; retain-flag tradeoffs; `homeassistant/status` birth message; LWT/availability; device-bundle discovery (`homeassistant/device/<object_id>/config`); `unique_id` requirement. **HIGH confidence.**
+- [HA MQTT publish API changes blog (developers.home-assistant.io, 2026-05-11)](https://developers.home-assistant.io/blog/2026/05/11/mqtt-publish-api-changes/) — recent API tweaks; confirms discovery topic format unchanged. **HIGH confidence.**
+- [HA MQTT Switch component](https://www.home-assistant.io/integrations/switch.mqtt/), [MQTT Sensor](https://www.home-assistant.io/integrations/sensor.mqtt/), [MQTT Select](https://www.home-assistant.io/integrations/select.mqtt/) — component-specific discovery payload schemas (state_topic, command_topic, options, etc.). **HIGH confidence.**
+- [gmqtt PyPI / Snyk health](https://snyk.io/advisor/python/gmqtt) — v0.7.0; classified **inactive** by maintenance cadence. Disqualifies it for HA-critical surface. **MEDIUM confidence** (signal-based judgment, not failure data).
+- [Eclipse Mosquitto](https://mosquitto.org/) — broker license EPL/EDL; MQTT 5.0/3.1.1/3.1 conformant. **HIGH confidence.**
+- [Comparison of Python MQTT Clients, EMQ 2025](https://www.emqx.com/en/blog/comparision-of-python-mqtt-client) — Independent comparison ranking aiomqtt as the leading asyncio choice over gmqtt and fastapi-mqtt for production. **MEDIUM confidence** (vendor blog but cites concrete benchmarks).
+- [GrandMoff100/HomeAssistantAPI](https://homeassistantapi.readthedocs.io/) — confirms it's an outbound REST/WS wrapper for talking TO HA, not for being a HA integration. **HIGH confidence.**
 
 ---
-*Stack research for: HuePictureControl v1.3 — WLED UDP streaming, HA control endpoints, strip paint UI*
-*Researched: 2026-04-14*
+*Stack research for: v1.3 Home Assistant Integration Polish (MQTT discovery + WS push + WLED health + YAML docs)*
+*Researched: 2026-05-12*
+*Net dependency cost: +1 PyPI package (`aiomqtt`), +1 transitive (`paho-mqtt`)*
