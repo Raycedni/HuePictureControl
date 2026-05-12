@@ -6,9 +6,9 @@ disable-model-invocation: true
 
 # Full Stack Health Check
 
-Run all health checks in parallel where possible, then report a status table.
+Run all health checks in on after another to prevent OOM issues possible, then report a status table.
 
-## Checks to Run (in parallel)
+## Checks to Run (in sequence)
 
 ### 1. Backend API
 ```bash

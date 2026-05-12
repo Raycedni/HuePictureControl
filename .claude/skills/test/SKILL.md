@@ -10,7 +10,7 @@ argument-hint: [backend|frontend|all]
 Run the test suites for HuePictureControl. Argument: `$ARGUMENTS` (default: all).
 
 ## Rules
-- Run backend and frontend tests **in parallel** using separate Bash tool calls in a single message.
+- Run backend and frontend tests **in sequence** using separate Bash tool calls in a single message.
 - Report pass/fail counts and any failures with file:line references.
 - If a specific suite is requested (`backend` or `frontend`), only run that one.
 

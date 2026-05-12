@@ -4,7 +4,9 @@
       "WebFetch(domain:www.amazon.de)",
       "Read(//home/lukas/**)",
       "WebFetch(domain:claude.ai)",
-      "Bash(grep -E \"^d|\\\\.py$|\\\\.txt$|\\\\.yaml$|\\\\.yml$\")"
+      "Bash(grep -E \"^d|\\\\.py$|\\\\.txt$|\\\\.yaml$|\\\\.yml$\")",
+      "Bash(rm -f __TRACKED_VAR__/.claude/cache/gsd-update-check.json)",
+      "Bash(rm -f \"./.claude/cache/gsd-update-check.json\")"
     ]
   }
 }
