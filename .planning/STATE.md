@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 18-01-PLAN.md
-last_updated: "2026-05-11T20:29:41Z"
-last_activity: 2026-05-11 -- Phase 18 Plan 01 completed
+stopped_at: Completed 18-02-PLAN.md
+last_updated: "2026-05-12T17:26:58.552Z"
+last_activity: 2026-05-12
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 32
-  completed_plans: 30
-  percent: 94
+  completed_plans: 31
+  percent: 97
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 18 (Home Assistant Control Endpoints) — EXECUTING
-Plan: 2 of 3 (next)
-Status: Executing Phase 18 — 18-01 complete
-Last activity: 2026-05-11 -- Plan 18-01 completed (ha_state DDL + device_path_override)
+Plan: 3 of 3 (next)
+Status: Ready to execute
+Last activity: 2026-05-12
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Last activity: 2026-05-11 -- Plan 18-01 completed (ha_state DDL + device_path_ov
 - Trend: steady; Phase 16 executed cleanly across both backend and frontend
 
 *Updated after each plan completion*
+| Phase 18-02 P18-02 | 4 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Recent decisions affecting current work:
 - [v1.3 roadmap]: Phase 16 (bug fixes) runs first as warm-up — independent of WLED, unblocks clean state for WLED testing
 - [18-01]: ha_state is a single-row table with CHECK (id = 1); created lazily (no INSERT OR IGNORE seed) — first PUT /api/ha/zone or /camera writes via ON CONFLICT DO UPDATE
 - [18-01]: StreamingCoordinator.start now takes optional device_path_override: str | None = None (Option C per RESEARCH.md A1); when None, existing camera_assignments resolution chain runs unchanged so D-07 (HA never touches camera_assignments) stays clean
+- Phase 18 Plan 02: HA REST router exposes 7 unauthenticated endpoints under /api/ha/* — LAN trust boundary per PROJECT.md; zero Depends, zero auth tokens, zero camera_assignments writes (D-07 negative)
+- Phase 18 Plan 02: HaStatusResponse uses response_model_exclude_none=True at the route boundary so the optional 'error' field stays out of happy-path payloads while the model itself remains declarative (D-09 sealed contract — no leakage of packets_sent / packets_dropped / wled_devices)
+- Phase 18 Plan 02: ha_router imported alphabetically in main.py (between capture and health) to preserve the existing alphabetical convention; app.include_router(ha_router) placed after wled_router per plan spec — preserves both convention and intent
 
 ### Pending Todos
 
@@ -89,8 +93,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-11T20:29:41Z
-Stopped at: Completed 18-01-PLAN.md
+Last session: 2026-05-12T17:26:58.546Z
+Stopped at: Completed 18-02-PLAN.md
 Resume file: None
 
 **Planned Phase:** 18 (Home Assistant Control Endpoints) — 3 plans, 1 complete — next: 18-02 (routers/ha.py)
