@@ -85,7 +85,7 @@ class TestPairEndpoint:
             await conn.close()
             return row
 
-        row = asyncio.get_event_loop().run_until_complete(read_db())
+        row = asyncio.run(read_db())
         assert row is not None
         assert row["username"] == "test-user"
         assert row["client_key"] == "AABBCCDD"
@@ -167,7 +167,7 @@ class TestStatusEndpoint:
             await conn.commit()
             await conn.close()
 
-        asyncio.get_event_loop().run_until_complete(seed_db())
+        asyncio.run(seed_db())
 
         app = make_test_app(db_path)
 
@@ -210,7 +210,7 @@ class TestConfigsEndpoint:
             await conn.commit()
             await conn.close()
 
-        asyncio.get_event_loop().run_until_complete(seed_db())
+        asyncio.run(seed_db())
 
         configs = [{"id": "cfg-1", "name": "TV", "status": "inactive", "channel_count": 2}]
 
@@ -265,7 +265,7 @@ class TestLightsEndpoint:
             await conn.commit()
             await conn.close()
 
-        asyncio.get_event_loop().run_until_complete(seed_db())
+        asyncio.run(seed_db())
 
         lights = [{"id": "light-1", "name": "Strip", "type": "light"}]
 
