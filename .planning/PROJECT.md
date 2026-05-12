@@ -28,24 +28,26 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - ✓ Per-zone camera dropdown with live preview switching — v1.1
 - ✓ Docker multi-device passthrough via cgroup rules — v1.1
 
-### Active (v1.2)
-
-- [ ] Wireless screen mirroring from Windows via Miracast (WiFi Direct) as a virtual camera input
-- [ ] Wireless screen mirroring from Android via scrcpy over WiFi as a fallback input
-- [ ] v4l2loopback virtual camera management — create/destroy on demand, transparent to capture pipeline
-- [ ] FFmpeg pipeline management — pipe wireless streams to virtual V4L2 devices with health monitoring
-- [ ] Wireless input API — start/stop receivers, list sessions, check NIC capabilities
-- [ ] Docker configuration for wireless dependencies and Linux capabilities
-
-### Active (v1.3)
+### Validated (v1.2 — completed 2026-05-12)
 
 - ✓ WLED device discovery and management in a dedicated UI tab — Phase 17
 - ✓ UDP realtime protocol (DRGB/DNRGB) streaming to WLED ESP32 devices — Phase 17
-- [ ] Paint-on-strip UI for assigning LED pixel ranges to canvas zones (Phase 19)
 - ✓ Shared channel-per-area mapping abstraction for Hue and WLED — Phase 17 (StreamingCoordinator + region_plan with COALESCE(MAX(...), 1))
-- [ ] Home Assistant REST endpoints: select camera, select zone, start/stop streaming (Phase 18)
-- [ ] Persist selected entertainment config per camera across page reloads
-- [ ] Dropdown reflects actual streaming state on reload
+- ✓ Home Assistant REST endpoints: start/stop streaming, select camera/zone, query status — Phase 18
+
+### Active (v1.3)
+
+- [ ] MQTT auto-discovery — publish HA discovery messages so entities appear without YAML edits
+- [ ] HA YAML snippet documentation — rest_command:, sensor:, input_select: examples for the non-MQTT path
+- [ ] WebSocket push for HA status changes — lower-latency alternative to REST polling
+- [ ] Per-device WLED health in HA status payload — expose broadcaster._metrics["wled_devices"]
+
+### Deferred
+
+- [ ] Wireless screen mirroring (Miracast / scrcpy / v4l2loopback) — deferred from original v1.2 scope, not yet rescheduled
+- [ ] Paint-on-strip UI for assigning LED pixel ranges to canvas zones — deferred (Phase 19 placeholder)
+- [ ] Persist selected entertainment config per camera across page reloads — bug fix, defer to v1.4
+- [ ] Dropdown reflects actual streaming state on reload — bug fix, defer to v1.4
 
 ### Out of Scope
 
@@ -73,29 +75,21 @@ Accurate, low-latency color synchronization from an HDMI source to Hue lights �
 - **Network**: Hue Bridge must be reachable from Docker network (host network or bridge with LAN access)
 - **No auth**: Web UI is unauthenticated — local network tool only
 
-## Current Milestone: v1.2 Wireless Input
+## Current Milestone: v1.3 Home Assistant Integration Polish
 
-**Goal:** Enable any Windows or Android device to wirelessly mirror its screen to the system as an input source, supplementing or replacing the physical HDMI capture card.
-
-**Target features:**
-- Miracast (WiFi Direct) receiver for Windows and older Android — appears as Cast target in Win+K
-- scrcpy over WiFi fallback for newer Android devices that dropped Miracast
-- v4l2loopback virtual cameras fed by FFmpeg pipelines — transparent to existing capture pipeline
-- Wireless sources appear in camera selector alongside physical devices
-- API for starting/stopping wireless receivers and checking NIC capabilities
-
-## Next Milestone: v1.3 WLED Support, HA Control & Bug Fixes
-
-**Goal:** Expand the system beyond Hue to support WLED (ESP32) LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
+**Goal:** Make HuePictureControl a first-class Home Assistant citizen — zero-YAML setup for new users and feature-complete telemetry/control for power users — without violating the existing no-auth, no-outbound-secrets design.
 
 **Target features:**
-- WLED device discovery and management in a dedicated tab
-- UDP realtime protocol (DDP/DRGB) for low-latency LED streaming to WLED devices
-- Paint-on-strip UI for assigning LED ranges to canvas zones (designed for 300+ LED strips)
-- Shared channel-per-area mapping code between Hue and WLED
-- Home Assistant REST endpoints: select camera, select zone, start/stop streaming (control-only)
-- Fix: persist selected entertainment config per camera across page reloads
-- Fix: dropdown reflects actual streaming state on reload
+- MQTT auto-discovery — backend publishes `homeassistant/<component>/<id>/config` messages so HA creates switch/sensor/select entities automatically when a Mosquitto broker is reachable
+- HA YAML snippet documentation — ship `rest_command:`, `sensor:`, `input_select:` examples for the non-MQTT path (deferred from Phase 18)
+- WebSocket push for HA status changes — lower-latency alternative to HA's REST polling of `/api/ha/status`
+- Per-device WLED health in HA status payload — expose `broadcaster._metrics["wled_devices"]` through `/api/ha/status`
+
+**Out of scope for v1.3 (defer to v1.4+):**
+- `PUT /api/ha/target_hz` runtime frame-rate tuning — revisit only if users report friction
+- `POST /api/ha/restart` combined verb — HA can chain stop+start trivially
+- Persist entertainment config per camera across reloads (bug fix) — defer to v1.4 bug-fix cycle
+- Dropdown reflects actual streaming state on reload (bug fix) — defer to v1.4 bug-fix cycle
 
 ## Key Decisions
 
@@ -130,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 5. All milestone decisions added to Key Decisions
 
 ---
-*Last updated: 2026-04-14 after v1.1 milestone*
+*Last updated: 2026-05-12 — v1.2 complete, v1.3 (HA Integration Polish) opened*

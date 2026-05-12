@@ -1,34 +1,34 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Wireless Input
-status: milestone_complete
-stopped_at: Completed 18-03-PLAN.md (Phase 18 closed)
-last_updated: "2026-05-12T17:37:41.275Z"
+milestone: v1.3
+milestone_name: Home Assistant Integration Polish
+status: defining_requirements
+stopped_at: Milestone v1.3 opened — gathering requirements
+last_updated: "2026-05-12T18:00:00.000Z"
 last_activity: 2026-05-12
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 32
-  completed_plans: 32
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-14)
+See: .planning/PROJECT.md (updated 2026-05-12)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 18 — Home Assistant Control Endpoints
+**Current focus:** v1.3 milestone — Home Assistant Integration Polish (defining requirements)
 
 ## Current Position
 
-Phase: 18
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-05-12
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-05-12 — Milestone v1.3 (HA Integration Polish) started
 
 ## Performance Metrics
 
