@@ -103,9 +103,18 @@ tests/test_phase19_e2e.py::test_paint_assign_stream_smoke PASSED
 
 ---
 
-## Task 3: Manual UAT — PENDING (checkpoint)
+## Task 3: Manual UAT — DEFERRED to Phase 19.1
 
-The four manual-only verifications from `19-VALIDATION.md §Manual-Only Verifications` require physical hardware, live browser interaction, and pixel-level visual inspection. See checkpoint payload below.
+The four manual-only verifications (V1–V4) from `19-VALIDATION.md §Manual-Only Verifications` are **deferred to Phase 19.1** by user decision on 2026-05-14.
+
+**Why deferred:** During Wave 7 checkpoint, the user requested a redesign: WLED channels should be auto-queried from the WLED device's configured segments (`/json/state seg[]`) instead of maintained by HuePictureControl's paint UX. This changes:
+- The source of truth for channel ranges (WLED device, not `wled_channels` table)
+- The semantics of the strip painter (display/sync segments rather than create them)
+- The chip-color identity question that V2 was designed to test (a per-device WLED segment index will become canonical)
+
+Re-running V1–V4 against the paint-driven model now would be wasted effort — 19.1 will re-test V1, V2, V3, V4 against the segment-driven model.
+
+**Status:** All automated tests pass. Phase 19 ships the paint-driven architecture as specified in CONTEXT D-01–D-22. The redesign is a forward step, not a rollback.
 
 ---
 
