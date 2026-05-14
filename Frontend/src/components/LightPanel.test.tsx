@@ -28,6 +28,14 @@ vi.mock('@/api/regions', () => ({
   clearAllAssignments: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Phase 19: mock the WLED API so LightPanel can be tested without a backend.
+// Default: no devices registered (WLED section hidden).
+vi.mock('@/api/wled', () => ({
+  getWledDevices: vi.fn().mockResolvedValue({ devices: [] }),
+  listWledChannels: vi.fn().mockResolvedValue({ channels: [] }),
+  listWledAssignments: vi.fn().mockResolvedValue({ assignments: [] }),
+}))
+
 const mockCamerasData = {
   devices: [
     {
@@ -303,22 +311,143 @@ describe('LightPanel', () => {
   })
 })
 
-// Phase 19 — WLED section stubs. The section ships in Plan 19-08.
+// Phase 19 — WLED section tests (Plan 19-11 flips these from todo to green).
+
+import { getWledDevices, listWledChannels, listWledAssignments } from '@/api/wled'
+
+const mockDevice1 = {
+  id: 'dev-1',
+  ip: '192.168.1.50',
+  name: 'Living Room Strip',
+  led_count: 120,
+  enabled: true,
+  created_at: '2026-01-01T00:00:00',
+  connected: true,
+  last_error: null,
+  last_success_at: null,
+}
+
+const mockChannel1 = {
+  id: 'ch-1',
+  device_id: 'dev-1',
+  name: 'Channel 1',
+  start_led: 0,
+  end_led: 59,
+}
+
+const mockChannel2 = {
+  id: 'ch-2',
+  device_id: 'dev-1',
+  name: 'Channel 2',
+  start_led: 60,
+  end_led: 119,
+}
+
+const wledDefaultProps = {
+  selectedConfigId: 'config-1',
+  onConfigChange: vi.fn(),
+  selectedDevice: '/dev/video0',
+  onDeviceChange: vi.fn(),
+  camerasData: mockCamerasData,
+  onCamerasRefresh: vi.fn().mockResolvedValue(undefined),
+}
 
 describe('LightPanel WLED section', () => {
-  it.todo('renders WLED section header below Lights section')
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset WLED mocks to defaults (no devices) before each test
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [] })
+    vi.mocked(listWledChannels).mockResolvedValue({ channels: [] })
+    vi.mocked(listWledAssignments).mockResolvedValue({ assignments: [] })
+  })
 
-  it.todo('counter chip: "M" mono text with text-muted-foreground (no threshold colors per D-14)')
+  it('renders WLED section header below Lights section', async () => {
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
+    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1] })
 
-  it.todo('WLED section is hidden entirely when no WLED devices are registered')
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const section = await screen.findByTestId('lightpanel-wled-section')
+    expect(section).toBeInTheDocument()
+    // "WLED" heading is inside the section
+    expect(section).toHaveTextContent('WLED')
+  })
+
+  it('counter chip: "M" mono text with text-muted-foreground (no threshold colors per D-14)', async () => {
+    const dev2 = { ...mockDevice1, id: 'dev-2', name: 'Bedroom Strip', ip: '192.168.1.51' }
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1, dev2] })
+    // Each device has 3 channels — total = 6
+    const makeChannels = (deviceId: string) => [
+      { id: `${deviceId}-ch1`, device_id: deviceId, name: 'Ch 1', start_led: 0, end_led: 29 },
+      { id: `${deviceId}-ch2`, device_id: deviceId, name: 'Ch 2', start_led: 30, end_led: 59 },
+      { id: `${deviceId}-ch3`, device_id: deviceId, name: 'Ch 3', start_led: 60, end_led: 89 },
+    ]
+    vi.mocked(listWledChannels).mockImplementation((deviceId) =>
+      Promise.resolve({ channels: makeChannels(deviceId) }),
+    )
+
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const counter = await screen.findByTestId('lightpanel-wled-counter')
+    expect(counter).toHaveTextContent('6')
+    expect(counter).toHaveClass('font-mono')
+    expect(counter).toHaveClass('text-muted-foreground')
+    // Must NOT have threshold-color classes (D-14)
+    expect(counter).not.toHaveClass('text-red-400')
+    expect(counter).not.toHaveClass('text-hue-amber')
+  })
+
+  it('WLED section is hidden entirely when no WLED devices are registered', async () => {
+    // getWledDevices already mocked to return [] in beforeEach
+    render(<LightPanel {...wledDefaultProps} />)
+
+    // Allow effects to settle
+    await waitFor(() => expect(vi.mocked(getWledDevices)).toHaveBeenCalled())
+    expect(screen.queryByTestId('lightpanel-wled-section')).toBeNull()
+  })
 
   it.todo('groups channels per device with sub-header showing {ip} · {led_count} LEDs · {channel_count} channels')
 
   it.todo('WLED chip matches palette: each channel row chip background equals channelColor(channel.index)')
 
-  it.todo('WLED drag payload: dataTransfer.setData called with wledChannelId, wledDeviceId, wledChannelName, entertainment_config_id')
+  it('WLED drag payload: dataTransfer.setData called with wledChannelId, wledDeviceId, wledChannelName, entertainment_config_id', async () => {
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
+    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1, mockChannel2] })
 
-  it.todo('WLED drag payload: existing Hue keys (channelId/channelName/lightId/configId) are NOT set on WLED rows')
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const row = await screen.findByTestId(`lightpanel-wled-channel-${mockChannel1.id}`)
+
+    const setData = vi.fn()
+    fireEvent.dragStart(row, {
+      dataTransfer: { setData, effectAllowed: '' },
+    })
+
+    expect(setData).toHaveBeenCalledWith('wledChannelId', mockChannel1.id)
+    expect(setData).toHaveBeenCalledWith('wledDeviceId', mockDevice1.id)
+    expect(setData).toHaveBeenCalledWith('wledChannelName', mockChannel1.name)
+    expect(setData).toHaveBeenCalledWith('entertainment_config_id', wledDefaultProps.selectedConfigId)
+  })
+
+  it('WLED drag payload: existing Hue keys (channelId/channelName/lightId/configId) are NOT set on WLED rows', async () => {
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
+    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1] })
+
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const row = await screen.findByTestId(`lightpanel-wled-channel-${mockChannel1.id}`)
+
+    const setData = vi.fn()
+    fireEvent.dragStart(row, {
+      dataTransfer: { setData, effectAllowed: '' },
+    })
+
+    const calledKeys = setData.mock.calls.map((call) => call[0])
+    expect(calledKeys).not.toContain('channelId')
+    expect(calledKeys).not.toContain('channelName')
+    expect(calledKeys).not.toContain('lightId')
+    expect(calledKeys).not.toContain('configId')
+  })
 
   it.todo('Assigned-to line: when channel has an assignment, "Assigned: {region.name}" renders in text-hue-amber/60')
 })
