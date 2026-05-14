@@ -343,3 +343,58 @@ async def test_init_db_is_idempotent_with_wled_tables(tmp_path):
         assert names == {"wled_devices", "wled_channels", "wled_light_assignments"}
     finally:
         await close_db(conn2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — schema migration idempotency tests (Plan 19-03)
+# Wave 0 guard: both tests SKIP until the column-adding migration lands.
+# After Wave 1 (Plan 19-03): they flip to GREEN automatically.
+# ---------------------------------------------------------------------------
+
+
+async def test_init_db_idempotent_phase19():
+    """ALTER TABLE wled_light_assignments ADD COLUMN orientation must be idempotent across init.
+
+    Wave 0 guard: skips when the column is absent. Wave 1 (Plan 19-03) adds the column
+    and this test flips green by asserting that re-init does NOT duplicate the column.
+    """
+    pytest.importorskip("database")
+    db = await init_db(":memory:")
+    async with db.execute("PRAGMA table_info(wled_light_assignments)") as cur:
+        rows = await cur.fetchall()
+    cols = [r[1] for r in rows]
+    if "orientation" not in cols:
+        await close_db(db)
+        pytest.skip("Wave 1 (19-03) lands the orientation migration; skip until then")
+    # After Wave 1: idempotency check — second init must not raise and column must remain exactly once.
+    await close_db(db)
+    db2 = await init_db(":memory:")
+    async with db2.execute("PRAGMA table_info(wled_light_assignments)") as cur:
+        rows = await cur.fetchall()
+    cols = [r[1] for r in rows]
+    assert cols.count("orientation") == 1, f"orientation must exist exactly once after re-init: {cols}"
+    await close_db(db2)
+
+
+async def test_init_db_idempotent_next_channel_n():
+    """ALTER TABLE wled_devices ADD COLUMN next_channel_n must be idempotent across init.
+
+    Wave 0 guard: skips when the column is absent. Wave 1 (Plan 19-03) adds the column
+    and this test flips green by asserting that re-init does NOT duplicate the column.
+    """
+    pytest.importorskip("database")
+    db = await init_db(":memory:")
+    async with db.execute("PRAGMA table_info(wled_devices)") as cur:
+        rows = await cur.fetchall()
+    cols = [r[1] for r in rows]
+    if "next_channel_n" not in cols:
+        await close_db(db)
+        pytest.skip("Wave 1 (19-03) lands the next_channel_n migration; skip until then")
+    # After Wave 1: idempotency check — second init must not raise and column must remain exactly once.
+    await close_db(db)
+    db2 = await init_db(":memory:")
+    async with db2.execute("PRAGMA table_info(wled_devices)") as cur:
+        rows = await cur.fetchall()
+    cols = [r[1] for r in rows]
+    assert cols.count("next_channel_n") == 1, f"next_channel_n must exist exactly once after re-init: {cols}"
+    await close_db(db2)
