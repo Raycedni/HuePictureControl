@@ -174,7 +174,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 ---
 
 ### Phase 19: WLED Strip Paint UI
-**Goal**: Users can visually paint LED channel ranges directly onto a strip representation in the UI, and the resulting channels appear in the light panel for assignment to canvas regions via the same drag-drop workflow used for Hue segments.
+**Goal**: Users can visually paint LED channel ranges directly onto a strip representation in the UI, and the resulting channels appear in the light panel for assignment to canvas regions via the same drag-drop workflow used for Hue gradient segments.
 **Depends on**: Phase 17
 **Requirements**: WMAP-01, WMAP-02, WMAP-03, WMAP-04, WMAP-05
 **Success Criteria** (what must be TRUE):
@@ -202,19 +202,28 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 ---
 
 ### Phase 19.1: WLED Segment Sync (INSERTED)
-**Goal:** [Urgent work - to be planned]
-**Requirements:** TBD
-**Depends on:** Phase 19
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd-plan-phase 19.1 to break down)
-
-**Scope hint** (from 2026-05-14 user decision after Phase 19 verification):
-- Channels in HuePictureControl mirror WLED's own `seg[]` array from `/json/state` instead of being maintained in the `wled_channels` table.
-- Strip painter UX becomes read-only display (or repurposed for region/orientation assignment only).
-- Phase 19's `wled_channels` table semantics shift from primary store to local cache/sync target — schema may need a migration path.
-- Re-execute Phase 19 V1–V4 manual UAT against the segment-driven model (deferred from 19-13).
+**Goal**: Channels in HuePictureControl mirror the WLED device's own `seg[]` array from `/json/state` instead of being maintained in the `wled_channels` table. The strip painter becomes a read-only segment visualizer with a per-device Refresh button; segment data is reconciled into a local `wled_seg_cache` table that survives restart. The four manual UAT items (V1–V4) deferred from Phase 19 are re-executed against the segment-driven model before close.
+**Requirements**: TBD (no formal REQ-IDs — success measured against CONTEXT.md D-01..D-23 and re-mapped manual UAT V1/V2/V3'/V4)
+**Depends on**: Phase 19
+**Success Criteria** (what must be TRUE):
+  1. Registering a WLED device fetches both `/json/info` and `/json/state` atomically; failure of either rolls back the registration
+  2. Clicking the per-device Refresh button fetches the device's segments and reconciles them into `wled_seg_cache`, hard-deleting assignments that point at vanished `seg_index` values and returning the dropped count
+  3. The strip painter is fully read-only (no paint gestures, no boundary handles); zone fills use `channelColor(seg_index)` per D-09
+  4. Drag-drop assignment uses composite identity `(wled_device_id, seg_index)` — both the drag payload (LightPanel) and the drop body (EditorCanvas) speak this vocabulary
+  5. Full-stack restart preserves the cached segments, assignments, and orientations without contacting the WLED device
+  6. Manual UAT V1 (live LED color), V2 (chip-vs-strip parity), V3' (refresh roundtrip after WLED-side boundary change), V4 (full-stack restart persistence) all pass against real hardware
+**Plans**: 10 plans
+  - [x] 19.1-01-PLAN.md — Wave 0: test infrastructure stubs (test_wled_segments.py + test_wled_client extension + test_phase19_1_e2e + wled-segment.test.ts)
+  - [ ] 19.1-02-PLAN.md — Wave 1: schema migration (PRAGMA user_version guard, wled_seg_cache + new wled_light_assignments) + fetch_wled_state coroutine
+  - [ ] 19.1-03-PLAN.md — Wave 2: services/wled_segments.py reconcile_segments transaction + 6 reconciliation tests green
+  - [ ] 19.1-04-PLAN.md — Wave 2: routers/wled.py refresh + list-segments endpoints + atomic registration + new assignment shape + test_wled_router rewrites
+  - [ ] 19.1-05-PLAN.md — Wave 3: streaming_coordinator SQL rewrite (JOIN wled_seg_cache) + test_phase17_e2e + test_streaming_coordinator fixture updates
+  - [ ] 19.1-06-PLAN.md — Wave 3: Frontend api/wled.ts rewrite + wled-segment utility + useRegionStore type propagation
+  - [ ] 19.1-07-PLAN.md — Wave 4: WledStripPainter read-only conversion + Refresh button + stale badge + WledChannelSidebar read-only + SettingsPanel/Page sync
+  - [ ] 19.1-08-PLAN.md — Wave 4: LightPanel new drag payload + EditorCanvas handleDrop discriminator + RegionOrientationPopover composite-key lookups
+  - [ ] 19.1-09-PLAN.md — Wave 5: hard-delete wled_channels.py + tests + wled-paint-reducer + rewrite e2e as wled-segments.spec.ts
+  - [ ] 19.1-10-PLAN.md — Wave 6: automation gate (Skill test/health/verify-ui) + manual UAT V1/V2/V3'/V4 checkpoint
+**UI hint**: yes
 
 ---
 
@@ -242,6 +251,7 @@ Plans:
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/13 | Not started | - |
+| 19.1. WLED Segment Sync | v1.3 | 1/10 | In progress | - |
 
 ---
 *Roadmap created: 2026-03-23*

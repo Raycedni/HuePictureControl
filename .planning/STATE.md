@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
-status: verifying
-stopped_at: Phase 19.1 context gathered
-last_updated: "2026-05-14T16:04:23.559Z"
+status: executing
+stopped_at: Completed 19.1-01-PLAN.md
+last_updated: "2026-05-14T19:20:13.473Z"
 last_activity: 2026-05-14
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_phases: 11
+  completed_phases: 9
+  total_plans: 52
+  completed_plans: 43
+  percent: 83
 ---
 
 # Project State
@@ -20,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Accurate, low-latency color synchronization from an HDMI source to Hue lights — especially gradient-capable devices that existing solutions don't properly support.
-**Current focus:** Phase 19 — WLED Strip Paint UI
+**Current focus:** Phase 19.1 — wled-segment-sync
 
 ## Current Position
 
-Phase: 19 (WLED Strip Paint UI) — EXECUTING
-Plan: 13 of 13
-Status: Phase complete — ready for verification
+Phase: 19.1 (wled-segment-sync) — EXECUTING
+Plan: 2 of 10
+Status: Ready to execute
 Last activity: 2026-05-14
 
 ## Performance Metrics
@@ -50,6 +51,7 @@ Last activity: 2026-05-14
 - Trend: steady; Phase 16 executed cleanly across both backend and frontend
 
 *Updated after each plan completion*
+| Phase 19.1 P01 | 25min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -67,6 +69,8 @@ Recent decisions affecting current work:
 - [v1.3 roadmap]: WLED channels use shared channel abstraction — painted ranges appear in light panel alongside Hue segments, same drag-drop assignment
 - [v1.3 roadmap]: HA endpoints are unauthenticated thin adapters over the existing StreamingCoordinator — no new auth layer
 - [v1.3 roadmap]: Phase 16 (bug fixes) runs first as warm-up — independent of WLED, unblocks clean state for WLED testing
+- [19.1-01] Wave 0 stubs use double-gated skip (pytest.importorskip + hasattr) for fetch_wled_state because services.wled_client already exists but the new function does not
+- [19.1-01] Pre-existing 12 test_cameras_router.py failures logged to deferred-items.md as out-of-scope (verified pre-existing via git-stash diff)
 
 ### Pending Todos
 
@@ -87,8 +91,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 19.1 context gathered
-Resume file: --resume-file
+Last session: 2026-05-14T19:20:13.468Z
+Stopped at: Completed 19.1-01-PLAN.md
+Resume file: None
 
-**Planned Phase:** 19 (WLED Strip Paint UI) — 13 plans — 2026-05-14T12:45:52.188Z
+**Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z
