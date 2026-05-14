@@ -14,4 +14,4 @@ Phase 19 ("WLED Strip Paint UI") sketches answer the visual questions left as "C
 |---|------|----------------|--------|------|
 | 001 | strip-canvas | What does the strip canvas look like across device counts and zone widths? | **A · Thin Timeline (40px)** | layout, canvas, settings |
 | 002 | zone-palette | How are zone fills derived so adjacent zones read as distinct? | **A · Golden-Angle HSL** | palette, color |
-| 003 | region-props-placement | Where does the per-assignment orientation control live? | _tbd_ | layout, panel, canvas |
+| 003 | region-props-placement | Where does the per-assignment orientation control live? | **A · Canvas Popover** | layout, panel, canvas |
