@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { getLights, getEntertainmentConfigs, fetchConfigChannels, type Light, type ConfigChannel, type EntertainmentConfig } from '@/api/hue'
 import { fetchRegions, startStreaming, stopStreaming, clearAllAssignments } from '@/api/regions'
 import { putCameraAssignment, putLastZone, type CamerasResponse } from '@/api/cameras'
+import {
+  getWledDevices,
+  listWledChannels,
+  listWledAssignments,
+  type WledDevice,
+  type WledChannel,
+} from '@/api/wled'
+import { channelColor } from '@/utils/wled-palette'
 import { useStatusStore } from '@/store/useStatusStore'
 import { useRegionStore } from '@/store/useRegionStore'
 import { Button } from '@/components/ui/button'
@@ -31,6 +39,13 @@ export function LightPanel({
   const [error, setError] = useState<string | null>(null)
   const [streamError, setStreamError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+
+  // Phase 19 D-12/D-14: WLED section state
+  const [wledDevices, setWledDevices] = useState<WledDevice[]>([])
+  const [wledChannelsByDevice, setWledChannelsByDevice] = useState<Record<string, WledChannel[]>>({})
+  const [wledAssignmentsByChannel, setWledAssignmentsByChannel] = useState<
+    Record<string, string>
+  >({})  // channelId -> region.name
 
   const isStreaming = useStatusStore((s) => s.isStreaming)
   const activeConfigId = useStatusStore((s) => s.activeConfigId)
@@ -121,6 +136,44 @@ export function LightPanel({
       .catch((err) => console.error('Failed to load channels:', err))
   }, [selectedConfigId])
 
+  // Phase 19: load WLED devices + channels + assignments for the WLED section.
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const devicesResp = await getWledDevices()
+        if (!alive) return
+        setWledDevices(devicesResp.devices)
+        const byDevice: Record<string, WledChannel[]> = {}
+        for (const d of devicesResp.devices) {
+          const chResp = await listWledChannels(d.id)
+          if (!alive) return
+          byDevice[d.id] = chResp.channels
+        }
+        setWledChannelsByDevice(byDevice)
+        if (selectedConfigId) {
+          const asgResp = await listWledAssignments(selectedConfigId)
+          if (!alive) return
+          // Map channelId -> first region.name that uses it (LightPanel display only)
+          const map: Record<string, string> = {}
+          const regionsById = new Map(regions.map((r) => [r.id, r]))
+          for (const a of asgResp.assignments) {
+            const region = regionsById.get(a.region_id)
+            if (region) map[a.wled_channel_id] = region.name
+          }
+          setWledAssignmentsByChannel(map)
+        } else {
+          setWledAssignmentsByChannel({})
+        }
+      } catch (err) {
+        console.error('Failed to load WLED data for LightPanel:', err)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [selectedConfigId, regions])
+
   async function handleCameraChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const devicePath = e.target.value
     if (!devicePath) {
@@ -210,6 +263,12 @@ export function LightPanel({
 
   // Channel counter: count regions with any light assigned
   const assignedCount = regions.filter((r) => r.light_id !== null).length
+
+  // Phase 19 D-14: WLED channel count (mono chip, no threshold colors)
+  const wledChannelCount = wledDevices.reduce(
+    (sum, d) => sum + (wledChannelsByDevice[d.id]?.length ?? 0),
+    0,
+  )
 
   // Group channels by light_id
   const channelsByLight: Record<string, ConfigChannel[]> = {}
@@ -439,6 +498,103 @@ export function LightPanel({
           </div>
         </div>
       </div>
+
+      {/* Phase 19 D-12: WLED section between Lights and Assignments. Hidden entirely
+          when no WLED devices are registered (UI-SPEC §Empty State Matrix). */}
+      {wledDevices.length > 0 && (
+        <>
+          <div className="h-px bg-white/[0.06]" />
+          <div
+            className="flex flex-col gap-2 min-h-0"
+            data-testid="lightpanel-wled-section"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                WLED
+              </h2>
+              <span
+                className="text-[11px] font-mono text-muted-foreground"
+                data-testid="lightpanel-wled-counter"
+              >
+                {wledChannelCount}
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground/60">
+              Drag a channel onto a region to assign it.
+            </p>
+
+            <div className="flex flex-col gap-1">
+              {wledDevices.map((device) => {
+                const channels = wledChannelsByDevice[device.id] ?? []
+                return (
+                  <div key={device.id} className="flex flex-col gap-0.5">
+                    {/* Device header */}
+                    <div className="flex items-center justify-between gap-1 rounded-lg px-2.5 py-1.5 bg-white/[0.03] border border-white/[0.06] select-none">
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-xs font-semibold truncate text-foreground">
+                          {device.name}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground font-mono truncate">
+                          {device.ip} · {device.led_count} LEDs · {channels.length} channels
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Per-channel draggable rows */}
+                    {channels.length > 0 && (
+                      <div className="ml-3 border-l-2 border-hue-orange/20 flex flex-col gap-0.5 pl-1">
+                        {channels
+                          .slice()
+                          .sort((a, b) => a.start_led - b.start_led)
+                          .map((channel, channelIndex) => {
+                            const assignedTo = wledAssignmentsByChannel[channel.id]
+                            return (
+                              <div
+                                key={channel.id}
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData('wledChannelId', channel.id)
+                                  e.dataTransfer.setData('wledDeviceId', device.id)
+                                  e.dataTransfer.setData('wledChannelName', channel.name)
+                                  e.dataTransfer.setData(
+                                    'entertainment_config_id',
+                                    selectedConfigId ?? '',
+                                  )
+                                  e.dataTransfer.effectAllowed = 'copy'
+                                }}
+                                className="flex flex-col gap-0.5 rounded-lg px-2.5 py-1.5 border border-white/[0.06] cursor-grab active:opacity-60 hover:bg-white/[0.04] select-none transition-colors"
+                                data-testid={`lightpanel-wled-channel-${channel.id}`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ background: channelColor(channelIndex) }}
+                                    data-testid={`lightpanel-wled-chip-${channel.id}`}
+                                  />
+                                  <span className="text-[11px] font-medium text-foreground/80 truncate flex-1">
+                                    {channel.name}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground font-mono">
+                                    LEDs {channel.start_led}–{channel.end_led}
+                                  </span>
+                                </div>
+                                {assignedTo && (
+                                  <span className="text-[10px] text-hue-amber/60">
+                                    Assigned: {assignedTo}
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Assigned regions summary + clear button */}
       {regions.some((r) => r.light_id) && (
