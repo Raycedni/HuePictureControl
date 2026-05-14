@@ -248,15 +248,16 @@ async def test_wled_devices_table_created():
         await close_db(conn)
 
 
-async def test_wled_channels_table_created():
-    """wled_channels table is created by init_db(). Per D-07."""
+async def test_wled_channels_table_removed_in_phase19_1():
+    """Phase 19.1 D-20: wled_channels table is DROPPED. The paint-managed channel
+    model is replaced by /json/state seg[] mirroring in wled_seg_cache."""
     conn = await init_db(":memory:")
     try:
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='wled_channels'"
         ) as cursor:
             row = await cursor.fetchone()
-        assert row is not None
+        assert row is None, "wled_channels must be hard-dropped in Phase 19.1 (D-20)"
     finally:
         await close_db(conn)
 
@@ -310,17 +311,20 @@ async def test_wled_devices_enabled_default_is_1():
 
 
 async def test_wled_light_assignments_composite_pk():
-    """Composite PK (region_id, wled_channel_id, entertainment_config_id) rejects duplicates."""
+    """Phase 19.1 D-13: composite PK
+    (region_id, wled_device_id, seg_index, entertainment_config_id) rejects duplicates."""
     conn = await init_db(":memory:")
     try:
         await conn.execute(
-            "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
-            "VALUES ('r1', 'c1', 'cfg1')"
+            "INSERT INTO wled_light_assignments "
+            "(region_id, wled_device_id, seg_index, entertainment_config_id) "
+            "VALUES ('r1', 'd1', 0, 'cfg1')"
         )
         with pytest.raises(aiosqlite.IntegrityError):
             await conn.execute(
-                "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
-                "VALUES ('r1', 'c1', 'cfg1')"
+                "INSERT INTO wled_light_assignments "
+                "(region_id, wled_device_id, seg_index, entertainment_config_id) "
+                "VALUES ('r1', 'd1', 0, 'cfg1')"
             )
         await conn.rollback()
     finally:
@@ -328,7 +332,9 @@ async def test_wled_light_assignments_composite_pk():
 
 
 async def test_init_db_is_idempotent_with_wled_tables(tmp_path):
-    """Running init_db twice on the same file DB is safe (IF NOT EXISTS honored)."""
+    """Running init_db twice on the same file DB is safe and yields the Phase 19.1
+    table set: wled_devices, wled_light_assignments, wled_seg_cache. wled_channels
+    is GONE (D-20)."""
     db_path = str(tmp_path / "test_wled_idempotent.db")
     conn1 = await init_db(db_path)
     await close_db(conn1)
@@ -336,11 +342,12 @@ async def test_init_db_is_idempotent_with_wled_tables(tmp_path):
     try:
         async with conn2.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-            "('wled_devices', 'wled_channels', 'wled_light_assignments')"
+            "('wled_devices', 'wled_channels', 'wled_light_assignments', 'wled_seg_cache')"
         ) as cursor:
             rows = await cursor.fetchall()
         names = {row["name"] for row in rows}
-        assert names == {"wled_devices", "wled_channels", "wled_light_assignments"}
+        assert names == {"wled_devices", "wled_light_assignments", "wled_seg_cache"}
+        assert "wled_channels" not in names
     finally:
         await close_db(conn2)
 
@@ -398,3 +405,176 @@ async def test_init_db_idempotent_next_channel_n():
     cols = [r[1] for r in rows]
     assert cols.count("next_channel_n") == 1, f"next_channel_n must exist exactly once after re-init: {cols}"
     await close_db(db2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 19.1 — schema migration tests (Plan 19.1-02, D-12, D-13, D-20)
+# wled_seg_cache + rewritten wled_light_assignments behind PRAGMA user_version
+# one-shot guard.
+# ---------------------------------------------------------------------------
+
+
+async def test_init_db_creates_wled_seg_cache_with_d12_schema(tmp_path):
+    """D-12: wled_seg_cache has 6 columns with composite PK (device_id, seg_index)."""
+    db_path = str(tmp_path / "p19_1_a.db")
+    db = await init_db(db_path)
+    try:
+        async with db.execute("PRAGMA table_info(wled_seg_cache)") as cur:
+            cols = await cur.fetchall()
+        names = [c[1] for c in cols]
+        types = {c[1]: c[2] for c in cols}
+        pk_flags = {c[1]: c[5] for c in cols}  # 5th col index = pk position
+        notnull = {c[1]: c[3] for c in cols}
+        assert set(names) == {
+            "device_id", "seg_index", "start_led", "stop_led", "name", "refreshed_at"
+        }
+        assert types["device_id"] == "TEXT"
+        assert types["seg_index"] == "INTEGER"
+        assert types["start_led"] == "INTEGER"
+        assert types["stop_led"] == "INTEGER"
+        assert types["refreshed_at"] == "TEXT"
+        # Composite PK ordering: device_id first, seg_index second.
+        assert pk_flags["device_id"] == 1
+        assert pk_flags["seg_index"] == 2
+        assert notnull["refreshed_at"] == 1
+        assert notnull["name"] == 0  # name is nullable
+    finally:
+        await close_db(db)
+
+
+async def test_init_db_creates_wled_light_assignments_with_d13_schema(tmp_path):
+    """D-13: wled_light_assignments has 5 cols; PK is composite over the first 4."""
+    db_path = str(tmp_path / "p19_1_b.db")
+    db = await init_db(db_path)
+    try:
+        async with db.execute("PRAGMA table_info(wled_light_assignments)") as cur:
+            cols = await cur.fetchall()
+        names = [c[1] for c in cols]
+        pk_flags = {c[1]: c[5] for c in cols}
+        assert set(names) == {
+            "region_id", "wled_device_id", "seg_index",
+            "entertainment_config_id", "orientation",
+        }
+        # All four columns participate in composite PK (orientation does not).
+        assert pk_flags["region_id"] >= 1
+        assert pk_flags["wled_device_id"] >= 1
+        assert pk_flags["seg_index"] >= 1
+        assert pk_flags["entertainment_config_id"] >= 1
+        assert pk_flags["orientation"] == 0
+        # The old wled_channel_id column is GONE.
+        assert "wled_channel_id" not in names
+    finally:
+        await close_db(db)
+
+
+async def test_upgrade_drops_phase19_wled_channels(tmp_path):
+    """D-20: a pre-existing Phase 19 database is upgraded — wled_channels dropped,
+    wled_light_assignments rewritten with the D-13 shape, user_version bumped to 1."""
+    db_path = str(tmp_path / "p19_to_p19_1.db")
+
+    # Pre-seed a Phase 19 database manually with the OLD schema.
+    conn = await aiosqlite.connect(db_path)
+    await conn.execute(
+        """
+        CREATE TABLE wled_devices (
+            id TEXT PRIMARY KEY,
+            ip TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            led_count INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE wled_channels (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            start_led INTEGER NOT NULL,
+            end_led INTEGER NOT NULL
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE wled_light_assignments (
+            region_id TEXT NOT NULL,
+            wled_channel_id TEXT NOT NULL,
+            entertainment_config_id TEXT NOT NULL,
+            orientation TEXT DEFAULT 'auto',
+            PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id)
+        )
+        """
+    )
+    await conn.execute("PRAGMA user_version = 0")
+    await conn.commit()
+    await conn.close()
+
+    # Run init_db — should upgrade.
+    db = await init_db(db_path)
+    try:
+        async with db.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wled_channels'"
+        ) as cur:
+            row = await cur.fetchone()
+        assert row[0] == 0, "wled_channels must be DROPPED (D-20)"
+
+        async with db.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row[0] == 1
+
+        async with db.execute("PRAGMA table_info(wled_light_assignments)") as cur:
+            cols = await cur.fetchall()
+        names = [c[1] for c in cols]
+        assert "wled_channel_id" not in names
+        assert "wled_device_id" in names
+        assert "seg_index" in names
+    finally:
+        await close_db(db)
+
+
+async def test_upgrade_guard_one_shot(tmp_path):
+    """D-20: running init_db twice does NOT re-drop tables on the second call.
+    Seeded cache row must survive."""
+    db_path = str(tmp_path / "p19_1_idempotent.db")
+    db = await init_db(db_path)
+    try:
+        await db.execute(
+            "INSERT INTO wled_devices (id, ip, name, led_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("dev-x", "1.1.1.1", "Test", 100, "2026-05-14T00:00:00+00:00"),
+        )
+        await db.execute(
+            "INSERT INTO wled_seg_cache "
+            "(device_id, seg_index, start_led, stop_led, name, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("dev-x", 0, 0, 9, "Pre", "2026-05-14T00:00:00+00:00"),
+        )
+        await db.commit()
+    finally:
+        await close_db(db)
+
+    # Re-init — guard must NOT fire and pre-seeded row must survive.
+    db2 = await init_db(db_path)
+    try:
+        async with db2.execute(
+            "SELECT name FROM wled_seg_cache WHERE device_id='dev-x'"
+        ) as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert row["name"] == "Pre"  # row SURVIVED the second init_db call
+    finally:
+        await close_db(db2)
+
+
+async def test_user_version_bumped_to_one(tmp_path):
+    """D-20: PRAGMA user_version is 1 after init_db on a fresh file."""
+    db_path = str(tmp_path / "p19_1_uv.db")
+    db = await init_db(db_path)
+    try:
+        async with db.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row[0] == 1
+    finally:
+        await close_db(db)
