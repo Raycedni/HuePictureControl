@@ -25,3 +25,17 @@ Failing tests:
 - `test_put_last_zone_upsert`
 - `test_get_cameras_exposes_last_entertainment_config_id`
 - `test_put_assignment_updates_last_seen_at`
+
+### Plan 03 (2026-05-14)
+
+**`test_phase19_1_e2e.py::test_cache_survives_db_reopen`** auto-activated when Plan 03 shipped
+`services.wled_segments`, then failed with `sqlite3.IntegrityError: NOT NULL constraint failed:
+wled_devices.created_at`. The Wave 0 stub (created in Plan 01) seeds `wled_devices` without the
+`created_at` column, which is `NOT NULL` in the real production schema produced by `init_db`
+(database.py line 105). Bug is in the test fixture, not in `reconcile_segments`.
+
+Owner: **Plan 04** — per the file's own docstring ("Wired in Plan 04 (router)... Replaces
+test_phase19_e2e.py once Plan 05 deletes it"). Plan 04 will either fix the seeding statement
+or rewrite the test against the new refresh endpoint. Out of scope for Plan 03 per scope
+boundary rule (only auto-fix issues DIRECTLY caused by current task's changes; this is a
+pre-existing test fixture bug).
