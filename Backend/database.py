@@ -124,6 +124,32 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             FOREIGN KEY (wled_channel_id) REFERENCES wled_channels(id) ON DELETE CASCADE
         )
     """)
+    # Phase 19 D-16: per-region orientation override for sub-sample axis + direction.
+    # Idempotent — silently no-ops if the column already exists. Pattern mirrors
+    # the regions.light_id ALTER pattern at the top of init_db.
+    try:
+        await db.execute(
+            "ALTER TABLE wled_light_assignments "
+            "ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'"
+        )
+        await db.commit()
+    except Exception:
+        # Column already exists — safe to ignore OperationalError.
+        pass
+
+    # Phase 19 (Channel-N numbering invariant per 19-RESEARCH.md): per-device
+    # monotonic counter so 'Channel N' never reuses a freed N. Counter survives
+    # both rename and delete (history lives in the column, not the channel name).
+    try:
+        await db.execute(
+            "ALTER TABLE wled_devices "
+            "ADD COLUMN next_channel_n INTEGER NOT NULL DEFAULT 1"
+        )
+        await db.commit()
+    except Exception:
+        # Column already exists — safe to ignore OperationalError.
+        pass
+
     await db.commit()
     return db
 
