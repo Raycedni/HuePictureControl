@@ -89,11 +89,12 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             updated_at TEXT NOT NULL
         )
     """)
-    # Phase 17 D-07: WLED device + channel + region-assignment schema.
+    # Phase 17 D-07: WLED device table. wled_devices stays (Phase 19.1 keeps it
+    # unchanged). The Phase 17 wled_channels + Phase 17/19 wled_light_assignments
+    # are dropped + rewritten below under the PRAGMA user_version guard (D-20).
     # FK clauses are documentation-as-code only — SQLite does not enforce them
     # without `PRAGMA foreign_keys = ON`, which the project intentionally omits
-    # (per 17-RESEARCH.md A5). Cascade deletes are implemented in router code
-    # (Plan 17-07).
+    # (per 17-RESEARCH.md A5). Cascade deletes are implemented in router code.
     await db.execute("""
         CREATE TABLE IF NOT EXISTS wled_devices (
             id TEXT PRIMARY KEY,
@@ -104,42 +105,11 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             created_at TEXT NOT NULL
         )
     """)
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS wled_channels (
-            id TEXT PRIMARY KEY,
-            device_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            start_led INTEGER NOT NULL,
-            end_led INTEGER NOT NULL,
-            color TEXT NOT NULL DEFAULT '#ffffff',
-            FOREIGN KEY (device_id) REFERENCES wled_devices(id) ON DELETE CASCADE
-        )
-    """)
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS wled_light_assignments (
-            region_id TEXT NOT NULL,
-            wled_channel_id TEXT NOT NULL,
-            entertainment_config_id TEXT NOT NULL,
-            PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id),
-            FOREIGN KEY (wled_channel_id) REFERENCES wled_channels(id) ON DELETE CASCADE
-        )
-    """)
-    # Phase 19 D-16: per-region orientation override for sub-sample axis + direction.
-    # Idempotent — silently no-ops if the column already exists. Pattern mirrors
-    # the regions.light_id ALTER pattern at the top of init_db.
-    try:
-        await db.execute(
-            "ALTER TABLE wled_light_assignments "
-            "ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'"
-        )
-        await db.commit()
-    except Exception:
-        # Column already exists — safe to ignore OperationalError.
-        pass
 
     # Phase 19 (Channel-N numbering invariant per 19-RESEARCH.md): per-device
-    # monotonic counter so 'Channel N' never reuses a freed N. Counter survives
-    # both rename and delete (history lives in the column, not the channel name).
+    # monotonic counter. Phase 19.1 D-10 Claude's Discretion: keep the column
+    # as a dormant idempotent ALTER even though channel naming is gone — it's
+    # harmless and avoids any extra migration footprint.
     try:
         await db.execute(
             "ALTER TABLE wled_devices "
@@ -149,6 +119,84 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
     except Exception:
         # Column already exists — safe to ignore OperationalError.
         pass
+
+    # =========================================================================
+    # Phase 19.1: drop+recreate upgrade from Phase 19 paint-managed wled_channels
+    # to refresh-mirrored wled_seg_cache. One-shot — gated by PRAGMA user_version
+    # so the drop fires exactly once per database file regardless of restart count.
+    # See .planning/phases/19.1-wled-segment-sync/19.1-RESEARCH.md §"SQLite Upgrade
+    # Guard" for the full rationale (D-12, D-13, D-20).
+    # =========================================================================
+    PHASE_19_1_USER_VERSION = 1
+
+    async with db.execute("PRAGMA user_version") as cur:
+        version_row = await cur.fetchone()
+    current_version = int(version_row[0]) if version_row else 0
+
+    if current_version < PHASE_19_1_USER_VERSION:
+        # D-20: hard-drop Phase 19 tables. DROP TABLE IF EXISTS is idempotent on
+        # its own; the version gate guarantees we never re-drop a freshly-created
+        # table on subsequent restarts.
+        await db.execute("DROP TABLE IF EXISTS wled_channels")
+        await db.execute("DROP TABLE IF EXISTS wled_light_assignments")
+        # D-13: recreate wled_light_assignments with composite
+        # (region_id, wled_device_id, seg_index, entertainment_config_id) PK.
+        await db.execute("""
+            CREATE TABLE wled_light_assignments (
+                region_id TEXT NOT NULL,
+                wled_device_id TEXT NOT NULL,
+                seg_index INTEGER NOT NULL,
+                entertainment_config_id TEXT NOT NULL,
+                orientation TEXT NOT NULL DEFAULT 'auto',
+                PRIMARY KEY (region_id, wled_device_id, seg_index, entertainment_config_id)
+            )
+        """)
+        # D-12: new cache table mirroring WLED's /json/state seg[] per device.
+        # stop_led is INCLUSIVE (converted from WLED's exclusive seg.stop at
+        # parse boundary in services.wled_client.fetch_wled_state).
+        await db.execute("""
+            CREATE TABLE wled_seg_cache (
+                device_id TEXT NOT NULL,
+                seg_index INTEGER NOT NULL,
+                start_led INTEGER NOT NULL,
+                stop_led INTEGER NOT NULL,
+                name TEXT,
+                refreshed_at TEXT NOT NULL,
+                PRIMARY KEY (device_id, seg_index),
+                FOREIGN KEY (device_id) REFERENCES wled_devices(id) ON DELETE CASCADE
+            )
+        """)
+        # Bump user_version LAST so a mid-migration failure does not mark the
+        # upgrade complete; the guard will fire again on next boot.
+        await db.execute(f"PRAGMA user_version = {PHASE_19_1_USER_VERSION}")
+        await db.commit()
+    else:
+        # Already migrated. Defensive idempotent CREATE so a fresh-install
+        # database (no prior Phase 19 tables) still gets both tables on first
+        # boot at user_version=1 — and the second-call no-op path stays safe.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS wled_light_assignments (
+                region_id TEXT NOT NULL,
+                wled_device_id TEXT NOT NULL,
+                seg_index INTEGER NOT NULL,
+                entertainment_config_id TEXT NOT NULL,
+                orientation TEXT NOT NULL DEFAULT 'auto',
+                PRIMARY KEY (region_id, wled_device_id, seg_index, entertainment_config_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS wled_seg_cache (
+                device_id TEXT NOT NULL,
+                seg_index INTEGER NOT NULL,
+                start_led INTEGER NOT NULL,
+                stop_led INTEGER NOT NULL,
+                name TEXT,
+                refreshed_at TEXT NOT NULL,
+                PRIMARY KEY (device_id, seg_index),
+                FOREIGN KEY (device_id) REFERENCES wled_devices(id) ON DELETE CASCADE
+            )
+        """)
+        await db.commit()
 
     await db.commit()
     return db
