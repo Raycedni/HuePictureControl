@@ -157,3 +157,9 @@ None — no external service configuration required.
 ---
 *Phase: 19-wled-strip-paint-ui*
 *Completed: 2026-05-14*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/19-wled-strip-paint-ui/19-09-SUMMARY.md`
+- FOUND: commit `352ff81` (feat: orientation wire-up)
+- FOUND: commit `0e21172` (docs: SUMMARY)
