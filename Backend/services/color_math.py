@@ -10,6 +10,7 @@ Exports:
 """
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -198,8 +199,22 @@ def extract_region_color(
     return r_val, g, b
 
 
+# Phase 19 D-17: per-region orientation enum for sub-sample axis + direction.
+# 'auto' preserves the Phase 17 bbox-longest-axis behavior (D-22 contract).
+Orientation = Literal[
+    "auto",
+    "horizontal-LTR",
+    "horizontal-RTL",
+    "vertical-TTB",
+    "vertical-BTT",
+]
+
+
 def sub_sample_gradient(
-    frame: np.ndarray, region: RegionMask, n: int
+    frame: np.ndarray,
+    region: RegionMask,
+    n: int,
+    orientation: Orientation = "auto",
 ) -> np.ndarray:
     """Return an (n, 3) array of RGB means sampled along the region's longest bbox axis.
 
@@ -217,6 +232,12 @@ def sub_sample_gradient(
         frame: BGR uint8 numpy array (H x W x 3).
         region: RegionMask with pre-computed bounding box.
         n: Number of equidistant samples to produce.
+        orientation: One of 'auto', 'horizontal-LTR', 'horizontal-RTL',
+            'vertical-TTB', 'vertical-BTT'. 'auto' (default) keeps the Phase 17
+            bbox-longest-axis behavior so Hue callers and untouched WLED
+            assignments stay bit-for-bit identical (D-22 contract). The four
+            explicit modes force both axis and indexing direction; 'RTL' and
+            'BTT' reverse the output array (D-17).
 
     Returns:
         uint8 ndarray of shape (n_effective, 3) in RGB order, where
@@ -231,7 +252,24 @@ def sub_sample_gradient(
     longest = max(width, height, 1)
     n_effective = max(1, min(n, longest))
 
-    axis_x = width >= height
+    # Phase 19 D-20: orientation overrides longest-axis fallback.
+    if orientation == "auto":
+        axis_x = width >= height
+        reverse = False
+    elif orientation == "horizontal-LTR":
+        axis_x = True
+        reverse = False
+    elif orientation == "horizontal-RTL":
+        axis_x = True
+        reverse = True
+    elif orientation == "vertical-TTB":
+        axis_x = False
+        reverse = False
+    elif orientation == "vertical-BTT":
+        axis_x = False
+        reverse = True
+    else:
+        raise ValueError(f"Unknown orientation: {orientation!r}")
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
 
     means = np.empty((n_effective, 3), dtype=np.uint8)
@@ -252,4 +290,6 @@ def sub_sample_gradient(
         mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
         # cv2.mean returns BGR; convert to RGB for output
         means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
+    if reverse:
+        means = means[::-1]
     return means
