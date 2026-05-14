@@ -302,3 +302,23 @@ describe('LightPanel', () => {
     })
   })
 })
+
+// Phase 19 — WLED section stubs. The section ships in Plan 19-08.
+
+describe('LightPanel WLED section', () => {
+  it.todo('renders WLED section header below Lights section')
+
+  it.todo('counter chip: "M" mono text with text-muted-foreground (no threshold colors per D-14)')
+
+  it.todo('WLED section is hidden entirely when no WLED devices are registered')
+
+  it.todo('groups channels per device with sub-header showing {ip} · {led_count} LEDs · {channel_count} channels')
+
+  it.todo('WLED chip matches palette: each channel row chip background equals channelColor(channel.index)')
+
+  it.todo('WLED drag payload: dataTransfer.setData called with wledChannelId, wledDeviceId, wledChannelName, entertainment_config_id')
+
+  it.todo('WLED drag payload: existing Hue keys (channelId/channelName/lightId/configId) are NOT set on WLED rows')
+
+  it.todo('Assigned-to line: when channel has an assignment, "Assigned: {region.name}" renders in text-hue-amber/60')
+})
