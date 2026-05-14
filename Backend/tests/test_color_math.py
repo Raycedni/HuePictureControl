@@ -312,3 +312,93 @@ class TestSubSampleGradient:
         # Region width = ceil(0.003*639)+1 = 2-3 px; clamping cap -> at most 3
         assert gradient.shape[0] <= 10
         assert gradient.shape[1] == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 D-17 / D-20: orientation parameter on sub_sample_gradient.
+# ---------------------------------------------------------------------------
+
+
+def _has_orientation_param():
+    """Return True if sub_sample_gradient already accepts an 'orientation' kwarg.
+
+    Wave 0 guard: returns False until Plan 19-02 extends the signature.
+    """
+    import inspect
+    return "orientation" in inspect.signature(sub_sample_gradient).parameters
+
+
+def _make_horizontal_red_blue_fixture():
+    """Synthetic 100x50 BGR frame with horizontal red->blue gradient over a full-bbox region.
+
+    Top-half is solid; the gradient is along x (width >= height => longest axis = x).
+    Returns (frame, region_mask).
+    """
+    import numpy as np
+    width, height = 100, 50
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    for x in range(width):
+        t = x / (width - 1)
+        # BGR: blue grows, red shrinks
+        frame[:, x, 0] = int(t * 255)         # blue
+        frame[:, x, 2] = int((1 - t) * 255)   # red
+    # Full-frame region polygon (normalized)
+    polygon_pts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    mask = build_polygon_mask(polygon_pts, width=width, height=height)
+    return frame, mask
+
+
+def test_sub_sample_orientation_auto_matches_phase17():
+    """orientation='auto' MUST produce the bit-for-bit same result as the existing call."""
+    if not _has_orientation_param():
+        pytest.skip("Wave 1 (19-02) adds orientation kwarg to sub_sample_gradient; skip until then")
+    frame, mask = _make_horizontal_red_blue_fixture()
+    n = 10
+    # orientation='auto' is the new default — must match the old call bit-for-bit.
+    a = sub_sample_gradient(frame, mask, n)
+    b = sub_sample_gradient(frame, mask, n, orientation="auto")
+    assert (a == b).all(), "default 'auto' must match the pre-Phase-19 signature output"
+
+
+def test_sub_sample_orientation_horizontal_ltr():
+    """orientation='horizontal-LTR' forces x-axis; first sample is red, last is blue."""
+    if not _has_orientation_param():
+        pytest.skip("Wave 1 (19-02) adds orientation kwarg to sub_sample_gradient; skip until then")
+    frame, mask = _make_horizontal_red_blue_fixture()
+    out = sub_sample_gradient(frame, mask, 10, orientation="horizontal-LTR")
+    # Output is RGB (per helper convention). First row should be high red, last high blue.
+    assert out[0][0] > out[0][2], "first sample should be more red than blue"
+    assert out[-1][2] > out[-1][0], "last sample should be more blue than red"
+
+
+def test_sub_sample_orientation_horizontal_rtl():
+    """orientation='horizontal-RTL' reverses the output."""
+    if not _has_orientation_param():
+        pytest.skip("Wave 1 (19-02) adds orientation kwarg to sub_sample_gradient; skip until then")
+    frame, mask = _make_horizontal_red_blue_fixture()
+    ltr = sub_sample_gradient(frame, mask, 10, orientation="horizontal-LTR")
+    rtl = sub_sample_gradient(frame, mask, 10, orientation="horizontal-RTL")
+    assert (rtl == ltr[::-1]).all(), "RTL must be LTR reversed"
+
+
+def test_sub_sample_orientation_vertical_ttb():
+    """orientation='vertical-TTB' forces y-axis regardless of bbox aspect."""
+    if not _has_orientation_param():
+        pytest.skip("Wave 1 (19-02) adds orientation kwarg to sub_sample_gradient; skip until then")
+    frame, mask = _make_horizontal_red_blue_fixture()
+    out = sub_sample_gradient(frame, mask, 10, orientation="vertical-TTB")
+    # Fixture is horizontally graded — y-axis sampling should yield near-uniform colors per row.
+    # All rows of `out` should be close (within rounding) since each y-row holds the same x-gradient mean.
+    for i in range(1, len(out)):
+        diff = abs(int(out[i][0]) - int(out[0][0])) + abs(int(out[i][2]) - int(out[0][2]))
+        assert diff < 20, f"vertical sampling on a horizontal gradient should be near-uniform; row {i} diff {diff}"
+
+
+def test_sub_sample_orientation_vertical_btt():
+    """orientation='vertical-BTT' reverses the vertical output."""
+    if not _has_orientation_param():
+        pytest.skip("Wave 1 (19-02) adds orientation kwarg to sub_sample_gradient; skip until then")
+    frame, mask = _make_horizontal_red_blue_fixture()
+    ttb = sub_sample_gradient(frame, mask, 10, orientation="vertical-TTB")
+    btt = sub_sample_gradient(frame, mask, 10, orientation="vertical-BTT")
+    assert (btt == ttb[::-1]).all(), "BTT must be TTB reversed"

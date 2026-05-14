@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, patch
 
 import aiosqlite
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -395,3 +396,50 @@ def test_scan_returns_candidates_list():
     assert len(body["candidates"]) == 2
     ips = {c["ip"] for c in body["candidates"]}
     assert ips == {"192.168.1.51", "192.168.1.52"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 channel-CRUD + orientation PATCH stubs — Plan 19-05 fills these in.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_channel_basic():
+    """POST /api/wled/devices/{id}/channels inserts (start, end) — WMAP-01."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 wires routers/wled.py to services.wled_channels.create_channel_with_split.")
+
+
+async def test_list_channels_for_device():
+    """GET /api/wled/devices/{id}/channels returns ordered list."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 wires routers/wled.py list endpoint.")
+
+
+async def test_update_channel_rename():
+    """PUT /api/wled/devices/{id}/channels/{cid} with {name} renames in place."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 wires routers/wled.py PUT endpoint.")
+
+
+async def test_boundary_resize_atomic():
+    """PUT /api/wled/devices/{id}/channels/boundary updates both adjacent rows."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 wires routers/wled.py boundary endpoint to resize_boundary.")
+
+
+async def test_delete_channel_cascades():
+    """DELETE /api/wled/devices/{id}/channels/{cid} cascades to wled_light_assignments."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 wires routers/wled.py DELETE cascade.")
+
+
+async def test_patch_region_orientation_writes_all_rows():
+    """PATCH /api/wled/regions/{rid}/orientation?config={cid} writes ALL matching rows."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 implements PATCH /api/wled/regions/{rid}/orientation.")
+
+
+async def test_upsert_assignment_inherits_region_orientation():
+    """PUT /api/wled/assignments inserts new row carrying the region's current orientation."""
+    pytest.importorskip("services.wled_channels")
+    pytest.skip("Wave 3 implements PUT /api/wled/assignments.")
