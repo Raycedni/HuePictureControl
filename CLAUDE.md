@@ -211,4 +211,5 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 | preflight | Full pre-commit verification — runs tests, health checks, and visual UI verification before committing | `.claude/skills/preflight/SKILL.md` |
 | test | Run all backend and frontend tests in parallel and report results | `.claude/skills/test/SKILL.md` |
 | verify-ui | Visually verify the frontend UI by screenshotting all tabs using Playwright MCP | `.claude/skills/verify-ui/SKILL.md` |
+| sketch-findings-huepicturecontrol | Validated design decisions, CSS patterns, and visual direction from sketch experiments — auto-loaded during UI implementation | `.claude/skills/sketch-findings-huepicturecontrol/SKILL.md` |
 <!-- GSD:skills-end -->

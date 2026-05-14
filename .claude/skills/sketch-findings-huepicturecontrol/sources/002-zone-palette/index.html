@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Sketch 002 · Zone Palette</title>
+<link rel="stylesheet" href="../themes/default.css" />
+<style>
+  .stage { max-width: 1280px; margin: 0 auto; padding: 24px; }
+  .stage h1 { color: var(--text-h); font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .stage .lede { font-size: 12px; color: rgba(255,255,255,0.5); margin: 0 0 20px; }
+
+  /* Reused thin-timeline strip from sketch 001-A (winner) */
+  .strip {
+    position: relative;
+    height: 40px;
+    background: rgba(0,0,0,0.35);
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.06);
+    overflow: visible;
+  }
+  .strip .zone {
+    position: absolute; top: 0; bottom: 0;
+    display: flex; align-items: center; padding: 0 8px;
+    font-size: 11px; font-weight: 500;
+    color: rgba(0,0,0,0.78);
+    cursor: pointer; user-select: none;
+    border-right: 1px solid rgba(0,0,0,0.25);
+  }
+  .strip .zone.narrow { padding: 0; }
+  .strip .ticks {
+    position: relative; height: 14px; margin-top: 4px;
+    font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
+  }
+  .strip .ticks .tick { position: absolute; top: 0; transform: translateX(-50%); }
+  .strip .ticks .tick::before {
+    content: ''; display: block; width: 1px; height: 4px;
+    background: rgba(255,255,255,0.2); margin: 0 auto 2px;
+  }
+
+  /* LightPanel mock — shows the chip color reference at the right */
+  .lightpanel {
+    width: 280px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .lp-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: grab;
+  }
+  .lp-row:hover { background: var(--glass-hover); }
+  .lp-row .chip { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+  .lp-row .ch-name { color: var(--text-h); }
+  .lp-row .ch-rng  { color: rgba(255,255,255,0.4); margin-left: auto; font-family: var(--mono); font-size: 10px; }
+  .lp-device-head {
+    font-size: 10px; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 12px 0 4px;
+  }
+
+  /* Side-by-side strip + lightpanel */
+  .duo { display: flex; gap: 16px; align-items: flex-start; }
+  .duo .canvas-col { flex: 1; min-width: 0; }
+  .device-block { margin-bottom: 16px; }
+  .device-block .head {
+    display: flex; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .device-block .head .nm  { font-size: 12px; font-weight: 600; color: var(--text-h); }
+  .device-block .head .meta { font-size: 10px; color: rgba(255,255,255,0.4); font-family: var(--mono); }
+
+  .palette-row {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-top: 12px;
+    padding: 10px;
+    background: rgba(255,255,255,0.02);
+    border: 1px dashed var(--glass-border);
+    border-radius: 4px;
+  }
+  .palette-row .sw {
+    width: 28px; height: 28px; border-radius: 4px;
+    border: 1px solid rgba(0,0,0,0.2);
+    position: relative;
+  }
+  .palette-row .sw::after {
+    content: attr(data-idx);
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 600;
+    color: rgba(0,0,0,0.6);
+    font-family: var(--mono);
+  }
+
+  details.callouts {
+    margin-top: 24px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.02);
+    border: 1px dashed var(--glass-border);
+    border-radius: 6px;
+    font-size: 11px;
+  }
+  details.callouts summary { cursor: pointer; color: var(--text-h); font-weight: 500; }
+  details.callouts ul { margin: 8px 0 0; padding-left: 18px; }
+  details.callouts li { margin-bottom: 4px; color: rgba(255,255,255,0.6); }
+  code { font-family: var(--mono); font-size: 11px; background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="sketch-toolbar">
+  <span class="badge">Sketch 002</span>
+  <span class="badge badge-accent">Zone Palette</span>
+</div>
+
+<div class="variant-tabs">
+  <button class="variant-tab active" data-tab="A">Variant A · Golden-Angle HSL<span class="star">★</span></button>
+  <button class="variant-tab" data-tab="B">Variant B · Amber Tonal Ramp</button>
+  <button class="variant-tab" data-tab="C">Variant C · Brand + Cool Counterpoint</button>
+</div>
+
+<!-- ============ VARIANT A · GOLDEN ANGLE ============ -->
+<div class="variant-panel active" data-panel="A">
+  <div class="stage">
+    <h1>A · Golden-Angle HSL (hue = i × 137.508° mod 360, fixed s/l)</h1>
+    <p class="lede">Maximum hue separation between adjacent indexes. Saturation pinned at 60%, lightness at 60% — bright enough for the dark surface, muted enough not to clash with the amber brand accent. This was the formula CONTEXT.md "Specifics" listed as the natural option.</p>
+
+    <div class="duo">
+      <div class="canvas-col">
+        <div class="device-block">
+          <div class="head"><span class="nm">TV Back Strip · 6 channels</span><span class="meta">stress test</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;    width:14%;  background:hsl(0,    60%, 60%);">Ch 1</div>
+            <div class="zone" style="left:14%;   width:18%;  background:hsl(137.5,60%, 60%);">Ch 2</div>
+            <div class="zone" style="left:32%;   width:12%;  background:hsl(275,  60%, 60%);">Ch 3</div>
+            <div class="zone" style="left:44%;   width:22%;  background:hsl(52.5, 60%, 60%);">Ch 4</div>
+            <div class="zone" style="left:66%;   width:16%;  background:hsl(190,  60%, 60%);">Ch 5</div>
+            <div class="zone" style="left:82%;   width:18%;  background:hsl(327.5,60%, 60%);">Ch 6</div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span><span class="tick" style="left:25%;">75</span>
+            <span class="tick" style="left:50%;">150</span><span class="tick" style="left:75%;">225</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <div class="device-block">
+          <div class="head"><span class="nm">Lamp Strip · 3 channels</span><span class="meta">typical</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;  width:33%; background:hsl(0,    60%, 60%);">Top</div>
+            <div class="zone" style="left:33%; width:34%; background:hsl(137.5,60%, 60%);">Mid</div>
+            <div class="zone" style="left:67%; width:33%; background:hsl(275,  60%, 60%);">Bot</div>
+          </div>
+        </div>
+
+        <div class="palette-row">
+          <span style="font-size:10px; color:rgba(255,255,255,0.4); align-self:center; margin-right:8px; text-transform:uppercase; letter-spacing:0.08em;">Index 0 → 11</span>
+          <div class="sw" style="background:hsl(0,    60%,60%);" data-idx="0"></div>
+          <div class="sw" style="background:hsl(137.5,60%,60%);" data-idx="1"></div>
+          <div class="sw" style="background:hsl(275,  60%,60%);" data-idx="2"></div>
+          <div class="sw" style="background:hsl(52.5, 60%,60%);" data-idx="3"></div>
+          <div class="sw" style="background:hsl(190,  60%,60%);" data-idx="4"></div>
+          <div class="sw" style="background:hsl(327.5,60%,60%);" data-idx="5"></div>
+          <div class="sw" style="background:hsl(105,  60%,60%);" data-idx="6"></div>
+          <div class="sw" style="background:hsl(242.5,60%,60%);" data-idx="7"></div>
+          <div class="sw" style="background:hsl(20,   60%,60%);" data-idx="8"></div>
+          <div class="sw" style="background:hsl(157.5,60%,60%);" data-idx="9"></div>
+          <div class="sw" style="background:hsl(295,  60%,60%);" data-idx="10"></div>
+          <div class="sw" style="background:hsl(72.5, 60%,60%);" data-idx="11"></div>
+        </div>
+      </div>
+
+      <div class="lightpanel">
+        <h3 class="section-header">Lights · 4/20</h3>
+        <div class="lp-device-head">TV Back Strip</div>
+        <div class="lp-row"><span class="chip" style="background:hsl(0,    60%,60%);"></span><span class="ch-name">Channel 1</span><span class="ch-rng">0–69</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(137.5,60%,60%);"></span><span class="ch-name">Channel 2</span><span class="ch-rng">70–159</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(275,  60%,60%);"></span><span class="ch-name">Channel 3</span><span class="ch-rng">160–219</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(52.5, 60%,60%);"></span><span class="ch-name">Channel 4</span><span class="ch-rng">220–329</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(190,  60%,60%);"></span><span class="ch-name">Channel 5</span><span class="ch-rng">330–409</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(327.5,60%,60%);"></span><span class="ch-name">Channel 6</span><span class="ch-rng">410–499</span></div>
+        <div class="lp-device-head">Lamp Strip</div>
+        <div class="lp-row"><span class="chip" style="background:hsl(0,    60%,60%);"></span><span class="ch-name">Top</span><span class="ch-rng">0–19</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(137.5,60%,60%);"></span><span class="ch-name">Mid</span><span class="ch-rng">20–39</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(275,  60%,60%);"></span><span class="ch-name">Bot</span><span class="ch-rng">40–59</span></div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>Every adjacent pair is maximally distinct in hue — easy to pick out at a glance even at 6+ channels.</li>
+        <li>Chips in LightPanel match strip zones 1:1 by index (per-device numbering).</li>
+        <li>Risk: full rainbow can fight the amber brand. Channel 1 = red, which collides emotionally with "stop"/destructive.</li>
+        <li>Risk: same index gives same color across devices — Top/Mid/Bot on Lamp Strip use the same colors as Ch 1/2/3 on TV. CONTEXT.md doesn't say per-device colors must differ, but it could surprise users when colors repeat across the LightPanel.</li>
+        <li>Formula: <code>hsl((i * 137.508) % 360, 60%, 60%)</code>. Deterministic, no state.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<!-- ============ VARIANT B · AMBER RAMP ============ -->
+<div class="variant-panel" data-panel="B">
+  <div class="stage">
+    <h1>B · Amber Tonal Ramp (hue locked at 38°, lightness + saturation step)</h1>
+    <p class="lede">Stays inside the brand. Channels read as members of the same family rather than independent colors. Distinguished by lightness (40 → 75) and saturation modulation, so the eye sorts them by "darker → brighter" instead of by hue.</p>
+
+    <div class="duo">
+      <div class="canvas-col">
+        <div class="device-block">
+          <div class="head"><span class="nm">TV Back Strip · 6 channels</span><span class="meta">stress test</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;    width:14%;  background:hsl(38, 90%, 45%); color:#1a1208;">Ch 1</div>
+            <div class="zone" style="left:14%;   width:18%;  background:hsl(38, 85%, 55%); color:#1a1208;">Ch 2</div>
+            <div class="zone" style="left:32%;   width:12%;  background:hsl(38, 80%, 62%); color:rgba(0,0,0,0.78);">Ch 3</div>
+            <div class="zone" style="left:44%;   width:22%;  background:hsl(34, 75%, 68%); color:rgba(0,0,0,0.78);">Ch 4</div>
+            <div class="zone" style="left:66%;   width:16%;  background:hsl(28, 70%, 72%); color:rgba(0,0,0,0.78);">Ch 5</div>
+            <div class="zone" style="left:82%;   width:18%;  background:hsl(20, 60%, 75%); color:rgba(0,0,0,0.78);">Ch 6</div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span><span class="tick" style="left:25%;">75</span>
+            <span class="tick" style="left:50%;">150</span><span class="tick" style="left:75%;">225</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <div class="device-block">
+          <div class="head"><span class="nm">Lamp Strip · 3 channels</span><span class="meta">typical</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;  width:33%; background:hsl(38, 90%, 45%); color:#1a1208;">Top</div>
+            <div class="zone" style="left:33%; width:34%; background:hsl(38, 80%, 62%); color:rgba(0,0,0,0.78);">Mid</div>
+            <div class="zone" style="left:67%; width:33%; background:hsl(28, 70%, 72%); color:rgba(0,0,0,0.78);">Bot</div>
+          </div>
+        </div>
+
+        <div class="palette-row">
+          <span style="font-size:10px; color:rgba(255,255,255,0.4); align-self:center; margin-right:8px; text-transform:uppercase; letter-spacing:0.08em;">Index 0 → 7</span>
+          <div class="sw" style="background:hsl(38, 90%, 38%);" data-idx="0"></div>
+          <div class="sw" style="background:hsl(38, 90%, 45%);" data-idx="1"></div>
+          <div class="sw" style="background:hsl(38, 85%, 55%);" data-idx="2"></div>
+          <div class="sw" style="background:hsl(38, 80%, 62%);" data-idx="3"></div>
+          <div class="sw" style="background:hsl(34, 75%, 68%);" data-idx="4"></div>
+          <div class="sw" style="background:hsl(28, 70%, 72%);" data-idx="5"></div>
+          <div class="sw" style="background:hsl(22, 60%, 76%);" data-idx="6"></div>
+          <div class="sw" style="background:hsl(20, 50%, 80%);" data-idx="7"></div>
+        </div>
+      </div>
+
+      <div class="lightpanel">
+        <h3 class="section-header">Lights · 4/20</h3>
+        <div class="lp-device-head">TV Back Strip</div>
+        <div class="lp-row"><span class="chip" style="background:hsl(38, 90%, 45%);"></span><span class="ch-name">Channel 1</span><span class="ch-rng">0–69</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(38, 85%, 55%);"></span><span class="ch-name">Channel 2</span><span class="ch-rng">70–159</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(38, 80%, 62%);"></span><span class="ch-name">Channel 3</span><span class="ch-rng">160–219</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(34, 75%, 68%);"></span><span class="ch-name">Channel 4</span><span class="ch-rng">220–329</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(28, 70%, 72%);"></span><span class="ch-name">Channel 5</span><span class="ch-rng">330–409</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(20, 60%, 75%);"></span><span class="ch-name">Channel 6</span><span class="ch-rng">410–499</span></div>
+        <div class="lp-device-head">Lamp Strip</div>
+        <div class="lp-row"><span class="chip" style="background:hsl(38, 90%, 45%);"></span><span class="ch-name">Top</span><span class="ch-rng">0–19</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(38, 80%, 62%);"></span><span class="ch-name">Mid</span><span class="ch-rng">20–39</span></div>
+        <div class="lp-row"><span class="chip" style="background:hsl(28, 70%, 72%);"></span><span class="ch-name">Bot</span><span class="ch-rng">40–59</span></div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>Feels brand-aligned and cohesive — channels read as "siblings".</li>
+        <li>Past ~5 adjacent channels the differences become subtle. Two adjacent zones at indexes 4 and 5 are still distinguishable but borderline.</li>
+        <li>Risk: at higher channel counts (TV Back's 6 channels), the ramp runs out of headroom — Ch 5 and Ch 6 are close.</li>
+        <li>Formula: <code>hsl(38 - (i * 3), 90 - (i * 6), 45 + (i * 6))</code> roughly. Bounded; rolls toward warm pastels.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<!-- ============ VARIANT C · BRAND + COOL COUNTERPOINT ============ -->
+<div class="variant-panel" data-panel="C">
+  <div class="stage">
+    <h1>C · Two-Family Alternation (warm/cool, anchored to brand)</h1>
+    <p class="lede">Indexes alternate between a warm family (amber, orange, gold) and a cool family (slate-blue, teal, periwinkle). Adjacent zones are <em>always</em> in opposing families so contrast is guaranteed even at high channel counts. Brand still dominates because the warm family uses the existing palette anchors.</p>
+
+    <div class="duo">
+      <div class="canvas-col">
+        <div class="device-block">
+          <div class="head"><span class="nm">TV Back Strip · 6 channels</span><span class="meta">stress test</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;    width:14%;  background:#e8a000;        color:#1a1208;">Ch 1</div>
+            <div class="zone" style="left:14%;   width:18%;  background:#5b9dd9;        color:#0a1420;">Ch 2</div>
+            <div class="zone" style="left:32%;   width:12%;  background:#f5b731;        color:#1a1208;">Ch 3</div>
+            <div class="zone" style="left:44%;   width:22%;  background:#6cc3b3;        color:#0a1a16;">Ch 4</div>
+            <div class="zone" style="left:66%;   width:16%;  background:#ff8c42;        color:#1a0d04;">Ch 5</div>
+            <div class="zone" style="left:82%;   width:18%;  background:#9b8fd1;        color:#100a20;">Ch 6</div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span><span class="tick" style="left:25%;">75</span>
+            <span class="tick" style="left:50%;">150</span><span class="tick" style="left:75%;">225</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <div class="device-block">
+          <div class="head"><span class="nm">Lamp Strip · 3 channels</span><span class="meta">typical</span></div>
+          <div class="strip">
+            <div class="zone" style="left:0%;  width:33%; background:#e8a000; color:#1a1208;">Top</div>
+            <div class="zone" style="left:33%; width:34%; background:#5b9dd9; color:#0a1420;">Mid</div>
+            <div class="zone" style="left:67%; width:33%; background:#f5b731; color:#1a1208;">Bot</div>
+          </div>
+        </div>
+
+        <div class="palette-row">
+          <span style="font-size:10px; color:rgba(255,255,255,0.4); align-self:center; margin-right:8px; text-transform:uppercase; letter-spacing:0.08em;">Warm (even idx)</span>
+          <div class="sw" style="background:#e8a000;" data-idx="0"></div>
+          <div class="sw" style="background:#f5b731;" data-idx="2"></div>
+          <div class="sw" style="background:#ff8c42;" data-idx="4"></div>
+          <div class="sw" style="background:#ffd766;" data-idx="6"></div>
+          <div class="sw" style="background:#d97a1f;" data-idx="8"></div>
+          <span style="font-size:10px; color:rgba(255,255,255,0.4); align-self:center; margin: 0 8px 0 16px; text-transform:uppercase; letter-spacing:0.08em;">Cool (odd)</span>
+          <div class="sw" style="background:#5b9dd9;" data-idx="1"></div>
+          <div class="sw" style="background:#6cc3b3;" data-idx="3"></div>
+          <div class="sw" style="background:#9b8fd1;" data-idx="5"></div>
+          <div class="sw" style="background:#7eb8c5;" data-idx="7"></div>
+          <div class="sw" style="background:#a3b3d1;" data-idx="9"></div>
+        </div>
+      </div>
+
+      <div class="lightpanel">
+        <h3 class="section-header">Lights · 4/20</h3>
+        <div class="lp-device-head">TV Back Strip</div>
+        <div class="lp-row"><span class="chip" style="background:#e8a000;"></span><span class="ch-name">Channel 1</span><span class="ch-rng">0–69</span></div>
+        <div class="lp-row"><span class="chip" style="background:#5b9dd9;"></span><span class="ch-name">Channel 2</span><span class="ch-rng">70–159</span></div>
+        <div class="lp-row"><span class="chip" style="background:#f5b731;"></span><span class="ch-name">Channel 3</span><span class="ch-rng">160–219</span></div>
+        <div class="lp-row"><span class="chip" style="background:#6cc3b3;"></span><span class="ch-name">Channel 4</span><span class="ch-rng">220–329</span></div>
+        <div class="lp-row"><span class="chip" style="background:#ff8c42;"></span><span class="ch-name">Channel 5</span><span class="ch-rng">330–409</span></div>
+        <div class="lp-row"><span class="chip" style="background:#9b8fd1;"></span><span class="ch-name">Channel 6</span><span class="ch-rng">410–499</span></div>
+        <div class="lp-device-head">Lamp Strip</div>
+        <div class="lp-row"><span class="chip" style="background:#e8a000;"></span><span class="ch-name">Top</span><span class="ch-rng">0–19</span></div>
+        <div class="lp-row"><span class="chip" style="background:#5b9dd9;"></span><span class="ch-name">Mid</span><span class="ch-rng">20–39</span></div>
+        <div class="lp-row"><span class="chip" style="background:#f5b731;"></span><span class="ch-name">Bot</span><span class="ch-rng">40–59</span></div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>Adjacent contrast is guaranteed (warm/cool always alternates).</li>
+        <li>Brand amber is index 0, so first channel everywhere is the brand color — feels intentional rather than arbitrary.</li>
+        <li>Risk: a "two-family" rule is less mathematically clean than A or B; either someone hand-curates 5–10 colors per family, or you generate them.</li>
+        <li>Cooler counterpoint is muted (no neon) to feel native to the dark+amber surface.</li>
+        <li>Test case: stress-test fixture (6 channels) reads cleanly; Channel 1 = amber and "primary" matches LightPanel chip + strip + brand identity.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.variant-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.variant-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      document.querySelectorAll('.variant-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+    });
+  });
+</script>
+</body>
+</html>
