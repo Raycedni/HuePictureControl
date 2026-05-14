@@ -1,11 +1,17 @@
-"""WLED device CRUD + zeroconf scan REST endpoints.
+"""WLED device CRUD + zeroconf scan + segment refresh REST endpoints (Phase 19.1).
 
 Provides:
-  GET    /api/wled/devices              — list registered devices with live state
-  POST   /api/wled/devices              — register a new device by IP (fetches /json/info)
-  DELETE /api/wled/devices/{id}         — remove device and cascade channels/assignments
-  PUT    /api/wled/devices/{id}/enabled — toggle the per-frame UDP gate (D-12)
-  POST   /api/wled/scan                 — 3s zeroconf scan for `_wled._tcp.local.`
+  GET    /api/wled/devices                              — list registered devices with live state
+  POST   /api/wled/devices                              — register a new device by IP (fetches /json/info + /json/state)
+  DELETE /api/wled/devices/{id}                         — remove device and cascade cache rows + assignments
+  PUT    /api/wled/devices/{id}/enabled                 — toggle the per-frame UDP gate (D-12)
+  POST   /api/wled/scan                                 — 3s zeroconf scan for `_wled._tcp.local.`
+  POST   /api/wled/devices/{device_id}/segments/refresh — Phase 19.1 D-17: fetch /json/state + reconcile cache
+  GET    /api/wled/devices/{device_id}/segments         — Phase 19.1 D-18: read wled_seg_cache (no device contact)
+  GET    /api/wled/assignments                          — list region->segment assignments (D-13)
+  PUT    /api/wled/assignments                          — upsert region->segment assignment (D-13)
+  DELETE /api/wled/assignments                          — delete region->segment assignment (D-13)
+  PATCH  /api/wled/regions/{region_id}/orientation      — set orientation for all assignments of (region, config)
 
 Security notes:
   No auth (local network tool per PROJECT.md). IP validation via Pydantic
@@ -15,18 +21,31 @@ Security notes:
   Pydantic `Field(pattern=...)` is a regex match, and an out-of-range octet
   fails downstream at the OS socket / httpx layer (OSError on connect).
 
-  T-17-SSRF: The `GET /json/info` fetch from a user-supplied IP is a
-  consciously accepted risk. Per PROJECT.md the web UI is "local network
-  tool only" — the LAN is the trust boundary. `httpx.AsyncClient` does not
-  follow redirects by default in `fetch_wled_info`, so a compromised WLED
-  device cannot redirect us to an attacker endpoint. `fetch_wled_info`
-  parses JSON defensively (`data.get(...)` everywhere), never evaluates
-  code.
+  T-17-SSRF: The `GET /json/info` and `GET /json/state` fetches from a
+  user-supplied IP are consciously accepted risks. Per PROJECT.md the web UI
+  is "local network tool only" — the LAN is the trust boundary.
+  `httpx.AsyncClient` does not follow redirects by default in
+  `fetch_wled_info`/`fetch_wled_state`, so a compromised WLED device cannot
+  redirect us to an attacker endpoint. Both parsers defensively use
+  ``data.get(...)`` and never evaluate code.
 
   T-17-UDP: Devices are registered into the DB with `enabled=1` but no UDP
   traffic flows until `/api/capture/start` is called. WledStreamer's enabled
   gate (D-12) + 30-frame consecutive-failure cooldown (D-15) cap traffic to
   ~60 pps × N devices with auto-disable on unresponsive targets.
+
+Phase 19.1 changes:
+  * Channel-CRUD endpoints removed (D-10) — segments are mirrored from
+    /json/state, no longer paint-managed.
+  * Device registration fetches /json/state in the same coroutine as
+    /json/info, so registration fails atomically if either fetch fails
+    (D-02). BOTH fetches run BEFORE any DB write to guarantee rollback
+    semantics — if the state fetch raises after info succeeds, no
+    `wled_devices` row is left behind.
+  * Assignments key on `(region_id, wled_device_id, seg_index, entertainment_config_id)`
+    instead of the dropped Phase 19 channel-id column (D-13).
+  * `Response` is imported for the explicit 204 No-Content body on the
+    assignment delete handler — matches Phase 17's delete handler style.
 
 Exports:
     router -- APIRouter for /api/wled prefix
@@ -37,16 +56,12 @@ from datetime import datetime, timezone
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from services.wled_channels import (
-    create_channel_with_split,
-    delete_channel_with_cascade,
-    resize_boundary,
-)
-from services.wled_client import fetch_wled_info
+from services.wled_client import fetch_wled_info, fetch_wled_state
 from services.wled_discovery import scan_for_wled_devices
+from services.wled_segments import reconcile_segments
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +107,7 @@ class WledScanResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Phase 19 - Pydantic models for channel CRUD + assignment + orientation
+# Phase 19 - Pydantic models for orientation + assignment (rewritten in 19.1)
 # ---------------------------------------------------------------------------
 
 
@@ -105,58 +120,58 @@ WledOrientation = Literal[
 ]
 
 
-class WledChannelOut(BaseModel):
-    id: str
-    device_id: str
-    name: str
+# ---------------------------------------------------------------------------
+# Phase 19.1 - Segment cache models (D-17, D-18)
+# ---------------------------------------------------------------------------
+
+
+class WledSegmentOut(BaseModel):
+    seg_index: int
     start_led: int
-    end_led: int
-
-
-class WledChannelsResponse(BaseModel):
-    channels: list[WledChannelOut]
-
-
-class WledChannelCreate(BaseModel):
-    start_led: int = Field(..., ge=0)
-    end_led: int = Field(..., ge=0)
+    stop_led: int
     name: str | None = None
+    refreshed_at: str | None = None
 
 
-class WledChannelUpdate(BaseModel):
-    name: str | None = None
-    start_led: int | None = Field(default=None, ge=0)
-    end_led: int | None = Field(default=None, ge=0)
+class WledSegmentsResponse(BaseModel):
+    segments: list[WledSegmentOut]
 
 
-class WledChannelBoundaryUpdate(BaseModel):
-    left_channel_id: str
-    right_channel_id: str
-    boundary: int = Field(..., ge=0)
+class WledRefreshResponse(BaseModel):
+    segments: list[WledSegmentOut]
+    dropped_assignments: int
 
 
-class WledAssignmentIn(BaseModel):
+# ---------------------------------------------------------------------------
+# Phase 19.1 - Assignment models (D-13) — composite (device_id, seg_index)
+# ---------------------------------------------------------------------------
+
+
+class WledAssignmentUpsert(BaseModel):
     region_id: str
-    wled_channel_id: str
+    wled_device_id: str
+    seg_index: int
     entertainment_config_id: str
-    orientation: WledOrientation | None = None
+    orientation: WledOrientation | None = None  # falls back to existing or 'auto'
+
+
+class WledAssignmentDelete(BaseModel):
+    region_id: str
+    wled_device_id: str
+    seg_index: int
+    entertainment_config_id: str
 
 
 class WledAssignmentOut(BaseModel):
     region_id: str
-    wled_channel_id: str
+    wled_device_id: str
+    seg_index: int
     entertainment_config_id: str
     orientation: WledOrientation
 
 
 class WledAssignmentsResponse(BaseModel):
     assignments: list[WledAssignmentOut]
-
-
-class WledAssignmentDelete(BaseModel):
-    region_id: str
-    wled_channel_id: str
-    entertainment_config_id: str
 
 
 class WledOrientationPatch(BaseModel):
@@ -254,6 +269,26 @@ def _coord_health(request: Request) -> dict:
         return {}
 
 
+def _seg_row_to_out(row) -> WledSegmentOut:
+    """Convert an aiosqlite Row (or tuple) from wled_seg_cache into the API shape."""
+    if isinstance(row, dict) or hasattr(row, "keys"):
+        return WledSegmentOut(
+            seg_index=int(row["seg_index"]),
+            start_led=int(row["start_led"]),
+            stop_led=int(row["stop_led"]),
+            name=row["name"],
+            refreshed_at=row["refreshed_at"],
+        )
+    # Positional tuple fallback for callers that don't set row_factory.
+    return WledSegmentOut(
+        seg_index=int(row[0]),
+        start_led=int(row[1]),
+        stop_led=int(row[2]),
+        name=row[3],
+        refreshed_at=row[4],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -274,18 +309,23 @@ async def list_devices(request: Request) -> WledDevicesResponse:
 
 @router.post("/devices", response_model=WledDeviceOut, status_code=201)
 async def add_device(body: WledDeviceIn, request: Request) -> WledDeviceOut:
-    """Register a new WLED device by IP.
+    """Register a new WLED device by IP (Phase 19.1 D-02).
 
     Flow (T-17-DUPE / T-17-SSRF mitigations):
       1. Pre-INSERT SELECT for duplicate IP — returns 409 cleanly before
          the httpx call fires (avoids hitting an attacker-controlled IP
          on retry of an already-registered device).
-      2. `fetch_wled_info(ip)` over httpx — timeouts/connect errors map to
-         502, JSON shape errors map to 422.
-      3. Reject `led_count <= 0` with 422 (D-09 prerequisite — the auto-
-         seeded channel needs a valid range).
-      4. INSERT device + auto-seed one channel covering the full strip
-         (D-09) inside one transaction.
+      2. `fetch_wled_info(ip)` + `fetch_wled_state(ip)` over httpx in the
+         SAME coroutine — both must succeed before any DB write. Timeouts
+         and connect errors map to 502; JSON shape errors to 422. The
+         atomicity guarantee (D-02): if /json/state fails after /json/info
+         succeeds, no `wled_devices` row is created.
+      3. Reject `led_count <= 0` with 422 (D-09 prerequisite — the cached
+         segments need a valid strip length).
+      4. INSERT the device row + commit, then call `reconcile_segments`
+         which owns its own transaction over `wled_seg_cache`. Network I/O
+         is already complete at this point, so the implicit DB transaction
+         window stays tight (RESEARCH.md Pitfall 2).
       5. Return the new row merged with the current health snapshot.
     """
     db = request.app.state.db
@@ -302,9 +342,13 @@ async def add_device(body: WledDeviceIn, request: Request) -> WledDeviceOut:
             detail=f"WLED device with ip '{body.ip}' already registered",
         )
 
-    # Fetch /json/info — map error categories to 502 (network) / 422 (shape).
+    # D-02: fetch /json/info AND /json/state in the same try-block BEFORE any
+    # DB write. Atomic failure: if /json/state raises after /json/info
+    # succeeds, we have not yet touched the database, so there is nothing
+    # to roll back — the device simply isn't registered.
     try:
         info = await fetch_wled_info(body.ip)
+        segments = await fetch_wled_state(body.ip)
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=502,
@@ -334,22 +378,22 @@ async def add_device(body: WledDeviceIn, request: Request) -> WledDeviceOut:
         )
 
     device_id = str(uuid.uuid4())
-    channel_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     name = info.get("name", "WLED")
 
-    # D-07 + D-09: INSERT device + auto-seed one 'Strip' channel (full strip).
+    # Both fetches succeeded — persist. D-10: no more wled_channels auto-seed;
+    # the strip is described entirely by the wled_seg_cache rows below.
     await db.execute(
         "INSERT INTO wled_devices (id, ip, name, led_count, enabled, created_at) "
         "VALUES (?, ?, ?, ?, 1, ?)",
         (device_id, body.ip, name, led_count, now_iso),
     )
-    await db.execute(
-        "INSERT INTO wled_channels (id, device_id, name, start_led, end_led, color) "
-        "VALUES (?, ?, 'Strip', 0, ?, '#ffffff')",
-        (channel_id, device_id, led_count - 1),
-    )
     await db.commit()
+
+    # D-02 second half: seed wled_seg_cache from the /json/state we just
+    # fetched. `reconcile_segments` owns its own transaction; on the empty
+    # cache for this brand-new device it is effectively just an INSERT batch.
+    await reconcile_segments(db, device_id, segments)
 
     health = _coord_health(request)
     return _row_to_out(
@@ -367,13 +411,20 @@ async def add_device(body: WledDeviceIn, request: Request) -> WledDeviceOut:
 
 @router.delete("/devices/{device_id}", status_code=204)
 async def delete_device(device_id: str, request: Request):
-    """Cascade-delete a WLED device, its channels, and any region assignments.
+    """Cascade-delete a WLED device, its cached segments, and its assignments.
 
-    SQLite FK constraints in the schema are documentation-only — the project
-    does NOT run with `PRAGMA foreign_keys = ON` (per 17-RESEARCH.md A5), so
-    cascade is implemented in code via three explicit DELETE statements
-    (T-17-DELETE-ORPHAN mitigation): assignments first (subquery on the
-    device's channels), then the channels, then the device row itself.
+    Phase 19.1 rewrite: replaces the Phase 17 cascade through `wled_channels`
+    with a cascade through `wled_seg_cache` (the new source of segment truth)
+    and the new `wled_light_assignments` schema (D-13). SQLite FK constraints
+    in the schema are documentation-only — the project does NOT run with
+    `PRAGMA foreign_keys = ON` (per 17-RESEARCH.md A5), so cascade is
+    implemented in code via three explicit DELETE statements:
+
+      1. assignments referencing this device's seg rows (matched directly by
+         `wled_device_id` — no subquery needed because D-13 made the device
+         id a column on `wled_light_assignments`),
+      2. the cache rows for this device,
+      3. the device row itself.
 
     All in one transaction.
     """
@@ -390,21 +441,18 @@ async def delete_device(device_id: str, request: Request):
             detail=f"WLED device '{device_id}' not found",
         )
 
-    # 1) Delete assignments via subquery on this device's channels.
-    #    Single statement (one grep hit) and correct whether the device has
-    #    zero, one, or many channels.
+    # 1) Delete assignments for this device (D-13 direct match — no subquery).
     await db.execute(
-        "DELETE FROM wled_light_assignments WHERE wled_channel_id IN "
-        "(SELECT id FROM wled_channels WHERE device_id = ?)",
+        "DELETE FROM wled_light_assignments WHERE wled_device_id = ?",
         (device_id,),
     )
 
-    # 2) Delete channels
+    # 2) Delete cache rows for this device.
     await db.execute(
-        "DELETE FROM wled_channels WHERE device_id = ?", (device_id,)
+        "DELETE FROM wled_seg_cache WHERE device_id = ?", (device_id,)
     )
 
-    # 3) Delete device
+    # 3) Delete device row.
     await db.execute(
         "DELETE FROM wled_devices WHERE id = ?", (device_id,)
     )
@@ -471,16 +519,95 @@ async def scan(request: Request) -> WledScanResponse:  # noqa: ARG001
 
 
 # ---------------------------------------------------------------------------
-# Phase 19 - Channel CRUD endpoints (D-21)
+# Phase 19.1 - Segment refresh + list endpoints (D-17, D-18)
 # ---------------------------------------------------------------------------
 
 
-@router.get(
-    "/devices/{device_id}/channels",
-    response_model=WledChannelsResponse,
+@router.post(
+    "/devices/{device_id}/segments/refresh",
+    response_model=WledRefreshResponse,
 )
-async def list_channels(device_id: str, request: Request) -> WledChannelsResponse:
-    """List channels for a device ordered by start_led ASC."""
+async def refresh_device_segments(
+    device_id: str, request: Request
+) -> WledRefreshResponse:
+    """D-17: fetch /json/state, run reconciliation, return result.
+
+    Flow:
+      1. Verify the device exists — 404 if not.
+      2. Fire `fetch_wled_state` OUTSIDE any DB transaction (RESEARCH.md
+         Pitfall 2 — keep network I/O off the transaction window).
+      3. Translate httpx and ValueError to HTTP errors:
+         * httpx.TimeoutException  -> 502 "(timeout)"
+         * httpx.ConnectError      -> 502 "unreachable"
+         * httpx.HTTPError         -> 502 "returned error"
+         * ValueError              -> 422 "Invalid WLED response"
+      4. Call `reconcile_segments` — single transaction, returns count of
+         orphaned `wled_light_assignments` rows dropped.
+      5. Re-read `wled_seg_cache` for the device to populate the
+         `refreshed_at` column in the response.
+    """
+    db = request.app.state.db
+    async with db.execute(
+        "SELECT id, ip FROM wled_devices WHERE id = ?", (device_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"WLED device '{device_id}' not found",
+        )
+    # aiosqlite.Row supports both index and key access.
+    ip = row["ip"] if hasattr(row, "keys") else row[1]
+
+    try:
+        segments = await fetch_wled_state(ip)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"WLED device unreachable (timeout): {exc}",
+        )
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"WLED device unreachable: {exc}",
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"WLED device returned error: {exc}",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid WLED response: {exc}",
+        )
+
+    dropped = await reconcile_segments(db, device_id, segments)
+
+    # Re-read cache so the response carries the freshly-written refreshed_at.
+    async with db.execute(
+        "SELECT seg_index, start_led, stop_led, name, refreshed_at "
+        "FROM wled_seg_cache WHERE device_id = ? ORDER BY seg_index",
+        (device_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    out = [_seg_row_to_out(r) for r in rows]
+    return WledRefreshResponse(segments=out, dropped_assignments=dropped)
+
+
+@router.get(
+    "/devices/{device_id}/segments",
+    response_model=WledSegmentsResponse,
+)
+async def list_device_segments(
+    device_id: str, request: Request
+) -> WledSegmentsResponse:
+    """D-18: return cached segments for a device. No device contact.
+
+    Used by the frontend to render the strip after a page reload without
+    forcing a refresh. The cache is on disk so the response is consistent
+    across backend restarts (V4 persistence — see test_phase19_1_e2e.py).
+    """
     db = request.app.state.db
     async with db.execute(
         "SELECT id FROM wled_devices WHERE id = ?", (device_id,)
@@ -490,175 +617,19 @@ async def list_channels(device_id: str, request: Request) -> WledChannelsRespons
                 status_code=404,
                 detail=f"WLED device '{device_id}' not found",
             )
+
     async with db.execute(
-        "SELECT id, device_id, name, start_led, end_led FROM wled_channels "
-        "WHERE device_id = ? ORDER BY start_led ASC",
+        "SELECT seg_index, start_led, stop_led, name, refreshed_at "
+        "FROM wled_seg_cache WHERE device_id = ? ORDER BY seg_index",
         (device_id,),
     ) as cur:
         rows = await cur.fetchall()
-    channels = [
-        WledChannelOut(
-            id=r["id"],
-            device_id=r["device_id"],
-            name=r["name"],
-            start_led=int(r["start_led"]),
-            end_led=int(r["end_led"]),
-        )
-        for r in rows
-    ]
-    return WledChannelsResponse(channels=channels)
-
-
-@router.post(
-    "/devices/{device_id}/channels",
-    response_model=WledChannelOut,
-    status_code=201,
-)
-async def create_channel(
-    device_id: str, body: WledChannelCreate, request: Request
-) -> WledChannelOut:
-    """Create a channel - applies overlap auto-split (D-02)."""
-    db = request.app.state.db
-    try:
-        row = await create_channel_with_split(
-            db, device_id, body.start_led, body.end_led
-        )
-    except ValueError as exc:
-        msg = str(exc)
-        if "not found" in msg:
-            raise HTTPException(status_code=404, detail=msg)
-        raise HTTPException(status_code=422, detail=msg)
-    # Optional rename on create
-    if body.name is not None:
-        await db.execute(
-            "UPDATE wled_channels SET name = ? WHERE id = ?",
-            (body.name, row["id"]),
-        )
-        await db.commit()
-        row["name"] = body.name
-    return WledChannelOut(**row)
-
-
-@router.put(
-    "/devices/{device_id}/channels/boundary",
-)
-async def resize_channel_boundary(
-    device_id: str, body: WledChannelBoundaryUpdate, request: Request
-) -> dict:
-    """Atomically move the shared boundary between two adjacent channels (D-03).
-
-    ROUTING NOTE: This handler MUST be declared BEFORE the
-    `PUT /devices/{device_id}/channels/{channel_id}` handler so that FastAPI
-    does not greedily match the literal string "boundary" as a channel_id.
-    """
-    db = request.app.state.db
-    # Verify both channels belong to this device.
-    async with db.execute(
-        "SELECT id FROM wled_channels WHERE id IN (?, ?) AND device_id = ?",
-        (body.left_channel_id, body.right_channel_id, device_id),
-    ) as cur:
-        rows = await cur.fetchall()
-    if len(rows) != 2:
-        raise HTTPException(
-            status_code=404,
-            detail="left_channel_id or right_channel_id not found on device",
-        )
-    try:
-        await resize_boundary(
-            db, body.left_channel_id, body.right_channel_id, body.boundary
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    return {"ok": True}
-
-
-@router.put(
-    "/devices/{device_id}/channels/{channel_id}",
-    response_model=WledChannelOut,
-)
-async def update_channel(
-    device_id: str,
-    channel_id: str,
-    body: WledChannelUpdate,
-    request: Request,
-) -> WledChannelOut:
-    """Rename and/or resize a channel. Partial PUT - all fields optional."""
-    db = request.app.state.db
-    async with db.execute(
-        "SELECT id, device_id, name, start_led, end_led FROM wled_channels "
-        "WHERE id = ? AND device_id = ?",
-        (channel_id, device_id),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"channel '{channel_id}' not found on device '{device_id}'",
-        )
-
-    # Compute the new state, validating range bounds.
-    new_name = body.name if body.name is not None else row["name"]
-    new_start = body.start_led if body.start_led is not None else int(row["start_led"])
-    new_end = body.end_led if body.end_led is not None else int(row["end_led"])
-    if new_start > new_end:
-        raise HTTPException(
-            status_code=422,
-            detail=f"start_led ({new_start}) must be <= end_led ({new_end})",
-        )
-    async with db.execute(
-        "SELECT led_count FROM wled_devices WHERE id = ?", (device_id,)
-    ) as cur:
-        dev_row = await cur.fetchone()
-    if dev_row is None:
-        raise HTTPException(
-            status_code=404, detail=f"WLED device '{device_id}' not found"
-        )
-    led_count = int(dev_row["led_count"])
-    if new_start < 0 or new_end >= led_count:
-        raise HTTPException(
-            status_code=422,
-            detail=f"range [{new_start}, {new_end}] outside [0, {led_count - 1}]",
-        )
-
-    await db.execute(
-        "UPDATE wled_channels SET name = ?, start_led = ?, end_led = ? WHERE id = ?",
-        (new_name, new_start, new_end, channel_id),
-    )
-    await db.commit()
-    return WledChannelOut(
-        id=channel_id,
-        device_id=device_id,
-        name=new_name,
-        start_led=new_start,
-        end_led=new_end,
-    )
-
-
-@router.delete(
-    "/devices/{device_id}/channels/{channel_id}",
-    status_code=204,
-)
-async def delete_channel(device_id: str, channel_id: str, request: Request) -> None:
-    """Delete a channel - cascades to wled_light_assignments (D-04)."""
-    db = request.app.state.db
-    async with db.execute(
-        "SELECT id FROM wled_channels WHERE id = ? AND device_id = ?",
-        (channel_id, device_id),
-    ) as cur:
-        if (await cur.fetchone()) is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"channel '{channel_id}' not found on device '{device_id}'",
-            )
-    try:
-        await delete_channel_with_cascade(db, channel_id)
-    except ValueError as exc:
-        # Should be unreachable given the existence check above; defensive.
-        raise HTTPException(status_code=404, detail=str(exc))
+    return WledSegmentsResponse(segments=[_seg_row_to_out(r) for r in rows])
 
 
 # ---------------------------------------------------------------------------
-# Phase 19 - Assignment endpoints (D-21)
+# Phase 19.1 - Assignment endpoints (D-13) — (region_id, wled_device_id,
+# seg_index, entertainment_config_id) composite key
 # ---------------------------------------------------------------------------
 
 
@@ -667,20 +638,33 @@ async def delete_channel(device_id: str, channel_id: str, request: Request) -> N
     response_model=WledAssignmentsResponse,
 )
 async def list_assignments(
-    request: Request, config: str
+    request: Request, config: str | None = None
 ) -> WledAssignmentsResponse:
-    """List all WLED assignments scoped to an entertainment config."""
+    """List WLED assignments, optionally scoped to an entertainment config.
+
+    Query param `config` matches the legacy contract (Phase 19's same endpoint
+    required it; we keep it optional in 19.1 so the frontend can list-all when
+    rendering the WLED tab without a config selected yet).
+    """
     db = request.app.state.db
-    async with db.execute(
-        "SELECT region_id, wled_channel_id, entertainment_config_id, orientation "
-        "FROM wled_light_assignments WHERE entertainment_config_id = ?",
-        (config,),
-    ) as cur:
-        rows = await cur.fetchall()
+    if config is not None:
+        async with db.execute(
+            "SELECT region_id, wled_device_id, seg_index, entertainment_config_id, orientation "
+            "FROM wled_light_assignments WHERE entertainment_config_id = ?",
+            (config,),
+        ) as cur:
+            rows = await cur.fetchall()
+    else:
+        async with db.execute(
+            "SELECT region_id, wled_device_id, seg_index, entertainment_config_id, orientation "
+            "FROM wled_light_assignments"
+        ) as cur:
+            rows = await cur.fetchall()
     out = [
         WledAssignmentOut(
             region_id=r["region_id"],
-            wled_channel_id=r["wled_channel_id"],
+            wled_device_id=r["wled_device_id"],
+            seg_index=int(r["seg_index"]),
             entertainment_config_id=r["entertainment_config_id"],
             orientation=r["orientation"],
         )
@@ -694,49 +678,58 @@ async def list_assignments(
     response_model=WledAssignmentOut,
 )
 async def upsert_assignment(
-    body: WledAssignmentIn, request: Request
+    body: WledAssignmentUpsert, request: Request
 ) -> WledAssignmentOut:
-    """Upsert a region->channel assignment for a config.
+    """Upsert a region->segment assignment for a config (D-13).
 
-    Per-region orientation invariant (CONTEXT.md D-16): if the body omits
-    `orientation`, new rows inherit the region's CURRENT orientation in this
-    config (every existing row for this region+config carries the same value).
-    Existing rows keep their orientation unless `orientation` is provided.
+    Per-region orientation invariant (CONTEXT.md D-16 / D-21): if the body
+    omits `orientation`, new rows inherit the region's CURRENT orientation in
+    this config (every existing row for this region+config carries the same
+    value). Existing rows keep their orientation unless `orientation` is
+    provided explicitly. Falls back to 'auto' when no prior row exists.
     """
     db = request.app.state.db
 
-    # Channel existence check (also implicitly validates device via FK).
-    async with db.execute(
-        "SELECT id FROM wled_channels WHERE id = ?", (body.wled_channel_id,)
-    ) as cur:
-        if (await cur.fetchone()) is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"channel '{body.wled_channel_id}' not found",
-            )
-
-    # Resolve orientation: explicit body wins; otherwise read region's current
-    # orientation (any row for this region+config); fall back to 'auto'.
+    # Resolve orientation: explicit body wins; otherwise read the exact same
+    # row if it exists, then fall back to any sibling assignment for this
+    # (region, config). Final fallback is 'auto'.
     if body.orientation is not None:
         orientation = body.orientation
     else:
         async with db.execute(
             "SELECT orientation FROM wled_light_assignments "
-            "WHERE region_id = ? AND entertainment_config_id = ? LIMIT 1",
-            (body.region_id, body.entertainment_config_id),
+            "WHERE region_id = ? AND wled_device_id = ? AND seg_index = ? "
+            "AND entertainment_config_id = ?",
+            (
+                body.region_id,
+                body.wled_device_id,
+                body.seg_index,
+                body.entertainment_config_id,
+            ),
         ) as cur:
-            r = await cur.fetchone()
-        orientation = r["orientation"] if r is not None else "auto"
+            row = await cur.fetchone()
+        if row is not None:
+            orientation = row["orientation"]
+        else:
+            # Inherit from any existing sibling assignment for this region+config.
+            async with db.execute(
+                "SELECT orientation FROM wled_light_assignments "
+                "WHERE region_id = ? AND entertainment_config_id = ? LIMIT 1",
+                (body.region_id, body.entertainment_config_id),
+            ) as cur:
+                row = await cur.fetchone()
+            orientation = row["orientation"] if row is not None else "auto"
 
     await db.execute(
         "INSERT INTO wled_light_assignments "
-        "(region_id, wled_channel_id, entertainment_config_id, orientation) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(region_id, wled_channel_id, entertainment_config_id) "
+        "(region_id, wled_device_id, seg_index, entertainment_config_id, orientation) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(region_id, wled_device_id, seg_index, entertainment_config_id) "
         "DO UPDATE SET orientation = excluded.orientation",
         (
             body.region_id,
-            body.wled_channel_id,
+            body.wled_device_id,
+            body.seg_index,
             body.entertainment_config_id,
             orientation,
         ),
@@ -744,7 +737,8 @@ async def upsert_assignment(
     await db.commit()
     return WledAssignmentOut(
         region_id=body.region_id,
-        wled_channel_id=body.wled_channel_id,
+        wled_device_id=body.wled_device_id,
+        seg_index=body.seg_index,
         entertainment_config_id=body.entertainment_config_id,
         orientation=orientation,
     )
@@ -754,16 +748,24 @@ async def upsert_assignment(
     "/assignments",
     status_code=204,
 )
-async def delete_assignment(body: WledAssignmentDelete, request: Request) -> None:
-    """Remove a single region->channel assignment for a config (D-21)."""
+async def delete_assignment(
+    body: WledAssignmentDelete, request: Request
+) -> Response:
+    """Remove a single region->segment assignment for a config (D-13)."""
     db = request.app.state.db
-    async with db.execute(
+    await db.execute(
         "DELETE FROM wled_light_assignments "
-        "WHERE region_id = ? AND wled_channel_id = ? AND entertainment_config_id = ?",
-        (body.region_id, body.wled_channel_id, body.entertainment_config_id),
-    ):
-        pass
+        "WHERE region_id = ? AND wled_device_id = ? AND seg_index = ? "
+        "AND entertainment_config_id = ?",
+        (
+            body.region_id,
+            body.wled_device_id,
+            body.seg_index,
+            body.entertainment_config_id,
+        ),
+    )
     await db.commit()
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -782,11 +784,14 @@ async def patch_region_orientation(
     config: str,
 ) -> WledOrientationPatchResponse:
     """Set the orientation for EVERY WLED assignment row matching
-    (region_id, entertainment_config_id) - per-region narrowing (D-16/D-22).
+    (region_id, entertainment_config_id) — per-region narrowing (D-16/D-22).
 
     Single UPDATE statement; returns the number of rows updated. Returns
-    updated=0 if no assignments exist for this region+config (not an error -
-    the popover renders an empty state in that case).
+    updated=0 if no assignments exist for this region+config (not an error —
+    the popover renders an empty state in that case). Phase 19.1 D-13
+    rename: the filter columns are unchanged because per-region narrowing
+    fans across all rows for that region+config regardless of which
+    (wled_device_id, seg_index) they point at.
     """
     db = request.app.state.db
     cur = await db.execute(
