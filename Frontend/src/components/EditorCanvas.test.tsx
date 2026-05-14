@@ -1,21 +1,218 @@
-import { describe, it } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, fireEvent, act } from '@testing-library/react'
+import React from 'react'
+import { EditorCanvas } from './EditorCanvas'
+import { useRegionStore } from '@/store/useRegionStore'
 
-// EditorCanvas tests target the drop-handler branch added in Plan 19-09.
-// Wave 0 only seeds the structure; the assertions flip green once the WLED
-// branch is wired.
+// -----------------------------------------------------------------------
+// Mock react-konva — Stage forwards its ref so handleDrop can call
+// setPointersPositions + getPointerPosition on the fake stage object.
+// -----------------------------------------------------------------------
+const mockStage = {
+  setPointersPositions: vi.fn(),
+  // Put the drop point inside the region polygon (the region covers [0,0]-[1,1]
+  // normalised, so pixel [50,50] is inside for a 100×100 canvas).
+  getPointerPosition: vi.fn().mockReturnValue({ x: 50, y: 50 }),
+}
 
+vi.mock('react-konva', () => ({
+  Stage: React.forwardRef(
+    (
+      { children }: { children?: React.ReactNode },
+      ref: React.Ref<typeof mockStage>,
+    ) => {
+      React.useImperativeHandle(ref, () => mockStage)
+      return React.createElement('div', { 'data-testid': 'konva-stage' }, children)
+    },
+  ),
+  Layer: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', null, children),
+  Group: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', null, children),
+  Image: () => null,
+  Line: () => null,
+  Circle: () => null,
+  Text: () => null,
+}))
+
+// -----------------------------------------------------------------------
+// Mock @/api/wled
+// -----------------------------------------------------------------------
+const mockUpsertWledAssignment = vi.fn().mockResolvedValue({
+  region_id: 'region-1',
+  wled_channel_id: 'chan-1',
+  entertainment_config_id: 'cfg-1',
+  orientation: 'auto',
+})
+const mockListWledAssignments = vi.fn().mockResolvedValue({ assignments: [] })
+const mockGetWledDevices = vi.fn().mockResolvedValue({ devices: [] })
+const mockListWledChannels = vi.fn().mockResolvedValue({ channels: [] })
+const mockPatchRegionOrientation = vi.fn().mockResolvedValue({ updated: 1 })
+
+vi.mock('@/api/wled', () => ({
+  upsertWledAssignment: (...args: unknown[]) => mockUpsertWledAssignment(...args),
+  listWledAssignments: (...args: unknown[]) => mockListWledAssignments(...args),
+  getWledDevices: (...args: unknown[]) => mockGetWledDevices(...args),
+  listWledChannels: (...args: unknown[]) => mockListWledChannels(...args),
+  patchRegionOrientation: (...args: unknown[]) => mockPatchRegionOrientation(...args),
+}))
+
+// -----------------------------------------------------------------------
+// Mock @/api/regions
+// -----------------------------------------------------------------------
+const mockUpdateRegionAPI = vi.fn().mockResolvedValue({})
+const mockFetchRegions = vi.fn().mockResolvedValue([])
+
+vi.mock('@/api/regions', () => ({
+  updateRegion: (...args: unknown[]) => mockUpdateRegionAPI(...args),
+  fetchRegions: (...args: unknown[]) => mockFetchRegions(...args),
+  createRegion: vi.fn(),
+  deleteRegion: vi.fn(),
+}))
+
+// Mock hooks that depend on WebSockets / previews
+vi.mock('@/hooks/usePreviewWS', () => ({
+  usePreviewWS: () => null,
+}))
+
+// Stub RegionOrientationPopover — not needed for drop branch tests
+vi.mock('./Editor/RegionOrientationPopover', () => ({
+  RegionOrientationPopover: () => null,
+}))
+
+// -----------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------
+function makeDropEvent(data: Record<string, string>): React.DragEvent<HTMLDivElement> {
+  return {
+    preventDefault: vi.fn(),
+    dataTransfer: {
+      getData: (key: string) => data[key] ?? '',
+    },
+  } as unknown as React.DragEvent<HTMLDivElement>
+}
+
+function seedRegion() {
+  // Seed a region whose normalised polygon covers the whole canvas.
+  // For a 100×100 canvas, pixel [50,50] is inside this polygon.
+  useRegionStore.getState().setRegions([
+    {
+      id: 'region-1',
+      name: 'Test Region',
+      polygon: [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ] as [number, number][],
+      light_id: null,
+      channel_id: null,
+      entertainment_config_id: null,
+    },
+  ])
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
 describe('EditorCanvas.handleDrop — WLED branch', () => {
-  it.todo('WLED drop: when wledChannelId is present, calls upsertWledAssignment and returns')
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset store between tests
+    useRegionStore.getState().setRegions([])
+    useRegionStore.getState().setSelectedId(null)
+    useRegionStore.getState().setWledAssignments({})
+    mockStage.getPointerPosition.mockReturnValue({ x: 50, y: 50 })
+  })
 
-  it.todo('WLED drop: refreshes regions via setRegions after successful upsert')
+  it('WLED drop: when wledChannelId is present, calls upsertWledAssignment and returns', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({
+      wledChannelId: 'chan-1',
+      entertainment_config_id: 'cfg-1',
+    })
 
-  it.todo('WLED drop: sets selectedId to the hit region after upsert')
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      // Give async handleDrop a tick to settle
+      await new Promise((r) => setTimeout(r, 0))
+    })
 
-  it.todo('Hue drop preserved: payload without wledChannelId still calls updateRegionAPI')
+    expect(mockUpsertWledAssignment).toHaveBeenCalledOnce()
+    expect(mockUpsertWledAssignment).toHaveBeenCalledWith({
+      region_id: 'region-1',
+      wled_channel_id: 'chan-1',
+      entertainment_config_id: 'cfg-1',
+    })
+    // Hue branch must NOT have been called
+    expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
+  })
 
-  it.todo('WLED branch returns: payload with BOTH wledChannelId and lightId only calls WLED handler')
+  it('Hue drop preserved: payload without wledChannelId still calls updateRegionAPI', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({
+      channelId: '3',
+      channelName: 'Center',
+      lightId: 'light-42',
+      configId: 'cfg-hue',
+    })
 
-  it.todo('No payload: handler exits without API calls when neither key is present')
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(mockUpsertWledAssignment).not.toHaveBeenCalled()
+    expect(mockUpdateRegionAPI).toHaveBeenCalledOnce()
+  })
+
+  it('WLED branch returns: payload with BOTH wledChannelId and lightId only calls WLED handler', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({
+      wledChannelId: 'chan-1',
+      entertainment_config_id: 'cfg-1',
+      lightId: 'light-42',
+      channelId: '3',
+    })
+
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    // WLED path runs; Hue path is guarded by the explicit return
+    expect(mockUpsertWledAssignment).toHaveBeenCalledOnce()
+    expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
+  })
+
+  it('No payload: handler exits without API calls when neither key is present', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({})
+
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(mockUpsertWledAssignment).not.toHaveBeenCalled()
+    expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
+  })
 })
 
 describe('EditorCanvas — popover mount', () => {

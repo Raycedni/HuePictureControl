@@ -6,6 +6,15 @@ import { useRegionStore } from '@/store/useRegionStore'
 import { normalize, denormalize, pointInPolygon, polygonArea } from '@/utils/geometry'
 import { createRegion, deleteRegion as deleteRegionAPI, fetchRegions, updateRegion as updateRegionAPI } from '@/api/regions'
 import { RegionPolygon } from './RegionPolygon'
+import {
+  upsertWledAssignment,
+  listWledAssignments,
+  getWledDevices,
+  listWledChannels,
+  type WledAssignment,
+  type WledChannel,
+} from '@/api/wled'
+import { RegionOrientationPopover } from './Editor/RegionOrientationPopover'
 
 export interface EditorCanvasProps {
   width: number
@@ -14,9 +23,11 @@ export interface EditorCanvasProps {
   onDeleteRequest?: () => void
   device?: string
   previewEnabled?: boolean
+  /** Entertainment config currently active — used for WLED assignment upsert + popover */
+  selectedConfigId?: string | null
 }
 
-export function EditorCanvas({ width, height, onDeleteRequest, device, previewEnabled = true }: EditorCanvasProps) {
+export function EditorCanvas({ width, height, onDeleteRequest, device, previewEnabled = true, selectedConfigId = null }: EditorCanvasProps) {
   const imgSrc = usePreviewWS(previewEnabled, device)
 
   // Double-buffer: keep previous image visible while new one loads to prevent flicker
@@ -45,6 +56,7 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
   }, [imgSrc])
 
   const stageRef = useRef<Konva.Stage>(null)
+  const canvasContainerRef = useRef<HTMLDivElement>(null)
 
   const regions = useRegionStore((s) => s.regions)
   const selectedId = useRegionStore((s) => s.selectedId)
@@ -56,6 +68,57 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
   const appendPoint = useRegionStore((s) => s.appendPoint)
   const clearDrawing = useRegionStore((s) => s.clearDrawing)
   const updateRegionInStore = useRegionStore((s) => s.updateRegion)
+
+  const setWledAssignments = useRegionStore((s) => s.setWledAssignments)
+  const [channelsByDevice, setChannelsByDevice] = useState<Record<string, WledChannel[]>>({})
+
+  // Phase 19: hydrate useRegionStore.wledAssignments + channelsByDevice on
+  // mount + when config changes. channelsByDevice powers the per-device
+  // channel_index lookup that the popover uses for chip colors (UI-SPEC §Color line 95).
+  useEffect(() => {
+    if (!selectedConfigId) {
+      setWledAssignments({})
+      setChannelsByDevice({})
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const [assignmentsResp, devicesResp] = await Promise.all([
+          listWledAssignments(selectedConfigId),
+          getWledDevices(),
+        ])
+        if (!alive) return
+
+        const byRegion: Record<string, WledAssignment[]> = {}
+        for (const a of assignmentsResp.assignments) {
+          if (!byRegion[a.region_id]) byRegion[a.region_id] = []
+          byRegion[a.region_id].push(a)
+        }
+        setWledAssignments(byRegion)
+
+        // Fetch each device's channel list in parallel.
+        const channelsEntries = await Promise.all(
+          devicesResp.devices.map(async (d) => {
+            try {
+              const resp = await listWledChannels(d.id)
+              return [d.id, resp.channels] as const
+            } catch (err) {
+              console.error(`Failed to load channels for device ${d.id}:`, err)
+              return [d.id, [] as WledChannel[]] as const
+            }
+          }),
+        )
+        if (!alive) return
+        setChannelsByDevice(Object.fromEntries(channelsEntries))
+      } catch (err) {
+        console.error('Failed to load WLED assignments / channels:', err)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [selectedConfigId, setWledAssignments])
 
   // Rectangle drawing state
   const [rectStart, setRectStart] = useState<[number, number] | null>(null)
@@ -189,6 +252,50 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
 
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
+
+    // Phase 19 D-13 / UI-SPEC §Drag-Drop Payload Contract: WLED branch first.
+    // wledChannelId is the unambiguous discriminator. Explicit return below
+    // prevents the Hue branch from running for WLED drops.
+    const wledChannelId = e.dataTransfer.getData('wledChannelId')
+    if (wledChannelId) {
+      const entertainmentConfigId = e.dataTransfer.getData('entertainment_config_id')
+      if (!entertainmentConfigId) {
+        console.error('WLED drop missing entertainment_config_id')
+        return
+      }
+      const stage = stageRef.current
+      if (!stage) return
+      stage.setPointersPositions(e)
+      const pos = stage.getPointerPosition()
+      if (!pos) return
+      const currentRegions = useRegionStore.getState().regions
+      const hit = currentRegions.find((region) => {
+        const pixelPolygon = denormalize(region.polygon as [number, number][], width, height)
+        return pointInPolygon([pos.x, pos.y], pixelPolygon)
+      })
+      if (!hit) return
+      try {
+        await upsertWledAssignment({
+          region_id: hit.id,
+          wled_channel_id: wledChannelId,
+          entertainment_config_id: entertainmentConfigId,
+        })
+        // Refresh assignments + surface the popover for the dropped-on region.
+        const resp = await listWledAssignments(entertainmentConfigId)
+        const byRegion: Record<string, WledAssignment[]> = {}
+        for (const a of resp.assignments) {
+          if (!byRegion[a.region_id]) byRegion[a.region_id] = []
+          byRegion[a.region_id].push(a)
+        }
+        useRegionStore.getState().setWledAssignments(byRegion)
+        useRegionStore.getState().setSelectedId(hit.id)
+      } catch (err) {
+        console.error('Failed to assign WLED channel to region:', err)
+      }
+      return  // CRITICAL: prevent fall-through to the Hue branch.
+    }
+
+    // EXISTING HUE BRANCH BELOW - byte-identical to the pre-Phase-19 code.
     const channelId = e.dataTransfer.getData('channelId')
     const channelName = e.dataTransfer.getData('channelName')
     const lightId = e.dataTransfer.getData('lightId')
@@ -199,12 +306,10 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
     const stage = stageRef.current
     if (!stage) return
 
-    // Update Konva pointer position from the DOM drag event
     stage.setPointersPositions(e)
     const pos = stage.getPointerPosition()
     if (!pos) return
 
-    // Find which region contains the drop point (in pixel space)
     const currentRegions = useRegionStore.getState().regions
     const hit = currentRegions.find((region) => {
       const pixelPolygon = denormalize(region.polygon as [number, number][], width, height)
@@ -234,6 +339,7 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
 
   return (
     <div
+      ref={canvasContainerRef}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
       style={{ background: '#000', display: 'inline-block', touchAction: 'none' }}
@@ -308,6 +414,15 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
           )}
         </Layer>
       </Stage>
+      {selectedConfigId && (
+        <RegionOrientationPopover
+          canvasWidth={width}
+          canvasHeight={height}
+          canvasContainerEl={canvasContainerRef.current}
+          selectedConfigId={selectedConfigId}
+          channelsByDevice={channelsByDevice}
+        />
+      )}
     </div>
   )
 }
