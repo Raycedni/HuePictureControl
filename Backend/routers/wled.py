@@ -34,11 +34,17 @@ Exports:
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from services.wled_channels import (
+    create_channel_with_split,
+    delete_channel_with_cascade,
+    resize_boundary,
+)
 from services.wled_client import fetch_wled_info
 from services.wled_discovery import scan_for_wled_devices
 
@@ -83,6 +89,82 @@ class WledScanCandidate(BaseModel):
 
 class WledScanResponse(BaseModel):
     candidates: list[WledScanCandidate]
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 - Pydantic models for channel CRUD + assignment + orientation
+# ---------------------------------------------------------------------------
+
+
+WledOrientation = Literal[
+    "auto",
+    "horizontal-LTR",
+    "horizontal-RTL",
+    "vertical-TTB",
+    "vertical-BTT",
+]
+
+
+class WledChannelOut(BaseModel):
+    id: str
+    device_id: str
+    name: str
+    start_led: int
+    end_led: int
+
+
+class WledChannelsResponse(BaseModel):
+    channels: list[WledChannelOut]
+
+
+class WledChannelCreate(BaseModel):
+    start_led: int = Field(..., ge=0)
+    end_led: int = Field(..., ge=0)
+    name: str | None = None
+
+
+class WledChannelUpdate(BaseModel):
+    name: str | None = None
+    start_led: int | None = Field(default=None, ge=0)
+    end_led: int | None = Field(default=None, ge=0)
+
+
+class WledChannelBoundaryUpdate(BaseModel):
+    left_channel_id: str
+    right_channel_id: str
+    boundary: int = Field(..., ge=0)
+
+
+class WledAssignmentIn(BaseModel):
+    region_id: str
+    wled_channel_id: str
+    entertainment_config_id: str
+    orientation: WledOrientation | None = None
+
+
+class WledAssignmentOut(BaseModel):
+    region_id: str
+    wled_channel_id: str
+    entertainment_config_id: str
+    orientation: WledOrientation
+
+
+class WledAssignmentsResponse(BaseModel):
+    assignments: list[WledAssignmentOut]
+
+
+class WledAssignmentDelete(BaseModel):
+    region_id: str
+    wled_channel_id: str
+    entertainment_config_id: str
+
+
+class WledOrientationPatch(BaseModel):
+    orientation: WledOrientation
+
+
+class WledOrientationPatchResponse(BaseModel):
+    updated: int
 
 
 # ---------------------------------------------------------------------------
