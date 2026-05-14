@@ -328,7 +328,14 @@ class StreamingCoordinator:
     # ------------------------------------------------------------------
 
     async def _build_region_plan(self, config_id: str) -> dict:
-        """Build {region_id: (RegionMask, N_region)} for sub-sample fan-out.
+        """Build {region_id: (RegionMask, N_region, orientation)} for sub-sample fan-out.
+
+        Per Phase 19 CONTEXT.md D-16/D-22 (per-region narrowing): orientation is
+        region-scoped, not channel-scoped. ALL wled_light_assignments rows for
+        a given (region_id, entertainment_config_id) carry the same orientation
+        value (enforced at the API layer by PATCH /api/wled/regions/{rid}/orientation).
+        MAX(wla.orientation) is therefore deterministic; NULL coerces to 'auto'
+        for Hue-only regions.
 
         The query joins ``regions`` with both Hue (``light_assignments``) and
         WLED (``wled_light_assignments`` -> ``wled_channels``) sides and computes
@@ -345,7 +352,8 @@ class StreamingCoordinator:
         """
         sql = """
             SELECT DISTINCT r.id AS region_id, r.polygon,
-                   COALESCE(MAX(wc.end_led - wc.start_led + 1), 1) AS n_region
+                   COALESCE(MAX(wc.end_led - wc.start_led + 1), 1) AS n_region,
+                   COALESCE(MAX(wla.orientation), 'auto') AS orientation
             FROM regions r
             LEFT JOIN light_assignments la ON la.region_id = r.id AND la.entertainment_config_id = :cfg
             LEFT JOIN wled_light_assignments wla ON wla.region_id = r.id AND wla.entertainment_config_id = :cfg
@@ -371,9 +379,12 @@ class StreamingCoordinator:
                 region_id = row["region_id"]
                 polygon = row["polygon"]
                 n_region = row["n_region"]
+                orientation = row["orientation"]
             except Exception:
                 # Defensive: row may be a tuple in some test mocks
-                region_id, polygon, n_region = row[0], row[1], row[2]
+                region_id, polygon, n_region, orientation = (
+                    row[0], row[1], row[2], row[3]
+                )
             if not polygon:
                 continue
             try:
@@ -384,7 +395,7 @@ class StreamingCoordinator:
                 )
                 continue
             mask = build_polygon_mask(points)
-            plan[region_id] = (mask, int(n_region or 1))
+            plan[region_id] = (mask, int(n_region or 1), str(orientation or "auto"))
         return plan
 
     # ------------------------------------------------------------------
@@ -504,9 +515,13 @@ class StreamingCoordinator:
                 )
                 return
 
+            # Phase 19 D-22 (per-region narrowing): orientation comes from the
+            # region's resolved value in region_plan; sub_sample_gradient
+            # defaults to 'auto' which preserves Phase 17 behavior for
+            # Hue-only regions.
             region_gradients: dict[str, np.ndarray] = {
-                rid: sub_sample_gradient(frame, mask, n_region)
-                for rid, (mask, n_region) in region_plan.items()
+                rid: sub_sample_gradient(frame, mask, n_region, orientation=orientation)
+                for rid, (mask, n_region, orientation) in region_plan.items()
             }
 
             try:

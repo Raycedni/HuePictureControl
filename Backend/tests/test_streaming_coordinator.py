@@ -246,6 +246,7 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
         "region_id": "r1",
         "polygon": polygon,
         "n_region": 1,
+        "orientation": "auto",
     }[k])
 
     db = MagicMock()
@@ -442,6 +443,7 @@ async def test_build_region_plan_returns_mask_and_n_region():
         "region_id": "rA",
         "polygon": polygon,
         "n_region": 5,
+        "orientation": "auto",
     }[k])
 
     cur = MagicMock()
@@ -465,8 +467,9 @@ async def test_build_region_plan_returns_mask_and_n_region():
     )
     plan = await coord._build_region_plan("cfg-y")
     assert "rA" in plan
-    mask, n_region = plan["rA"]
+    mask, n_region, orientation = plan["rA"]
     assert n_region == 5
+    assert orientation == "auto"
     # mask is a RegionMask
     from services.color_math import RegionMask
     assert isinstance(mask, RegionMask)
@@ -696,7 +699,7 @@ async def test_coordinator_fans_out_to_hue_and_wled(monkeypatch):
     )
 
     async def _fake_plan(self, cfg):
-        return {"r1": (fake_region, 10)}  # N_region=10 matching the channel
+        return {"r1": (fake_region, 10, "auto")}  # N_region=10, orientation=auto
 
     monkeypatch.setattr(
         "services.streaming_coordinator.StreamingCoordinator._build_region_plan",
