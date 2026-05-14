@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Wireless Input
-status: verifying
-stopped_at: Phase 19 UI-SPEC approved
+milestone: v1.3
+milestone_name: WLED Support, HA Control & Bug Fixes
+status: in-progress
+stopped_at: Phase 19 verified
 last_updated: "2026-05-14T14:04:38.556Z"
 last_activity: 2026-05-14
 progress:
@@ -79,6 +79,8 @@ None yet.
 - v1.3 Phases 16-19 added 2026-04-14: Zone persistence fixes, WLED backend+streaming, HA control endpoints, WLED strip paint UI
 - v1.1 archived 2026-04-14: 5 phases, 10 plans, 7 requirements left unchecked (known gaps)
 - Phase 16 closed 2026-04-20: 3 plans, BFIX-01 + BFIX-02 shipped
+- Phase 19 closed 2026-05-14: 13 plans, 5/5 success criteria PASSED. Manual UAT V1–V4 deferred to 19.1.
+- Phase 19.1 inserted after Phase 19: WLED Segment Sync (URGENT) — channels auto-queried from WLED `/json/state seg[]` instead of paint-managed, redesign decided 2026-05-14 during Phase 19 Wave 7 checkpoint
 
 ### Blockers/Concerns
 

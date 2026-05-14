@@ -116,6 +116,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
+- [ ] **Phase 19.1: WLED Segment Sync** (INSERTED) - Channels auto-queried from WLED device `/json/state seg[]` instead of paint-managed; manual UAT V1–V4 re-tested against segment-driven model
 
 ## Phase Details (v1.3)
 
@@ -197,6 +198,23 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   - [ ] 19-12-PLAN.md — Frontend Wave 6: useRegionStore.wledAssignments + OrientationSegmentedControl + RegionOrientationPopover (Base UI virtual anchor) + EditorCanvas WLED drop branch
   - [ ] 19-13-PLAN.md — Wave 7: Playwright config + e2e/wled-paint.spec.ts + persistence e2e + manual UAT checkpoint
 **UI hint**: yes
+
+---
+
+### Phase 19.1: WLED Segment Sync (INSERTED)
+**Goal:** [Urgent work - to be planned]
+**Requirements:** TBD
+**Depends on:** Phase 19
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 19.1 to break down)
+
+**Scope hint** (from 2026-05-14 user decision after Phase 19 verification):
+- Channels in HuePictureControl mirror WLED's own `seg[]` array from `/json/state` instead of being maintained in the `wled_channels` table.
+- Strip painter UX becomes read-only display (or repurposed for region/orientation assignment only).
+- Phase 19's `wled_channels` table semantics shift from primary store to local cache/sync target — schema may need a migration path.
+- Re-execute Phase 19 V1–V4 manual UAT against the segment-driven model (deferred from 19-13).
 
 ---
 
