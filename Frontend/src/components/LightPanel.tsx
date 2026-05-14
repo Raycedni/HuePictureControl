@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { getLights, getEntertainmentConfigs, fetchConfigChannels, type Light, type ConfigChannel, type EntertainmentConfig } from '@/api/hue'
 import { fetchRegions, startStreaming, stopStreaming, clearAllAssignments } from '@/api/regions'
 import { putCameraAssignment, putLastZone, type CamerasResponse } from '@/api/cameras'
+import {
+  getWledDevices,
+  listWledChannels,
+  listWledAssignments,
+  type WledDevice,
+  type WledChannel,
+} from '@/api/wled'
+import { channelColor } from '@/utils/wled-palette'
 import { useStatusStore } from '@/store/useStatusStore'
 import { useRegionStore } from '@/store/useRegionStore'
 import { Button } from '@/components/ui/button'
@@ -31,6 +39,13 @@ export function LightPanel({
   const [error, setError] = useState<string | null>(null)
   const [streamError, setStreamError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+
+  // Phase 19 D-12/D-14: WLED section state
+  const [wledDevices, setWledDevices] = useState<WledDevice[]>([])
+  const [wledChannelsByDevice, setWledChannelsByDevice] = useState<Record<string, WledChannel[]>>({})
+  const [wledAssignmentsByChannel, setWledAssignmentsByChannel] = useState<
+    Record<string, string>
+  >({})  // channelId -> region.name
 
   const isStreaming = useStatusStore((s) => s.isStreaming)
   const activeConfigId = useStatusStore((s) => s.activeConfigId)
@@ -121,6 +136,44 @@ export function LightPanel({
       .catch((err) => console.error('Failed to load channels:', err))
   }, [selectedConfigId])
 
+  // Phase 19: load WLED devices + channels + assignments for the WLED section.
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const devicesResp = await getWledDevices()
+        if (!alive) return
+        setWledDevices(devicesResp.devices)
+        const byDevice: Record<string, WledChannel[]> = {}
+        for (const d of devicesResp.devices) {
+          const chResp = await listWledChannels(d.id)
+          if (!alive) return
+          byDevice[d.id] = chResp.channels
+        }
+        setWledChannelsByDevice(byDevice)
+        if (selectedConfigId) {
+          const asgResp = await listWledAssignments(selectedConfigId)
+          if (!alive) return
+          // Map channelId -> first region.name that uses it (LightPanel display only)
+          const map: Record<string, string> = {}
+          const regionsById = new Map(regions.map((r) => [r.id, r]))
+          for (const a of asgResp.assignments) {
+            const region = regionsById.get(a.region_id)
+            if (region) map[a.wled_channel_id] = region.name
+          }
+          setWledAssignmentsByChannel(map)
+        } else {
+          setWledAssignmentsByChannel({})
+        }
+      } catch (err) {
+        console.error('Failed to load WLED data for LightPanel:', err)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [selectedConfigId, regions])
+
   async function handleCameraChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const devicePath = e.target.value
     if (!devicePath) {
@@ -210,6 +263,12 @@ export function LightPanel({
 
   // Channel counter: count regions with any light assigned
   const assignedCount = regions.filter((r) => r.light_id !== null).length
+
+  // Phase 19 D-14: WLED channel count (mono chip, no threshold colors)
+  const wledChannelCount = wledDevices.reduce(
+    (sum, d) => sum + (wledChannelsByDevice[d.id]?.length ?? 0),
+    0,
+  )
 
   // Group channels by light_id
   const channelsByLight: Record<string, ConfigChannel[]> = {}
