@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 19.1-01-PLAN.md
-last_updated: "2026-05-14T19:20:13.473Z"
+stopped_at: Completed 19.1-02-PLAN.md
+last_updated: "2026-05-14T19:48:48.752Z"
 last_activity: 2026-05-14
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 52
-  completed_plans: 43
-  percent: 83
+  completed_plans: 44
+  percent: 85
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 19.1 (wled-segment-sync) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-05-14
 
@@ -52,6 +52,7 @@ Last activity: 2026-05-14
 
 *Updated after each plan completion*
 | Phase 19.1 P01 | 25min | 2 tasks | 5 files |
+| Phase 19.1 P02 | 24min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,10 @@ Recent decisions affecting current work:
 - [v1.3 roadmap]: Phase 16 (bug fixes) runs first as warm-up — independent of WLED, unblocks clean state for WLED testing
 - [19.1-01] Wave 0 stubs use double-gated skip (pytest.importorskip + hasattr) for fetch_wled_state because services.wled_client already exists but the new function does not
 - [19.1-01] Pre-existing 12 test_cameras_router.py failures logged to deferred-items.md as out-of-scope (verified pre-existing via git-stash diff)
+- [19.1-02] fetch_wled_state IGNORES seg.id and uses array index as canonical seg_index (D-11) per WLED docs + firmware 0.14 issue #3041
+- [19.1-02] EXCLUSIVE WLED seg.stop is converted to INCLUSIVE stop_led at the parse boundary so downstream consumers stay on Phase 19's inclusive-both-ends gradient math (D-22)
+- [19.1-02] Schema migration uses PRAGMA user_version one-shot guard (PHASE_19_1_USER_VERSION=1) — atomic, no extra table, bump LAST so partial failures re-fire on next boot
+- [19.1-02] orientation column baked into new wled_light_assignments CREATE; Phase 19 next_channel_n ALTER preserved as harmless dormant column per D-10 Claude's Discretion
 
 ### Pending Todos
 
@@ -91,8 +96,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-14T19:20:13.468Z
-Stopped at: Completed 19.1-01-PLAN.md
+Last session: 2026-05-14T19:48:48.746Z
+Stopped at: Completed 19.1-02-PLAN.md
 Resume file: None
 
 **Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z

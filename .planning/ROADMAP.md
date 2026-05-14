@@ -214,7 +214,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   6. Manual UAT V1 (live LED color), V2 (chip-vs-strip parity), V3' (refresh roundtrip after WLED-side boundary change), V4 (full-stack restart persistence) all pass against real hardware
 **Plans**: 10 plans
   - [x] 19.1-01-PLAN.md — Wave 0: test infrastructure stubs (test_wled_segments.py + test_wled_client extension + test_phase19_1_e2e + wled-segment.test.ts)
-  - [ ] 19.1-02-PLAN.md — Wave 1: schema migration (PRAGMA user_version guard, wled_seg_cache + new wled_light_assignments) + fetch_wled_state coroutine
+  - [x] 19.1-02-PLAN.md — Wave 1: schema migration (PRAGMA user_version guard, wled_seg_cache + new wled_light_assignments) + fetch_wled_state coroutine
   - [ ] 19.1-03-PLAN.md — Wave 2: services/wled_segments.py reconcile_segments transaction + 6 reconciliation tests green
   - [ ] 19.1-04-PLAN.md — Wave 2: routers/wled.py refresh + list-segments endpoints + atomic registration + new assignment shape + test_wled_router rewrites
   - [ ] 19.1-05-PLAN.md — Wave 3: streaming_coordinator SQL rewrite (JOIN wled_seg_cache) + test_phase17_e2e + test_streaming_coordinator fixture updates
@@ -251,7 +251,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/13 | Not started | - |
-| 19.1. WLED Segment Sync | v1.3 | 1/10 | In progress | - |
+| 19.1. WLED Segment Sync | v1.3 | 2/10 | In progress | - |
 
 ---
 *Roadmap created: 2026-03-23*
