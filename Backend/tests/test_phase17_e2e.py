@@ -87,6 +87,7 @@ async def _make_db_with_phase17_schema():
             region_id TEXT NOT NULL,
             wled_channel_id TEXT NOT NULL,
             entertainment_config_id TEXT NOT NULL,
+            orientation TEXT NOT NULL DEFAULT 'auto',
             PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id)
         );
         CREATE TABLE camera_assignments (
