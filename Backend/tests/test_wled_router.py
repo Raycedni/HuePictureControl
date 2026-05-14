@@ -39,7 +39,7 @@ from fastapi.testclient import TestClient
 
 
 async def _make_db():
-    """In-memory aiosqlite with the Plan 17-02 wled_* tables."""
+    """In-memory aiosqlite with the Phase 17 wled_* tables + Phase 19 columns."""
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await conn.execute(
@@ -50,7 +50,8 @@ async def _make_db():
             name TEXT NOT NULL,
             led_count INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            next_channel_n INTEGER NOT NULL DEFAULT 1
         )
         """
     )
@@ -72,6 +73,7 @@ async def _make_db():
             region_id TEXT NOT NULL,
             wled_channel_id TEXT NOT NULL,
             entertainment_config_id TEXT NOT NULL,
+            orientation TEXT NOT NULL DEFAULT 'auto',
             PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id)
         )
         """
@@ -399,47 +401,318 @@ def test_scan_returns_candidates_list():
 
 
 # ---------------------------------------------------------------------------
-# Phase 19 channel-CRUD + orientation PATCH stubs — Plan 19-05 fills these in.
+# Phase 19 channel-CRUD + orientation PATCH — Wave 3 (Plan 19-08)
 # ---------------------------------------------------------------------------
 
 
-async def test_create_channel_basic():
+def test_create_channel_basic():
     """POST /api/wled/devices/{id}/channels inserts (start, end) — WMAP-01."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 wires routers/wled.py to services.wled_channels.create_channel_with_split.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.1"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        rc = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 10, "end_led": 49},
+        )
+        assert rc.status_code == 201, rc.text
+        body = rc.json()
+        assert body["device_id"] == dev_id
+        assert body["start_led"] == 10
+        assert body["end_led"] == 49
+        assert "id" in body
+        assert "name" in body
 
 
-async def test_list_channels_for_device():
+def test_list_channels_for_device():
     """GET /api/wled/devices/{id}/channels returns ordered list."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 wires routers/wled.py list endpoint.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 200, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.2"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Create two channels (auto-split carves into the seed 'Strip').
+        client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 0, "end_led": 49},
+        )
+        client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 50, "end_led": 99},
+        )
+
+        rl = client.get(f"/api/wled/devices/{dev_id}/channels")
+        assert rl.status_code == 200, rl.text
+        channels = rl.json()["channels"]
+        # At least our two freshly painted channels are present.
+        assert len(channels) >= 2
+        # Ordered by start_led ASC.
+        starts = [c["start_led"] for c in channels]
+        assert starts == sorted(starts)
 
 
-async def test_update_channel_rename():
+def test_update_channel_rename():
     """PUT /api/wled/devices/{id}/channels/{cid} with {name} renames in place."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 wires routers/wled.py PUT endpoint.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.3"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Grab the auto-seeded 'Strip' channel.
+        rl = client.get(f"/api/wled/devices/{dev_id}/channels")
+        assert rl.status_code == 200
+        ch_id = rl.json()["channels"][0]["id"]
+
+        rp = client.put(
+            f"/api/wled/devices/{dev_id}/channels/{ch_id}",
+            json={"name": "Foo"},
+        )
+        assert rp.status_code == 200, rp.text
+        assert rp.json()["name"] == "Foo"
+        assert rp.json()["id"] == ch_id
 
 
-async def test_boundary_resize_atomic():
+def test_boundary_resize_atomic():
     """PUT /api/wled/devices/{id}/channels/boundary updates both adjacent rows."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 wires routers/wled.py boundary endpoint to resize_boundary.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.4"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Paint two non-overlapping channels that together cover the whole strip.
+        r1 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 0, "end_led": 49},
+        )
+        r2 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 50, "end_led": 99},
+        )
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+
+        # Fetch channel list to find the left and right channels (by start_led).
+        rl = client.get(f"/api/wled/devices/{dev_id}/channels")
+        channels = sorted(rl.json()["channels"], key=lambda c: c["start_led"])
+        # Find a left channel ending at 49 and right channel starting at 50.
+        left = next(c for c in channels if c["end_led"] == 49)
+        right = next(c for c in channels if c["start_led"] == 50)
+
+        rb = client.put(
+            f"/api/wled/devices/{dev_id}/channels/boundary",
+            json={
+                "left_channel_id": left["id"],
+                "right_channel_id": right["id"],
+                "boundary": 60,
+            },
+        )
+        assert rb.status_code == 200, rb.text
+        assert rb.json()["ok"] is True
+
+        # Verify both rows were updated atomically.
+        rl2 = client.get(f"/api/wled/devices/{dev_id}/channels")
+        updated = {c["id"]: c for c in rl2.json()["channels"]}
+        assert updated[left["id"]]["end_led"] == 59   # boundary - 1
+        assert updated[right["id"]]["start_led"] == 60  # boundary
 
 
-async def test_delete_channel_cascades():
+def test_delete_channel_cascades():
     """DELETE /api/wled/devices/{id}/channels/{cid} cascades to wled_light_assignments."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 wires routers/wled.py DELETE cascade.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.7"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Get the auto-seeded channel id.
+        rl = client.get(f"/api/wled/devices/{dev_id}/channels")
+        ch_id = rl.json()["channels"][0]["id"]
+
+        # Seed a light assignment for this channel via direct DB write.
+        async def _seed():
+            db = app.state.db
+            await db.execute(
+                "INSERT INTO wled_light_assignments "
+                "(region_id, wled_channel_id, entertainment_config_id, orientation) "
+                "VALUES ('r1', ?, 'cfg1', 'auto')",
+                (ch_id,),
+            )
+            await db.commit()
+
+        asyncio.run(_seed())
+
+        # Delete the channel — must cascade to the assignment.
+        rd = client.delete(f"/api/wled/devices/{dev_id}/channels/{ch_id}")
+        assert rd.status_code == 204
+
+        # Assignment row must be gone.
+        async def _check():
+            db = app.state.db
+            async with db.execute(
+                "SELECT COUNT(*) AS c FROM wled_light_assignments "
+                "WHERE wled_channel_id = ?",
+                (ch_id,),
+            ) as cur:
+                row = await cur.fetchone()
+            assert row["c"] == 0
+
+        asyncio.run(_check())
 
 
-async def test_patch_region_orientation_writes_all_rows():
+def test_patch_region_orientation_writes_all_rows():
     """PATCH /api/wled/regions/{rid}/orientation?config={cid} writes ALL matching rows."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 implements PATCH /api/wled/regions/{rid}/orientation.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.8"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Get two channels to assign to the same region.
+        r1 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 0, "end_led": 49},
+        )
+        r2 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 50, "end_led": 99},
+        )
+        ch1_id = r1.json()["id"]
+        ch2_id = r2.json()["id"]
+
+        # Seed two assignment rows for the SAME region+config with different orientations.
+        async def _seed():
+            db = app.state.db
+            await db.execute(
+                "INSERT INTO wled_light_assignments "
+                "(region_id, wled_channel_id, entertainment_config_id, orientation) "
+                "VALUES ('region-A', ?, 'cfg-X', 'auto')",
+                (ch1_id,),
+            )
+            await db.execute(
+                "INSERT INTO wled_light_assignments "
+                "(region_id, wled_channel_id, entertainment_config_id, orientation) "
+                "VALUES ('region-A', ?, 'cfg-X', 'horizontal-LTR')",
+                (ch2_id,),
+            )
+            await db.commit()
+
+        asyncio.run(_seed())
+
+        # PATCH orientation for region-A + cfg-X — must write both rows.
+        rp = client.patch(
+            "/api/wled/regions/region-A/orientation?config=cfg-X",
+            json={"orientation": "vertical-TTB"},
+        )
+        assert rp.status_code == 200, rp.text
+        assert rp.json()["updated"] == 2
+
+        # Verify both rows have the new orientation.
+        async def _check():
+            db = app.state.db
+            async with db.execute(
+                "SELECT orientation FROM wled_light_assignments "
+                "WHERE region_id = 'region-A' AND entertainment_config_id = 'cfg-X'",
+            ) as cur:
+                rows = await cur.fetchall()
+            assert len(rows) == 2
+            for row in rows:
+                assert row["orientation"] == "vertical-TTB"
+
+        asyncio.run(_check())
 
 
-async def test_upsert_assignment_inherits_region_orientation():
+def test_upsert_assignment_inherits_region_orientation():
     """PUT /api/wled/assignments inserts new row carrying the region's current orientation."""
-    pytest.importorskip("services.wled_channels")
-    pytest.skip("Wave 3 implements PUT /api/wled/assignments.")
+    app = _make_app()
+    with TestClient(app) as client:
+        with patch(
+            "routers.wled.fetch_wled_info",
+            AsyncMock(
+                return_value={"name": "W", "led_count": 100, "ver": "", "mac": ""}
+            ),
+        ):
+            r = client.post("/api/wled/devices", json={"ip": "10.0.0.9"})
+        assert r.status_code == 201
+        dev_id = r.json()["id"]
+
+        # Create two channels.
+        r1 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 0, "end_led": 49},
+        )
+        r2 = client.post(
+            f"/api/wled/devices/{dev_id}/channels",
+            json={"start_led": 50, "end_led": 99},
+        )
+        ch1_id = r1.json()["id"]
+        ch2_id = r2.json()["id"]
+
+        # Seed an existing assignment for ch1 with orientation 'vertical-TTB'.
+        async def _seed():
+            db = app.state.db
+            await db.execute(
+                "INSERT INTO wled_light_assignments "
+                "(region_id, wled_channel_id, entertainment_config_id, orientation) "
+                "VALUES ('region-B', ?, 'cfg-Y', 'vertical-TTB')",
+                (ch1_id,),
+            )
+            await db.commit()
+
+        asyncio.run(_seed())
+
+        # PUT a NEW assignment for ch2 WITHOUT specifying orientation.
+        # It must inherit 'vertical-TTB' from the region's existing row.
+        rp = client.put(
+            "/api/wled/assignments",
+            json={
+                "region_id": "region-B",
+                "wled_channel_id": ch2_id,
+                "entertainment_config_id": "cfg-Y",
+            },
+        )
+        assert rp.status_code == 200, rp.text
+        body = rp.json()
+        assert body["orientation"] == "vertical-TTB"
+        assert body["region_id"] == "region-B"
+        assert body["wled_channel_id"] == ch2_id

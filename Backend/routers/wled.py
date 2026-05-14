@@ -468,3 +468,331 @@ async def scan(request: Request) -> WledScanResponse:  # noqa: ARG001
             for r in results
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 - Channel CRUD endpoints (D-21)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/devices/{device_id}/channels",
+    response_model=WledChannelsResponse,
+)
+async def list_channels(device_id: str, request: Request) -> WledChannelsResponse:
+    """List channels for a device ordered by start_led ASC."""
+    db = request.app.state.db
+    async with db.execute(
+        "SELECT id FROM wled_devices WHERE id = ?", (device_id,)
+    ) as cur:
+        if (await cur.fetchone()) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"WLED device '{device_id}' not found",
+            )
+    async with db.execute(
+        "SELECT id, device_id, name, start_led, end_led FROM wled_channels "
+        "WHERE device_id = ? ORDER BY start_led ASC",
+        (device_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    channels = [
+        WledChannelOut(
+            id=r["id"],
+            device_id=r["device_id"],
+            name=r["name"],
+            start_led=int(r["start_led"]),
+            end_led=int(r["end_led"]),
+        )
+        for r in rows
+    ]
+    return WledChannelsResponse(channels=channels)
+
+
+@router.post(
+    "/devices/{device_id}/channels",
+    response_model=WledChannelOut,
+    status_code=201,
+)
+async def create_channel(
+    device_id: str, body: WledChannelCreate, request: Request
+) -> WledChannelOut:
+    """Create a channel - applies overlap auto-split (D-02)."""
+    db = request.app.state.db
+    try:
+        row = await create_channel_with_split(
+            db, device_id, body.start_led, body.end_led
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+    # Optional rename on create
+    if body.name is not None:
+        await db.execute(
+            "UPDATE wled_channels SET name = ? WHERE id = ?",
+            (body.name, row["id"]),
+        )
+        await db.commit()
+        row["name"] = body.name
+    return WledChannelOut(**row)
+
+
+@router.put(
+    "/devices/{device_id}/channels/boundary",
+)
+async def resize_channel_boundary(
+    device_id: str, body: WledChannelBoundaryUpdate, request: Request
+) -> dict:
+    """Atomically move the shared boundary between two adjacent channels (D-03).
+
+    ROUTING NOTE: This handler MUST be declared BEFORE the
+    `PUT /devices/{device_id}/channels/{channel_id}` handler so that FastAPI
+    does not greedily match the literal string "boundary" as a channel_id.
+    """
+    db = request.app.state.db
+    # Verify both channels belong to this device.
+    async with db.execute(
+        "SELECT id FROM wled_channels WHERE id IN (?, ?) AND device_id = ?",
+        (body.left_channel_id, body.right_channel_id, device_id),
+    ) as cur:
+        rows = await cur.fetchall()
+    if len(rows) != 2:
+        raise HTTPException(
+            status_code=404,
+            detail="left_channel_id or right_channel_id not found on device",
+        )
+    try:
+        await resize_boundary(
+            db, body.left_channel_id, body.right_channel_id, body.boundary
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"ok": True}
+
+
+@router.put(
+    "/devices/{device_id}/channels/{channel_id}",
+    response_model=WledChannelOut,
+)
+async def update_channel(
+    device_id: str,
+    channel_id: str,
+    body: WledChannelUpdate,
+    request: Request,
+) -> WledChannelOut:
+    """Rename and/or resize a channel. Partial PUT - all fields optional."""
+    db = request.app.state.db
+    async with db.execute(
+        "SELECT id, device_id, name, start_led, end_led FROM wled_channels "
+        "WHERE id = ? AND device_id = ?",
+        (channel_id, device_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"channel '{channel_id}' not found on device '{device_id}'",
+        )
+
+    # Compute the new state, validating range bounds.
+    new_name = body.name if body.name is not None else row["name"]
+    new_start = body.start_led if body.start_led is not None else int(row["start_led"])
+    new_end = body.end_led if body.end_led is not None else int(row["end_led"])
+    if new_start > new_end:
+        raise HTTPException(
+            status_code=422,
+            detail=f"start_led ({new_start}) must be <= end_led ({new_end})",
+        )
+    async with db.execute(
+        "SELECT led_count FROM wled_devices WHERE id = ?", (device_id,)
+    ) as cur:
+        dev_row = await cur.fetchone()
+    if dev_row is None:
+        raise HTTPException(
+            status_code=404, detail=f"WLED device '{device_id}' not found"
+        )
+    led_count = int(dev_row["led_count"])
+    if new_start < 0 or new_end >= led_count:
+        raise HTTPException(
+            status_code=422,
+            detail=f"range [{new_start}, {new_end}] outside [0, {led_count - 1}]",
+        )
+
+    await db.execute(
+        "UPDATE wled_channels SET name = ?, start_led = ?, end_led = ? WHERE id = ?",
+        (new_name, new_start, new_end, channel_id),
+    )
+    await db.commit()
+    return WledChannelOut(
+        id=channel_id,
+        device_id=device_id,
+        name=new_name,
+        start_led=new_start,
+        end_led=new_end,
+    )
+
+
+@router.delete(
+    "/devices/{device_id}/channels/{channel_id}",
+    status_code=204,
+)
+async def delete_channel(device_id: str, channel_id: str, request: Request) -> None:
+    """Delete a channel - cascades to wled_light_assignments (D-04)."""
+    db = request.app.state.db
+    async with db.execute(
+        "SELECT id FROM wled_channels WHERE id = ? AND device_id = ?",
+        (channel_id, device_id),
+    ) as cur:
+        if (await cur.fetchone()) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"channel '{channel_id}' not found on device '{device_id}'",
+            )
+    try:
+        await delete_channel_with_cascade(db, channel_id)
+    except ValueError as exc:
+        # Should be unreachable given the existence check above; defensive.
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 - Assignment endpoints (D-21)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/assignments",
+    response_model=WledAssignmentsResponse,
+)
+async def list_assignments(
+    request: Request, config: str
+) -> WledAssignmentsResponse:
+    """List all WLED assignments scoped to an entertainment config."""
+    db = request.app.state.db
+    async with db.execute(
+        "SELECT region_id, wled_channel_id, entertainment_config_id, orientation "
+        "FROM wled_light_assignments WHERE entertainment_config_id = ?",
+        (config,),
+    ) as cur:
+        rows = await cur.fetchall()
+    out = [
+        WledAssignmentOut(
+            region_id=r["region_id"],
+            wled_channel_id=r["wled_channel_id"],
+            entertainment_config_id=r["entertainment_config_id"],
+            orientation=r["orientation"],
+        )
+        for r in rows
+    ]
+    return WledAssignmentsResponse(assignments=out)
+
+
+@router.put(
+    "/assignments",
+    response_model=WledAssignmentOut,
+)
+async def upsert_assignment(
+    body: WledAssignmentIn, request: Request
+) -> WledAssignmentOut:
+    """Upsert a region->channel assignment for a config.
+
+    Per-region orientation invariant (CONTEXT.md D-16): if the body omits
+    `orientation`, new rows inherit the region's CURRENT orientation in this
+    config (every existing row for this region+config carries the same value).
+    Existing rows keep their orientation unless `orientation` is provided.
+    """
+    db = request.app.state.db
+
+    # Channel existence check (also implicitly validates device via FK).
+    async with db.execute(
+        "SELECT id FROM wled_channels WHERE id = ?", (body.wled_channel_id,)
+    ) as cur:
+        if (await cur.fetchone()) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"channel '{body.wled_channel_id}' not found",
+            )
+
+    # Resolve orientation: explicit body wins; otherwise read region's current
+    # orientation (any row for this region+config); fall back to 'auto'.
+    if body.orientation is not None:
+        orientation = body.orientation
+    else:
+        async with db.execute(
+            "SELECT orientation FROM wled_light_assignments "
+            "WHERE region_id = ? AND entertainment_config_id = ? LIMIT 1",
+            (body.region_id, body.entertainment_config_id),
+        ) as cur:
+            r = await cur.fetchone()
+        orientation = r["orientation"] if r is not None else "auto"
+
+    await db.execute(
+        "INSERT INTO wled_light_assignments "
+        "(region_id, wled_channel_id, entertainment_config_id, orientation) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(region_id, wled_channel_id, entertainment_config_id) "
+        "DO UPDATE SET orientation = excluded.orientation",
+        (
+            body.region_id,
+            body.wled_channel_id,
+            body.entertainment_config_id,
+            orientation,
+        ),
+    )
+    await db.commit()
+    return WledAssignmentOut(
+        region_id=body.region_id,
+        wled_channel_id=body.wled_channel_id,
+        entertainment_config_id=body.entertainment_config_id,
+        orientation=orientation,
+    )
+
+
+@router.delete(
+    "/assignments",
+    status_code=204,
+)
+async def delete_assignment(body: WledAssignmentDelete, request: Request) -> None:
+    """Remove a single region->channel assignment for a config (D-21)."""
+    db = request.app.state.db
+    async with db.execute(
+        "DELETE FROM wled_light_assignments "
+        "WHERE region_id = ? AND wled_channel_id = ? AND entertainment_config_id = ?",
+        (body.region_id, body.wled_channel_id, body.entertainment_config_id),
+    ):
+        pass
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 - Region orientation PATCH (per-region narrowing, CONTEXT D-16/D-22)
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/regions/{region_id}/orientation",
+    response_model=WledOrientationPatchResponse,
+)
+async def patch_region_orientation(
+    region_id: str,
+    body: WledOrientationPatch,
+    request: Request,
+    config: str,
+) -> WledOrientationPatchResponse:
+    """Set the orientation for EVERY WLED assignment row matching
+    (region_id, entertainment_config_id) - per-region narrowing (D-16/D-22).
+
+    Single UPDATE statement; returns the number of rows updated. Returns
+    updated=0 if no assignments exist for this region+config (not an error -
+    the popover renders an empty state in that case).
+    """
+    db = request.app.state.db
+    cur = await db.execute(
+        "UPDATE wled_light_assignments SET orientation = ? "
+        "WHERE region_id = ? AND entertainment_config_id = ?",
+        (body.orientation, region_id, config),
+    )
+    await db.commit()
+    return WledOrientationPatchResponse(updated=cur.rowcount or 0)
