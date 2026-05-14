@@ -13,6 +13,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: [],
-    exclude: ['node_modules', 'node_modules.bak', 'dist'],
+    exclude: ['node_modules', 'node_modules.bak', 'dist', 'e2e/**'],
   },
 })
