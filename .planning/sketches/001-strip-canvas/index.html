@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Sketch 001 · WLED Strip Canvas</title>
+<link rel="stylesheet" href="../themes/default.css" />
+<style>
+  .stage { max-width: 1280px; margin: 0 auto; padding: 24px; }
+  .stage h1 { color: var(--text-h); font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .stage .lede { font-size: 12px; color: rgba(255,255,255,0.5); margin: 0 0 20px; }
+
+  /* Settings split: canvas (flex 6) | devices (flex 4) — matches SettingsPage.tsx */
+  .settings-split { display: flex; gap: 16px; min-height: 480px; }
+  .canvas-slot   { flex: 6; min-width: 0; }
+  .devices-slot  { flex: 4; min-width: 280px; }
+
+  .canvas-slot, .devices-slot {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .canvas-slot .canvas-title {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .canvas-slot .canvas-title h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-h); }
+  .canvas-slot .canvas-title .hint { font-size: 11px; color: rgba(255,255,255,0.4); }
+
+  /* Device block — name + meta + strip */
+  .device-block { margin-bottom: 22px; }
+  .device-block:last-child { margin-bottom: 0; }
+  .device-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .device-name { font-size: 12px; font-weight: 600; color: var(--text-h); }
+  .device-meta { font-size: 10px; color: rgba(255,255,255,0.4); font-family: var(--mono); }
+
+  /* ===== A: THIN TIMELINE (40px) ===== */
+  .strip-A {
+    position: relative;
+    height: 40px;
+    background: rgba(0,0,0,0.35);
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.06);
+    overflow: visible;
+  }
+  .strip-A .zone {
+    position: absolute; top: 0; bottom: 0;
+    display: flex; align-items: center; padding: 0 8px;
+    font-size: 11px; font-weight: 500;
+    color: rgba(0,0,0,0.78);
+    cursor: pointer; user-select: none;
+    border-right: 1px solid rgba(0,0,0,0.25);
+    transition: filter 120ms;
+  }
+  .strip-A .zone:hover { filter: brightness(1.08); }
+  .strip-A .zone.selected { outline: 1px solid var(--accent); outline-offset: -1px; z-index: 2; }
+  .strip-A .zone.narrow { padding: 0; }
+  .strip-A .ticks {
+    position: relative; height: 14px; margin-top: 4px;
+    font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
+  }
+  .strip-A .ticks .tick { position: absolute; top: 0; transform: translateX(-50%); }
+  .strip-A .ticks .tick::before {
+    content: '';
+    display: block;
+    width: 1px; height: 4px;
+    background: rgba(255,255,255,0.2);
+    margin: 0 auto 2px;
+  }
+
+  /* ===== B: TALL PILL (60px) ===== */
+  .strip-B {
+    position: relative;
+    height: 60px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 8px;
+    overflow: visible;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .strip-B .zone {
+    position: absolute; top: 0; bottom: 0;
+    display: flex; flex-direction: column; justify-content: center; gap: 2px;
+    padding: 0 12px;
+    color: rgba(0,0,0,0.85);
+    cursor: pointer; user-select: none;
+    border-right: 1px solid rgba(0,0,0,0.3);
+    transition: filter 120ms;
+  }
+  .strip-B .zone:first-child { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+  .strip-B .zone:last-child  { border-top-right-radius: 8px; border-bottom-right-radius: 8px; border-right: 0; }
+  .strip-B .zone:hover { filter: brightness(1.08); }
+  .strip-B .zone.selected { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 2; }
+  .strip-B .zone .nm  { font-size: 12px; font-weight: 600; }
+  .strip-B .zone .rng { font-size: 10px; opacity: 0.7; font-family: var(--mono); }
+  .strip-B .zone.narrow .nm,
+  .strip-B .zone.narrow .rng { display: none; }
+  .strip-B .ticks {
+    position: relative; height: 14px; margin-top: 6px;
+    font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
+  }
+  .strip-B .ticks .tick { position: absolute; top: 0; transform: translateX(-50%); }
+  .strip-B .ticks .tick::before {
+    content: ''; display: block; width: 1px; height: 4px;
+    background: rgba(255,255,255,0.2); margin: 0 auto 2px;
+  }
+
+  /* ===== C: STACKED RAIL (rail + zone block + floating boundary pill) ===== */
+  .strip-C {
+    position: relative;
+    height: 52px;
+    padding: 6px 0 0;
+  }
+  .strip-C .rail {
+    position: absolute; top: 6px; left: 0; right: 0; height: 6px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 3px;
+  }
+  .strip-C .zone {
+    position: absolute; top: 0; height: 46px;
+    border-radius: 6px;
+    display: flex; align-items: flex-end; padding: 4px 10px 6px;
+    color: rgba(0,0,0,0.85);
+    cursor: pointer; user-select: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    transition: filter 120ms, transform 120ms;
+    border: 1px solid rgba(0,0,0,0.25);
+  }
+  .strip-C .zone:hover { filter: brightness(1.06); transform: translateY(-1px); }
+  .strip-C .zone.selected { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 4; }
+  .strip-C .zone .nm  { font-size: 11px; font-weight: 600; }
+  .strip-C .zone.narrow .nm { display: none; }
+  .strip-C .boundary-pill {
+    position: absolute; top: 22px;
+    transform: translate(-50%, 0);
+    width: 14px; height: 14px; border-radius: 7px;
+    background: rgba(20,20,35,0.95);
+    border: 1px solid var(--accent);
+    z-index: 5; cursor: ew-resize;
+    box-shadow: 0 0 0 3px rgba(232,160,0,0.18);
+  }
+  .strip-C .boundary-pill:hover { background: var(--accent); }
+  .strip-C .ticks {
+    position: relative; height: 14px; margin-top: 8px;
+    font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
+  }
+  .strip-C .ticks .tick { position: absolute; top: 0; transform: translateX(-50%); }
+  .strip-C .ticks .tick::before {
+    content: ''; display: block; width: 1px; height: 4px;
+    background: rgba(255,255,255,0.2); margin: 0 auto 2px;
+  }
+
+  /* WLED devices panel mock (right column) */
+  .dev-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .dev-row .ip { font-family: var(--mono); color: rgba(255,255,255,0.45); font-size: 11px; }
+  .dev-row.online .dot { background: #4ade80; box-shadow: 0 0 0 2px rgba(74,222,128,0.2); }
+  .dev-row .dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.3); margin-right: 8px; }
+
+  .selected-info {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: rgba(232,160,0,0.06);
+    border: 1px solid rgba(232,160,0,0.18);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .selected-info .sw { width: 10px; height: 10px; border-radius: 2px; }
+
+  details.callouts {
+    margin-top: 24px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.02);
+    border: 1px dashed var(--glass-border);
+    border-radius: 6px;
+    font-size: 11px;
+  }
+  details.callouts summary {
+    cursor: pointer;
+    color: var(--text-h);
+    font-weight: 500;
+  }
+  details.callouts ul { margin: 8px 0 0; padding-left: 18px; }
+  details.callouts li { margin-bottom: 4px; color: rgba(255,255,255,0.6); }
+</style>
+</head>
+<body>
+
+<!-- Sketch toolbar -->
+<div class="sketch-toolbar">
+  <span class="badge">Sketch 001</span>
+  <span class="badge badge-accent">Strip Canvas</span>
+</div>
+
+<!-- Variant tabs -->
+<div class="variant-tabs">
+  <button class="variant-tab active" data-tab="A">Variant A · Thin Timeline<span class="star">★</span></button>
+  <button class="variant-tab" data-tab="B">Variant B · Tall Pill</button>
+  <button class="variant-tab" data-tab="C">Variant C · Stacked Rail</button>
+</div>
+
+<!-- ============ VARIANT A ============ -->
+<div class="variant-panel active" data-panel="A">
+  <div class="stage">
+    <h1>A · Thin Timeline (40px, video-editor cadence)</h1>
+    <p class="lede">Strip behaves like a timeline track. Zone labels inline when wide; tiny zones go label-less and rely on the sidebar. Boundary handle floats above the rail in the gap.</p>
+
+    <p class="variant-label"><strong>Real-world fixture:</strong> 2 devices (300 + 60 LEDs), 5 channels total.</p>
+
+    <div class="settings-split">
+      <div class="canvas-slot">
+        <div class="canvas-title">
+          <h2>Paint canvas</h2>
+          <span class="hint">click + drag on empty space to paint · drag boundary to resize · click zone to edit</span>
+        </div>
+
+        <!-- Device 1: TV strip (300 LEDs) -->
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">TV Back Strip</span>
+            <span class="device-meta">192.168.1.42 · 300 LEDs · 3 channels</span>
+          </div>
+          <div class="strip-A">
+            <div class="zone selected" style="left:0%; width:23%; background:#e8a000;">Channel 1</div>
+            <div class="zone"          style="left:23%; width:40%; background:#7ab8ff;">Channel 2</div>
+            <div class="zone narrow"   style="left:63%; width:6%;  background:#c47bff;"></div>
+            <div class="zone"          style="left:69%; width:31%; background:#84e07a;">Strip</div>
+            <div class="handle" style="left:23%;"></div>
+            <div class="handle" style="left:63%;"></div>
+            <div class="handle" style="left:69%;"></div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:16.6%;">50</span>
+            <span class="tick" style="left:33.3%;">100</span>
+            <span class="tick" style="left:50%;">150</span>
+            <span class="tick" style="left:66.6%;">200</span>
+            <span class="tick" style="left:83.3%;">250</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <!-- Device 2: Lamp behind TV (60 LEDs) -->
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">Lamp Strip</span>
+            <span class="device-meta">192.168.1.51 · 60 LEDs · 2 channels</span>
+          </div>
+          <div class="strip-A">
+            <div class="zone" style="left:0%;  width:50%; background:#f5b731;">Top</div>
+            <div class="zone" style="left:50%; width:50%; background:#ff6b35;">Bottom</div>
+            <div class="handle" style="left:50%;"></div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:16.6%;">10</span>
+            <span class="tick" style="left:33.3%;">20</span>
+            <span class="tick" style="left:50%;">30</span>
+            <span class="tick" style="left:66.6%;">40</span>
+            <span class="tick" style="left:83.3%;">50</span>
+            <span class="tick" style="left:100%;">60</span>
+          </div>
+        </div>
+
+        <div class="selected-info">
+          <span class="sw" style="background:#e8a000;"></span>
+          Selected: <strong style="color:var(--text-h);">Channel 1</strong> · LEDs 0–69 on TV Back Strip
+          <span style="margin-left:auto; color:rgba(255,255,255,0.4);">Properties in sidebar →</span>
+        </div>
+      </div>
+
+      <!-- Devices column -->
+      <div class="devices-slot">
+        <h3 class="section-header">WLED Devices</h3>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">TV Back Strip</strong></div>
+          <span class="ip">192.168.1.42</span>
+        </div>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">Lamp Strip</strong></div>
+          <span class="ip">192.168.1.51</span>
+        </div>
+        <button class="btn" style="width:100%; margin-top:6px;">+ Add device</button>
+
+        <h3 class="section-header" style="margin-top:16px;">Selected channel</h3>
+        <div class="glass" style="padding:12px;">
+          <div style="font-size:12px; color:var(--text-h); margin-bottom:8px;">
+            <span style="display:inline-block; width:10px; height:10px; background:#e8a000; border-radius:2px; vertical-align:middle; margin-right:6px;"></span>
+            Channel 1
+          </div>
+          <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Name</label>
+          <input class="input" value="Channel 1" style="width:100%; margin-bottom:8px;" />
+          <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Start</label>
+              <input class="input mono" value="0" style="width:100%;" />
+            </div>
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">End</label>
+              <input class="input mono" value="69" style="width:100%;" />
+            </div>
+          </div>
+          <button class="btn btn-danger" style="width:100%;">Delete channel</button>
+        </div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>The 40px height makes ticks legible but pushes selection chrome onto outline rather than fill.</li>
+        <li>Narrow zones (like the 18-LED purple slice) disappear textually — discoverable only via selection.</li>
+        <li>The handle visual matches the GSD `<code>handle</code>` primitive — same drag affordance can be reused for boundary handles in any future timeline UI.</li>
+        <li>Sidebar carries all per-channel detail (name + LED range + delete). Strip stays clean.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<!-- ============ VARIANT B ============ -->
+<div class="variant-panel" data-panel="B">
+  <div class="stage">
+    <h1>B · Tall Pill (60px, name + range inline)</h1>
+    <p class="lede">Strip is a primary visual object, not a track. Each zone shows name + LED range inline when there's room. Less screen for the rest of the layout — more confident.</p>
+
+    <p class="variant-label"><strong>Same fixture as A:</strong> 2 devices (300 + 60 LEDs), 5 channels total.</p>
+
+    <div class="settings-split">
+      <div class="canvas-slot">
+        <div class="canvas-title">
+          <h2>Paint canvas</h2>
+          <span class="hint">click + drag · drag boundary · click zone</span>
+        </div>
+
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">TV Back Strip</span>
+            <span class="device-meta">192.168.1.42 · 300 LEDs · 3 channels</span>
+          </div>
+          <div class="strip-B">
+            <div class="zone selected" style="left:0%;  width:23%; background:#e8a000;">
+              <span class="nm">Channel 1</span><span class="rng">0–69</span>
+            </div>
+            <div class="zone" style="left:23%; width:40%; background:#7ab8ff;">
+              <span class="nm">Channel 2</span><span class="rng">70–189</span>
+            </div>
+            <div class="zone narrow" style="left:63%; width:6%; background:#c47bff;">
+              <span class="nm">Ch 3</span><span class="rng">190–207</span>
+            </div>
+            <div class="zone" style="left:69%; width:31%; background:#84e07a;">
+              <span class="nm">Strip</span><span class="rng">208–299</span>
+            </div>
+            <div class="handle" style="left:23%;"></div>
+            <div class="handle" style="left:63%;"></div>
+            <div class="handle" style="left:69%;"></div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:16.6%;">50</span>
+            <span class="tick" style="left:33.3%;">100</span>
+            <span class="tick" style="left:50%;">150</span>
+            <span class="tick" style="left:66.6%;">200</span>
+            <span class="tick" style="left:83.3%;">250</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">Lamp Strip</span>
+            <span class="device-meta">192.168.1.51 · 60 LEDs · 2 channels</span>
+          </div>
+          <div class="strip-B">
+            <div class="zone" style="left:0%;  width:50%; background:#f5b731;">
+              <span class="nm">Top</span><span class="rng">0–29</span>
+            </div>
+            <div class="zone" style="left:50%; width:50%; background:#ff6b35;">
+              <span class="nm">Bottom</span><span class="rng">30–59</span>
+            </div>
+            <div class="handle" style="left:50%;"></div>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:25%;">15</span>
+            <span class="tick" style="left:50%;">30</span>
+            <span class="tick" style="left:75%;">45</span>
+            <span class="tick" style="left:100%;">60</span>
+          </div>
+        </div>
+
+        <div class="selected-info">
+          <span class="sw" style="background:#e8a000;"></span>
+          Selected: <strong style="color:var(--text-h);">Channel 1</strong> · LEDs 0–69 on TV Back Strip
+        </div>
+      </div>
+
+      <div class="devices-slot">
+        <h3 class="section-header">WLED Devices</h3>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">TV Back Strip</strong></div>
+          <span class="ip">192.168.1.42</span>
+        </div>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">Lamp Strip</strong></div>
+          <span class="ip">192.168.1.51</span>
+        </div>
+        <button class="btn" style="width:100%; margin-top:6px;">+ Add device</button>
+
+        <h3 class="section-header" style="margin-top:16px;">Selected channel</h3>
+        <div class="glass" style="padding:12px;">
+          <div style="font-size:12px; color:var(--text-h); margin-bottom:8px;">
+            <span style="display:inline-block; width:10px; height:10px; background:#e8a000; border-radius:2px; vertical-align:middle; margin-right:6px;"></span>
+            Channel 1
+          </div>
+          <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Name</label>
+          <input class="input" value="Channel 1" style="width:100%; margin-bottom:8px;" />
+          <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Start</label>
+              <input class="input mono" value="0" style="width:100%;" />
+            </div>
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">End</label>
+              <input class="input mono" value="69" style="width:100%;" />
+            </div>
+          </div>
+          <button class="btn btn-danger" style="width:100%;">Delete channel</button>
+        </div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>Inline name + LED range is readable above ~80px wide; the narrow 6% zone clips to "Ch 3" and the range — still discoverable, no sidebar trip.</li>
+        <li>Strip feels primary; tradeoff is vertical real-estate. Two devices fit comfortably in the slot, four might force scrolling.</li>
+        <li>Boundary handles sit above the strip — easier to grab when the bar is tall.</li>
+        <li>Closest analog to existing project bar styling (rounded 8px, glass surface).</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<!-- ============ VARIANT C ============ -->
+<div class="variant-panel" data-panel="C">
+  <div class="stage">
+    <h1>C · Stacked Rail (zones float above a thin rail)</h1>
+    <p class="lede">Zones become little tiles floating above a continuous rail. Empty rail = unassigned LEDs visible at a glance. Boundary handle becomes a floating pill.</p>
+
+    <p class="variant-label"><strong>Same fixture:</strong> 2 devices, but here the second device has a deliberate gap to show unassigned span.</p>
+
+    <div class="settings-split">
+      <div class="canvas-slot">
+        <div class="canvas-title">
+          <h2>Paint canvas</h2>
+          <span class="hint">empty rail = unassigned · click + drag rail to paint</span>
+        </div>
+
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">TV Back Strip</span>
+            <span class="device-meta">192.168.1.42 · 300 LEDs · 3 channels</span>
+          </div>
+          <div class="strip-C">
+            <div class="rail"></div>
+            <div class="zone selected" style="left:0%;  width:23%; background:#e8a000;">
+              <span class="nm">Channel 1</span>
+            </div>
+            <div class="zone" style="left:23%; width:40%; background:#7ab8ff;">
+              <span class="nm">Channel 2</span>
+            </div>
+            <div class="zone narrow" style="left:63%; width:6%; background:#c47bff;"></div>
+            <div class="zone" style="left:69%; width:31%; background:#84e07a;">
+              <span class="nm">Strip</span>
+            </div>
+            <span class="boundary-pill" style="left:23%;"></span>
+            <span class="boundary-pill" style="left:63%;"></span>
+            <span class="boundary-pill" style="left:69%;"></span>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:16.6%;">50</span>
+            <span class="tick" style="left:33.3%;">100</span>
+            <span class="tick" style="left:50%;">150</span>
+            <span class="tick" style="left:66.6%;">200</span>
+            <span class="tick" style="left:83.3%;">250</span>
+            <span class="tick" style="left:100%;">300</span>
+          </div>
+        </div>
+
+        <div class="device-block">
+          <div class="device-head">
+            <span class="device-name">Lamp Strip</span>
+            <span class="device-meta">192.168.1.51 · 60 LEDs · 2 channels · 10 unassigned</span>
+          </div>
+          <div class="strip-C">
+            <div class="rail"></div>
+            <div class="zone" style="left:0%;   width:33.3%; background:#f5b731;"><span class="nm">Top</span></div>
+            <!-- gap from 33–50% = unassigned LEDs 20-29 -->
+            <div class="zone" style="left:50%;  width:50%; background:#ff6b35;"><span class="nm">Bottom</span></div>
+            <span class="boundary-pill" style="left:33.3%;"></span>
+            <span class="boundary-pill" style="left:50%;"></span>
+          </div>
+          <div class="ticks">
+            <span class="tick" style="left:0%;">0</span>
+            <span class="tick" style="left:25%;">15</span>
+            <span class="tick" style="left:50%;">30</span>
+            <span class="tick" style="left:75%;">45</span>
+            <span class="tick" style="left:100%;">60</span>
+          </div>
+        </div>
+
+        <div class="selected-info">
+          <span class="sw" style="background:#e8a000;"></span>
+          Selected: <strong style="color:var(--text-h);">Channel 1</strong> · LEDs 0–69 on TV Back Strip
+        </div>
+      </div>
+
+      <div class="devices-slot">
+        <h3 class="section-header">WLED Devices</h3>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">TV Back Strip</strong></div>
+          <span class="ip">192.168.1.42</span>
+        </div>
+        <div class="dev-row online">
+          <div style="display:flex; align-items:center;"><span class="dot"></span><strong style="color:var(--text-h);">Lamp Strip</strong></div>
+          <span class="ip">192.168.1.51</span>
+        </div>
+        <button class="btn" style="width:100%; margin-top:6px;">+ Add device</button>
+
+        <h3 class="section-header" style="margin-top:16px;">Selected channel</h3>
+        <div class="glass" style="padding:12px;">
+          <div style="font-size:12px; color:var(--text-h); margin-bottom:8px;">
+            <span style="display:inline-block; width:10px; height:10px; background:#e8a000; border-radius:2px; vertical-align:middle; margin-right:6px;"></span>
+            Channel 1
+          </div>
+          <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Name</label>
+          <input class="input" value="Channel 1" style="width:100%; margin-bottom:8px;" />
+          <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Start</label>
+              <input class="input mono" value="0" style="width:100%;" />
+            </div>
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">End</label>
+              <input class="input mono" value="69" style="width:100%;" />
+            </div>
+          </div>
+          <button class="btn btn-danger" style="width:100%;">Delete channel</button>
+        </div>
+      </div>
+    </div>
+
+    <details class="callouts">
+      <summary>What to look for</summary>
+      <ul>
+        <li>Unassigned LED span on the Lamp Strip is visible immediately — useful when CONTEXT.md says paint may leave gaps after deletion.</li>
+        <li>Floating boundary pill is friendly to grab but adds a small visual element to track per boundary.</li>
+        <li>Rail underneath the zones means zones can be slightly raised on hover, giving the paint UI a more "physical" feel.</li>
+        <li>Risk: zones-as-tiles starts to feel like grouped buttons rather than a continuous range — may obscure the per-LED nature.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<script>
+  // Tab switching
+  document.querySelectorAll('.variant-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.variant-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      document.querySelectorAll('.variant-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+    });
+  });
+  // Zone selection (toggle outline)
+  document.querySelectorAll('.zone').forEach(z => {
+    z.addEventListener('click', e => {
+      const panel = z.closest('.variant-panel');
+      panel.querySelectorAll('.zone.selected').forEach(s => s.classList.remove('selected'));
+      z.classList.add('selected');
+    });
+  });
+</script>
+</body>
+</html>

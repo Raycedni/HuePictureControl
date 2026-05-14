@@ -1,0 +1,241 @@
+/* HuePictureControl sketch theme — mirrors Frontend/src/index.css tokens
+   so sketches read 1:1 against the live app surface. */
+
+:root {
+  /* Brand surfaces */
+  --bg: #0c0c14;
+  --bg-elev: #11111c;
+  --text: #b0aab8;
+  --text-h: #f0eef2;
+  --border: rgba(255, 255, 255, 0.08);
+  --code-bg: #151520;
+
+  /* Accent */
+  --accent: #e8a000;
+  --accent-bg: rgba(232, 160, 0, 0.12);
+  --accent-border: rgba(232, 160, 0, 0.4);
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.04);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-hover: rgba(255, 255, 255, 0.08);
+  --glass-blur: 20px;
+
+  /* Hue palette (for non-zone accents) */
+  --hue-orange: #e8a000;
+  --hue-amber: #f5b731;
+  --hue-warm: #ff6b35;
+  --hue-purple: #a855f7;
+  --hue-blue: #3b82f6;
+
+  /* Type */
+  --sans: 'Geist Variable', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  /* Shadows */
+  --shadow-lg:
+    rgba(0, 0, 0, 0.5) 0 10px 30px -5px,
+    rgba(0, 0, 0, 0.3) 0 4px 10px -2px;
+}
+
+/* ---- Reset + base ---- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font: 15px/1.5 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
+
+/* ---- Section headers (matches Frontend pattern text-[11px] uppercase tracking-wider) ---- */
+.section-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 8px 0;
+}
+
+/* ---- Surfaces ---- */
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  backdrop-filter: blur(var(--glass-blur));
+}
+.glass-hover:hover { background: var(--glass-hover); }
+
+/* ---- Primitives ---- */
+.btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  background: var(--glass-bg);
+  color: var(--text-h);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.btn:hover { background: var(--glass-hover); border-color: rgba(255,255,255,0.16); }
+.btn-accent {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.btn-accent:hover { background: rgba(232,160,0,0.2); }
+.btn-danger { color: #f87171; border-color: rgba(248,113,113,0.3); }
+.btn-danger:hover { background: rgba(248,113,113,0.1); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+}
+.badge-accent {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.input {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  color: var(--text-h);
+  outline: none;
+}
+.input:focus { border-color: var(--accent-border); }
+
+.mono { font-family: var(--mono); }
+
+/* ---- Sketch chrome (toolbar + variant tabs) ---- */
+.sketch-toolbar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  gap: 6px;
+  background: rgba(20, 20, 35, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 6px;
+  font-size: 11px;
+}
+
+.variant-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: rgba(20, 20, 35, 0.6);
+  border-bottom: 1px solid var(--glass-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+}
+.variant-tab {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: all 120ms;
+}
+.variant-tab:hover { background: var(--glass-bg); color: var(--text-h); }
+.variant-tab.active {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.variant-tab .star { margin-left: 6px; color: var(--accent); }
+
+.variant-panel { display: none; padding: 24px; }
+.variant-panel.active { display: block; }
+
+.variant-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 16px;
+}
+.variant-label strong {
+  color: var(--text-h);
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+/* ---- App-like layout primitives reused in sketches ---- */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.app-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--glass-border);
+  background: rgba(15, 15, 25, 0.6);
+}
+.app-topbar .logo {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.app-topbar .tabs { display: flex; gap: 4px; margin-left: 12px; }
+.app-topbar .tab {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: var(--text);
+}
+.app-topbar .tab.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+/* Boundary handle shared visual (for strip canvas + popover demo) */
+.handle {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: calc(100% + 12px);
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.handle::before {
+  content: '';
+  width: 2px;
+  height: 70%;
+  background: rgba(255,255,255,0.45);
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+}
+.handle:hover::before { background: var(--accent); height: 90%; }
