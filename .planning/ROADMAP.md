@@ -113,7 +113,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 **Milestone Goal:** Expand the system beyond Hue to support WLED ESP32 LED strips via UDP realtime streaming, add Home Assistant control endpoints, and fix the entertainment zone persistence bug.
 
 - [x] **Phase 16: Zone Persistence Bug Fixes** (3/3 plans) — completed 2026-04-20 — Fix entertainment config selection persisting across reloads and dropdown reflecting actual streaming state
-- [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
+- [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
 
@@ -182,7 +182,20 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   3. Adjacent channel zones are visually separated by color and the boundary handle can be dragged to resize them
   4. Painted channel assignments persist across restarts; reopening the editor shows the same strip layout and region assignments
   5. Removing a painted channel unassigns it from any regions it was linked to and updates the canvas immediately
-**Plans**: TBD
+**Plans**: 13 plans
+  - [ ] 19-01-PLAN.md — Backend Wave 0: test_wled_channels stubs + phase19_e2e stub + color_math/database/router test extensions
+  - [ ] 19-02-PLAN.md — Frontend Wave 0: Vitest stubs for palette/paint-reducer/EditorCanvas/popover/segmented-control/strip-painter/LightPanel
+  - [ ] 19-03-PLAN.md — Backend Wave 1: idempotent ALTER TABLE for wled_light_assignments.orientation + wled_devices.next_channel_n
+  - [ ] 19-04-PLAN.md — Backend Wave 1: sub_sample_gradient orientation kwarg + Orientation Literal + 5-branch axis/direction logic
+  - [ ] 19-05-PLAN.md — Frontend Wave 1: channelColor helper (golden-angle HSL) + paintReducer/pixelToLed/clampBoundary pure helpers
+  - [ ] 19-06-PLAN.md — Backend Wave 2: services/wled_channels.py — overlap auto-split A-G + _next_channel_name + resize_boundary + delete cascade
+  - [ ] 19-07-PLAN.md — Frontend Wave 2: api/wled.ts extension with 9 typed functions (channel CRUD + boundary + assignment + region-orientation PATCH)
+  - [ ] 19-08-PLAN.md — Backend Wave 3: routers/wled.py 8 new endpoints (channel CRUD + boundary + assignments + PATCH /regions/{rid}/orientation)
+  - [ ] 19-09-PLAN.md — Backend Wave 4: streaming_coordinator _build_region_plan orientation column + _frame_loop kwarg propagation (per-region narrowing, no nested dict)
+  - [ ] 19-10-PLAN.md — Frontend Wave 5: WledStripPainter + WledChannelSidebar + SettingsPanel/Page mount (Konva strip + sidebar)
+  - [ ] 19-11-PLAN.md — Frontend Wave 5: LightPanel WLED section + counter chip + draggable channel rows with D-13 payload
+  - [ ] 19-12-PLAN.md — Frontend Wave 6: useRegionStore.wledAssignments + OrientationSegmentedControl + RegionOrientationPopover (Base UI virtual anchor) + EditorCanvas WLED drop branch
+  - [ ] 19-13-PLAN.md — Wave 7: Playwright config + e2e/wled-paint.spec.ts + persistence e2e + manual UAT checkpoint
 **UI hint**: yes
 
 ---
@@ -210,7 +223,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 16. Zone Persistence Bug Fixes | v1.3 | 0/TBD | Not started | - |
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
-| 19. WLED Strip Paint UI | v1.3 | 0/TBD | Not started | - |
+| 19. WLED Strip Paint UI | v1.3 | 0/13 | Not started | - |
 
 ---
 *Roadmap created: 2026-03-23*
