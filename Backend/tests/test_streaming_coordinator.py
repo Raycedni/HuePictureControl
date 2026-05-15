@@ -256,7 +256,8 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
         if "wled_devices WHERE enabled" in sql:
             # No WLED devices registered.
             return _empty_cursor()
-        if "FROM wled_channels" in sql:
+        # Phase 19.1 Plan 05: coordinator now reads from wled_seg_cache.
+        if "FROM wled_seg_cache" in sql:
             return _empty_cursor()
         if "FROM regions r" in sql:
             cur = MagicMock()
@@ -768,9 +769,12 @@ async def test_coordinator_fans_out_to_hue_and_wled(monkeypatch):
             cur.fetchall = AsyncMock(return_value=[
                 {"id": "d1", "ip": "127.0.0.1", "led_count": 10, "enabled": 1},
             ])
-        elif "FROM wled_channels" in sql:
+        elif "FROM wled_seg_cache" in sql:
+            # Phase 19.1 Plan 05: coordinator's channel-load SQL now selects
+            # (seg_index, region_id, start_led, stop_led) FROM wled_seg_cache
+            # LEFT JOIN wled_light_assignments. Both ends INCLUSIVE.
             cur.fetchall = AsyncMock(return_value=[
-                {"channel_id": "c1", "start_led": 0, "end_led": 9, "region_id": "r1"},
+                {"seg_index": 0, "region_id": "r1", "start_led": 0, "stop_led": 9},
             ])
         else:
             cur.fetchone = AsyncMock(return_value=None)

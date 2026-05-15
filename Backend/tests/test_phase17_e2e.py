@@ -1,7 +1,7 @@
-"""Phase 17 end-to-end integration test.
+"""Phase 17 end-to-end integration test (Phase 19.1 schema).
 
 Stitches together:
-  - in-memory SQLite with all Phase 17 tables (plus the Hue-pipeline
+  - in-memory SQLite with the Phase 19.1 tables (plus the Hue-pipeline
     placeholder tables _resolve_device_path queries against)
   - StreamingCoordinator (real) + WledStreamer (real, udp_port=41324)
     + HueStreamer (mocked) + make_mock_capture (deterministic frame)
@@ -25,6 +25,15 @@ Implementation notes vs. PLAN.md:
   - ``_resolve_device_path`` queries ``camera_assignments`` / ``known_cameras``;
     we create those tables empty so the resolver falls back to CAPTURE_DEVICE
     cleanly (rather than blowing up on missing-table OperationalError).
+
+Phase 19.1 schema migration (Plan 02 D-20, D-12, D-13 / Plan 05):
+  - The ``wled_channels`` table is GONE. Per-device segment ranges live in
+    ``wled_seg_cache`` (D-12), keyed by composite (device_id, seg_index).
+  - ``wled_light_assignments`` was rebuilt around the composite
+    (region_id, wled_device_id, seg_index, entertainment_config_id) key
+    (D-13). Per-region orientation is preserved.
+  - The cascade-delete assertion now checks ``wled_seg_cache`` instead of
+    ``wled_channels``.
 """
 import asyncio
 from contextlib import asynccontextmanager
@@ -73,22 +82,30 @@ async def _make_db_with_phase17_schema():
             name TEXT NOT NULL,
             led_count INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            next_channel_n INTEGER NOT NULL DEFAULT 1
         );
-        CREATE TABLE wled_channels (
-            id TEXT PRIMARY KEY,
+        -- Phase 19.1 D-12: wled_seg_cache mirrors /json/state seg[].
+        --   PRIMARY KEY (device_id, seg_index); stop_led INCLUSIVE.
+        CREATE TABLE wled_seg_cache (
             device_id TEXT NOT NULL,
-            name TEXT NOT NULL,
+            seg_index INTEGER NOT NULL,
             start_led INTEGER NOT NULL,
-            end_led INTEGER NOT NULL,
-            color TEXT NOT NULL DEFAULT '#ffffff'
+            stop_led INTEGER NOT NULL,
+            name TEXT,
+            refreshed_at TEXT NOT NULL,
+            PRIMARY KEY (device_id, seg_index)
         );
+        -- Phase 19.1 D-13: wled_light_assignments now keyed by
+        --   (region_id, wled_device_id, seg_index, entertainment_config_id).
+        --   The Phase 17 wled_channel_id surrogate is gone.
         CREATE TABLE wled_light_assignments (
             region_id TEXT NOT NULL,
-            wled_channel_id TEXT NOT NULL,
+            wled_device_id TEXT NOT NULL,
+            seg_index INTEGER NOT NULL,
             entertainment_config_id TEXT NOT NULL,
             orientation TEXT NOT NULL DEFAULT 'auto',
-            PRIMARY KEY (region_id, wled_channel_id, entertainment_config_id)
+            PRIMARY KEY (region_id, wled_device_id, seg_index, entertainment_config_id)
         );
         CREATE TABLE camera_assignments (
             entertainment_config_id TEXT PRIMARY KEY,
@@ -141,8 +158,9 @@ async def test_register_stream_observe_packets_delete():
         the same window.
       * Invariant 15: fps stays >=40 Hz (relaxed from 50 Hz floor for CI).
       * Cascade delete: DELETE /api/wled/devices/{id} clears wled_devices,
-        wled_channels, AND wled_light_assignments via the router's
-        T-17-DELETE-ORPHAN code path.
+        wled_seg_cache, AND wled_light_assignments via the router's
+        Phase 19.1 cascade code path (D-13 column rename — direct
+        ``wled_device_id`` match, no Phase 17 ``wled_channels`` subquery).
     """
     from services.streaming_coordinator import StreamingCoordinator
     from services.status_broadcaster import StatusBroadcaster
@@ -150,7 +168,10 @@ async def test_register_stream_observe_packets_delete():
 
     db = await _make_db_with_phase17_schema()
 
-    # 1) Seed: one region + WLED device + channel + assignment for cfg1.
+    # 1) Seed: one region + WLED device + cached segment + assignment for cfg1.
+    #    Phase 19.1: a segment lives in wled_seg_cache (D-12) and the
+    #    assignment references it by composite (wled_device_id, seg_index)
+    #    instead of a UUID surrogate.
     await db.execute(
         "INSERT INTO regions (id, name, polygon, entertainment_config_id) "
         "VALUES ('r1', 'test', ?, 'cfg1')",
@@ -161,12 +182,14 @@ async def test_register_stream_observe_packets_delete():
         "VALUES ('d1', '127.0.0.1', 'Test Strip', 10, 1, '2026-04-26T00:00:00+00:00')"
     )
     await db.execute(
-        "INSERT INTO wled_channels (id, device_id, name, start_led, end_led, color) "
-        "VALUES ('c1', 'd1', 'Strip', 0, 9, '#ffffff')"
+        "INSERT INTO wled_seg_cache "
+        "(device_id, seg_index, start_led, stop_led, name, refreshed_at) "
+        "VALUES ('d1', 0, 0, 9, 'Strip', '2026-04-26T00:00:00+00:00')"
     )
     await db.execute(
-        "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
-        "VALUES ('r1', 'c1', 'cfg1')"
+        "INSERT INTO wled_light_assignments "
+        "(region_id, wled_device_id, seg_index, entertainment_config_id) "
+        "VALUES ('r1', 'd1', 0, 'cfg1')"
     )
     await db.commit()
 
@@ -273,13 +296,13 @@ async def test_register_stream_observe_packets_delete():
             f"DELETE /api/wled/devices/d1 should return 204; got {r.status_code} {r.text}"
         )
 
-    # 7) Verify cascade landed across all three tables.
+    # 7) Verify cascade landed across all three Phase 19.1 tables.
     async with db.execute("SELECT COUNT(*) AS c FROM wled_devices") as cur:
         row = await cur.fetchone()
         assert row["c"] == 0, "wled_devices should be empty after cascade delete"
-    async with db.execute("SELECT COUNT(*) AS c FROM wled_channels") as cur:
+    async with db.execute("SELECT COUNT(*) AS c FROM wled_seg_cache") as cur:
         row = await cur.fetchone()
-        assert row["c"] == 0, "wled_channels should be empty after cascade delete"
+        assert row["c"] == 0, "wled_seg_cache should be empty after cascade delete"
     async with db.execute(
         "SELECT COUNT(*) AS c FROM wled_light_assignments"
     ) as cur:
@@ -308,9 +331,11 @@ async def test_enabled_false_device_receives_zero_packets():
 
     db = await _make_db_with_phase17_schema()
 
-    # Seed a region, a DISABLED device, and a channel + assignment for cfg1.
-    # Even with the assignment present, the SELECT enabled=1 filter must drop
-    # this device before it ever reaches the streamer.
+    # Seed a region, a DISABLED device, a cached segment, and an assignment
+    # for cfg1. Even with the assignment present, the SELECT enabled=1
+    # filter in _load_wled_device_rows must drop this device before it
+    # ever reaches the streamer (Phase 19.1 D-13 column rename does not
+    # change this filter — it is on wled_devices, not wled_light_assignments).
     await db.execute(
         "INSERT INTO regions (id, name, polygon, entertainment_config_id) "
         "VALUES ('r1', 'test', ?, 'cfg1')",
@@ -321,12 +346,14 @@ async def test_enabled_false_device_receives_zero_packets():
         "VALUES ('d1', '127.0.0.1', 'Disabled Strip', 10, 0, '2026-04-26T00:00:00+00:00')"
     )
     await db.execute(
-        "INSERT INTO wled_channels (id, device_id, name, start_led, end_led, color) "
-        "VALUES ('c1', 'd1', 'Strip', 0, 9, '#ffffff')"
+        "INSERT INTO wled_seg_cache "
+        "(device_id, seg_index, start_led, stop_led, name, refreshed_at) "
+        "VALUES ('d1', 0, 0, 9, 'Strip', '2026-04-26T00:00:00+00:00')"
     )
     await db.execute(
-        "INSERT INTO wled_light_assignments (region_id, wled_channel_id, entertainment_config_id) "
-        "VALUES ('r1', 'c1', 'cfg1')"
+        "INSERT INTO wled_light_assignments "
+        "(region_id, wled_device_id, seg_index, entertainment_config_id) "
+        "VALUES ('r1', 'd1', 0, 'cfg1')"
     )
     await db.commit()
 
