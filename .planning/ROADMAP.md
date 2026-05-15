@@ -220,8 +220,8 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   - [x] 19.1-05-PLAN.md — Wave 3: streaming_coordinator SQL rewrite (JOIN wled_seg_cache) + test_phase17_e2e + test_streaming_coordinator fixture updates
   - [x] 19.1-06-PLAN.md — Wave 3: Frontend api/wled.ts rewrite + wled-segment utility + useRegionStore type propagation
   - [x] 19.1-07-PLAN.md — Wave 4: WledStripPainter read-only conversion + Refresh button + stale badge + WledChannelSidebar read-only + SettingsPanel/Page sync
-  - [ ] 19.1-08-PLAN.md — Wave 4: LightPanel new drag payload + EditorCanvas handleDrop discriminator + RegionOrientationPopover composite-key lookups
-  - [ ] 19.1-09-PLAN.md — Wave 5: hard-delete wled_channels.py + tests + wled-paint-reducer + rewrite e2e as wled-segments.spec.ts
+  - [x] 19.1-08-PLAN.md — Wave 4: LightPanel new drag payload + EditorCanvas handleDrop discriminator + RegionOrientationPopover composite-key lookups
+  - [x] 19.1-09-PLAN.md — Wave 5: hard-delete wled_channels.py + tests + wled-paint-reducer + rewrite e2e as wled-segments.spec.ts
   - [ ] 19.1-10-PLAN.md — Wave 6: automation gate (Skill test/health/verify-ui) + manual UAT V1/V2/V3'/V4 checkpoint
 **UI hint**: yes
 
@@ -251,7 +251,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/13 | Not started | - |
-| 19.1. WLED Segment Sync | v1.3 | 7/10 | In progress | - |
+| 19.1. WLED Segment Sync | v1.3 | 9/10 | In progress | - |
 
 ---
 *Roadmap created: 2026-03-23*
