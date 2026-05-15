@@ -39,3 +39,29 @@ test_phase19_e2e.py once Plan 05 deletes it"). Plan 04 will either fix the seedi
 or rewrite the test against the new refresh endpoint. Out of scope for Plan 03 per scope
 boundary rule (only auto-fix issues DIRECTLY caused by current task's changes; this is a
 pre-existing test fixture bug).
+
+**Resolved in Plan 04 (2026-05-15):** Task 2 rewired `test_phase19_1_e2e.py` to (a) include
+`created_at` in the `INSERT INTO wled_devices` seed and (b) replace the invented
+`'left-to-right'` orientation with a valid `WledOrientation` literal (`'horizontal-LTR'`). The
+refresh-smoke variant now boots a real FastAPI lifespan + `init_db` round-trip + httpx mock and
+asserts the cache is written end-to-end. Both e2e tests pass.
+
+### Plan 04 (2026-05-15)
+
+**2 pre-existing `test_phase19_e2e.py` failures + 1 `test_phase17_e2e.py` failure** remain
+RED on master. Root cause is the Phase 19.1 schema drop of `wled_channels` (Plan 02 D-20);
+these legacy e2e files still reference the dropped table. Per Plan 02 summary's "Downstream
+Tests Remaining RED" map and `19.1-PATTERNS.md` D-23 mapping, the entire `test_phase19_e2e.py`
+file is **replaced by** `test_phase19_1_e2e.py` (which now passes after Plan 04). The Phase 17
+e2e failure is the same root cause for the same Phase 17 file.
+
+Owner: **Plan 05** (streaming coordinator rewrite — re-grounds the Phase 17/19 streaming path
+on `wled_seg_cache` instead of `wled_channels`) or **Plan 08** (whichever lands the deletion
+of these legacy e2e files first). Out of scope for Plan 04 because (a) Plan 04 owns the
+router surface and its own tests, not the streaming-coordinator path, and (b) the failure is
+caused by the Plan 02 schema drop, not by anything Plan 04 changed.
+
+Failing tests:
+- `tests/test_phase19_e2e.py::test_persistence`
+- `tests/test_phase19_e2e.py::test_paint_assign_stream_smoke`
+- `tests/test_phase17_e2e.py::test_register_stream_observe_packets_delete`
