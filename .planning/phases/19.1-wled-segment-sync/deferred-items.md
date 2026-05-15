@@ -65,3 +65,15 @@ Failing tests:
 - `tests/test_phase19_e2e.py::test_persistence`
 - `tests/test_phase19_e2e.py::test_paint_assign_stream_smoke`
 - `tests/test_phase17_e2e.py::test_register_stream_observe_packets_delete`
+
+**Resolved in Plan 05 (2026-05-15):**
+`tests/test_phase17_e2e.py::test_register_stream_observe_packets_delete` is now GREEN.
+Plan 05 Task 2 rewrote both the file's inline schema and the per-test seeds to use
+Phase 19.1 tables (`wled_seg_cache` D-12 + composite-key `wled_light_assignments`
+D-13). The cascade-delete assertion was retargeted from `wled_channels` to
+`wled_seg_cache`. The second test (`test_enabled_false_device_receives_zero_packets`)
+got the same fixture migration and remains GREEN.
+
+The 2 `test_phase19_e2e.py` failures stay deferred — Plan 08 owns the file deletion
+per D-23 mapping; `test_phase19_1_e2e.py` (already green from Plan 04) is its
+designated replacement.

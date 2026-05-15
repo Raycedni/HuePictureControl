@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 19.1-04-PLAN.md
-last_updated: "2026-05-15T18:24:21.214Z"
+stopped_at: Completed 19.1-05-PLAN.md
+last_updated: "2026-05-15T18:59:57.385Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 52
-  completed_plans: 46
-  percent: 88
+  completed_plans: 47
+  percent: 90
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 19.1 (wled-segment-sync) — EXECUTING
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
 Last activity: 2026-05-15
 
@@ -55,6 +55,7 @@ Last activity: 2026-05-15
 | Phase 19.1 P02 | 24min | 2 tasks | 4 files |
 | Phase 19.1 P03 | 12min | 1 tasks | 1 files |
 | Phase 19.1 P04 | 20min | 2 tasks | 3 files |
+| Phase 19.1 P05 | 31min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,9 @@ Recent decisions affecting current work:
 - [19.1-04] Two-fetch atomic registration before any DB write: /json/info + /json/state in one try-block ensures /json/state failure leaves zero wled_devices rows (D-02); proven by test_register_device_rolls_back_on_state_failure
 - [19.1-04] reconcile_segments runs AFTER device-row commit (not inside same transaction) — reconcile owns its own commit; on brand-new device the cache is empty so it is just an INSERT batch; reconcile-failure post-commit yields empty cache, which D-04 frontend handles as stale-badge offline
 - [19.1-04] PATCH /regions/{id}/orientation keeps Phase 19 query-param 'config' shape (not body) for binary-compat with the existing frontend until Plan 06+ rewrites it; SQL filter (region_id, entertainment_config_id) unchanged across the D-13 rename
+- [19.1-05] id = str(seg_index) emitted at coordinator boundary — preserves WledStreamer.start channel-dict contract with zero edits to wled_streamer.py
+- [19.1-05] Static-source assertion test via inspect.getsource(module) pins the SQL structural invariant (no wled_channels, must JOIN wled_seg_cache) regardless of future formatting changes
+- [19.1-05] SQL-routing test mocks updated from FROM wled_channels to FROM wled_seg_cache rather than deleted — prevents silent always-pass tests under the new code path
 
 ### Pending Todos
 
@@ -103,8 +107,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-15T18:24:21.209Z
-Stopped at: Completed 19.1-04-PLAN.md
+Last session: 2026-05-15T18:59:49.003Z
+Stopped at: Completed 19.1-05-PLAN.md
 Resume file: None
 
 **Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z
