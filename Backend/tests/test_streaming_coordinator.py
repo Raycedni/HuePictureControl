@@ -626,6 +626,116 @@ async def test_capture_reconnect_does_not_touch_registry():
 
 
 # ---------------------------------------------------------------------------
+# Phase 19.1 Plan 05: wled_seg_cache JOIN rewrite (D-22)
+# ---------------------------------------------------------------------------
+
+
+def test_streaming_coordinator_sql_joins_wled_seg_cache_not_wled_channels():
+    """Phase 19.1 D-22: coordinator must JOIN wled_seg_cache, not wled_channels.
+
+    Static-content check on the production module — the SQL string for
+    ``_build_region_plan`` must reference ``wled_seg_cache wsc`` and use
+    ``wsc.stop_led - wsc.start_led + 1`` for N_region, and the SQL for
+    ``_load_wled_device_rows`` must join ``wled_seg_cache`` on the
+    ``(wled_device_id, seg_index)`` composite key. NO reference to the
+    dropped ``wled_channels`` table or ``wled_channel_id`` column may
+    survive.
+    """
+    import inspect
+
+    from services import streaming_coordinator as sc_mod
+
+    src = inspect.getsource(sc_mod)
+    assert "wled_channels" not in src, (
+        "Coordinator must not reference dropped wled_channels table (Plan 02 D-20)"
+    )
+    assert "wled_channel_id" not in src, (
+        "Coordinator must not reference dropped wled_channel_id column (Plan 02 D-13)"
+    )
+    assert "wled_seg_cache" in src, (
+        "Coordinator must JOIN wled_seg_cache for segment ranges (D-22)"
+    )
+    assert "wsc.stop_led - wsc.start_led + 1" in src, (
+        "N_region must come from wsc.stop_led - wsc.start_led + 1 (inclusive ranges)"
+    )
+    assert "wsc.device_id = wla.wled_device_id" in src, (
+        "JOIN key must be wsc.device_id = wla.wled_device_id (D-13)"
+    )
+    assert "wsc.seg_index = wla.seg_index" in src, (
+        "JOIN key must include wsc.seg_index = wla.seg_index (D-13)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_wled_device_rows_emits_str_seg_index_as_id():
+    """Per RESEARCH.md Open Question #1: emit ``id = str(seg_index)``.
+
+    WledStreamer.start expects each channel dict to carry an ``id`` field
+    (used to key per-device state). Phase 19.1 has no UUID anymore — the
+    coordinator stringifies ``seg_index`` to keep the WledStreamer
+    contract stable with the minimum diff.
+    """
+    from services.streaming_coordinator import StreamingCoordinator
+
+    # DB mock: one enabled WLED device + one cached segment for it.
+    db = MagicMock()
+
+    async def _exec(*args, **kwargs):
+        sql = args[0] if args else ""
+        cur = MagicMock()
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+        if "wled_devices WHERE enabled" in sql:
+            dev_row = MagicMock()
+            dev_row.__getitem__ = MagicMock(side_effect=lambda k: {
+                "id": "dev-A",
+                "ip": "192.168.1.50",
+                "led_count": 100,
+                "enabled": 1,
+            }[k])
+            cur.fetchall = AsyncMock(return_value=[dev_row])
+        elif "FROM wled_seg_cache" in sql:
+            seg_row = MagicMock()
+            seg_row.__getitem__ = MagicMock(side_effect=lambda k: {
+                "seg_index": 0,
+                "region_id": "region-X",
+                "start_led": 0,
+                "stop_led": 49,  # INCLUSIVE — N_region = 50
+            }[k])
+            cur.fetchall = AsyncMock(return_value=[seg_row])
+        else:
+            cur.fetchone = AsyncMock(return_value=None)
+            cur.fetchall = AsyncMock(return_value=[])
+        return cur
+
+    db.execute = _exec
+
+    broadcaster = StatusBroadcaster()
+    coord = StreamingCoordinator(
+        db=db,
+        capture_registry=None,
+        broadcaster=broadcaster,
+        hue_streamer=_make_mock_hue(),
+    )
+
+    rows = await coord._load_wled_device_rows("cfg-segload")
+    assert len(rows) == 1
+    dev = rows[0]
+    assert dev["id"] == "dev-A"
+    assert dev["led_count"] == 100
+    assert dev["enabled"] is True
+    assert dev["channels"], "device must carry channel rows for the assigned segment"
+    ch = dev["channels"][0]
+    # The id is the stringified seg_index per RESEARCH.md Open Question #1.
+    assert ch["id"] == "0", f"channel id must be str(seg_index); got {ch['id']!r}"
+    assert ch["region_id"] == "region-X"
+    assert ch["start_led"] == 0
+    # WledStreamer treats end_led as INCLUSIVE; wsc.stop_led is also INCLUSIVE
+    # so no conversion is needed at this boundary.
+    assert ch["end_led"] == 49
+
+
+# ---------------------------------------------------------------------------
 # Wave 3 fan-out integration test (Plan 06)
 # ---------------------------------------------------------------------------
 
