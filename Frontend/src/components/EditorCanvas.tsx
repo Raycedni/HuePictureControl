@@ -10,9 +10,9 @@ import {
   upsertWledAssignment,
   listWledAssignments,
   getWledDevices,
-  listWledChannels,
+  listSegments,
   type WledAssignment,
-  type WledChannel,
+  type WledSegment,
 } from '@/api/wled'
 import { RegionOrientationPopover } from './Editor/RegionOrientationPopover'
 
@@ -70,15 +70,16 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
   const updateRegionInStore = useRegionStore((s) => s.updateRegion)
 
   const setWledAssignments = useRegionStore((s) => s.setWledAssignments)
-  const [channelsByDevice, setChannelsByDevice] = useState<Record<string, WledChannel[]>>({})
+  const [segsByDevice, setSegsByDevice] = useState<Record<string, WledSegment[]>>({})
 
-  // Phase 19: hydrate useRegionStore.wledAssignments + channelsByDevice on
-  // mount + when config changes. channelsByDevice powers the per-device
-  // channel_index lookup that the popover uses for chip colors (UI-SPEC §Color line 95).
+  // Phase 19.1: hydrate useRegionStore.wledAssignments + segsByDevice on
+  // mount + when config changes. segsByDevice powers the popover's segment
+  // metadata lookup (chip name + chip color). Per D-09 the chip color comes
+  // from seg.seg_index directly — no per-device sort-position resolver needed.
   useEffect(() => {
     if (!selectedConfigId) {
       setWledAssignments({})
-      setChannelsByDevice({})
+      setSegsByDevice({})
       return
     }
     let alive = true
@@ -97,22 +98,22 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
         }
         setWledAssignments(byRegion)
 
-        // Fetch each device's channel list in parallel.
-        const channelsEntries = await Promise.all(
+        // Fetch each device's seg cache in parallel (D-18, pure cache read).
+        const segEntries = await Promise.all(
           devicesResp.devices.map(async (d) => {
             try {
-              const resp = await listWledChannels(d.id)
-              return [d.id, resp.channels] as const
+              const resp = await listSegments(d.id)
+              return [d.id, resp.segments] as const
             } catch (err) {
-              console.error(`Failed to load channels for device ${d.id}:`, err)
-              return [d.id, [] as WledChannel[]] as const
+              console.error(`Failed to load segments for device ${d.id}:`, err)
+              return [d.id, [] as WledSegment[]] as const
             }
           }),
         )
         if (!alive) return
-        setChannelsByDevice(Object.fromEntries(channelsEntries))
+        setSegsByDevice(Object.fromEntries(segEntries))
       } catch (err) {
-        console.error('Failed to load WLED assignments / channels:', err)
+        console.error('Failed to load WLED assignments / segments:', err)
       }
     })()
     return () => {
@@ -253,14 +254,21 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
 
-    // Phase 19 D-13 / UI-SPEC §Drag-Drop Payload Contract: WLED branch first.
-    // wledChannelId is the unambiguous discriminator. Explicit return below
-    // prevents the Hue branch from running for WLED drops.
-    const wledChannelId = e.dataTransfer.getData('wledChannelId')
-    if (wledChannelId) {
+    // Phase 19.1 D-13: wledDeviceId is the new discriminator; seg_index is
+    // positional. Both must be present (alongside entertainment_config_id) or
+    // the drop is rejected. Explicit return below prevents the Hue branch
+    // from running for WLED drops.
+    const wledDeviceId = e.dataTransfer.getData('wledDeviceId')
+    if (wledDeviceId) {
+      const segIndexStr = e.dataTransfer.getData('seg_index')
       const entertainmentConfigId = e.dataTransfer.getData('entertainment_config_id')
-      if (!entertainmentConfigId) {
-        console.error('WLED drop missing entertainment_config_id')
+      if (!segIndexStr || !entertainmentConfigId) {
+        console.error('WLED drop missing seg_index or entertainment_config_id')
+        return
+      }
+      const segIndex = Number(segIndexStr)
+      if (!Number.isFinite(segIndex)) {
+        console.error('WLED drop seg_index is not a number:', segIndexStr)
         return
       }
       const stage = stageRef.current
@@ -277,7 +285,8 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
       try {
         await upsertWledAssignment({
           region_id: hit.id,
-          wled_channel_id: wledChannelId,
+          wled_device_id: wledDeviceId,
+          seg_index: segIndex,
           entertainment_config_id: entertainmentConfigId,
         })
         // Refresh assignments + surface the popover for the dropped-on region.
@@ -290,7 +299,7 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
         useRegionStore.getState().setWledAssignments(byRegion)
         useRegionStore.getState().setSelectedId(hit.id)
       } catch (err) {
-        console.error('Failed to assign WLED channel to region:', err)
+        console.error('Failed to assign WLED segment to region:', err)
       }
       return  // CRITICAL: prevent fall-through to the Hue branch.
     }
@@ -420,7 +429,7 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
           canvasHeight={height}
           canvasContainerEl={canvasContainerRef.current}
           selectedConfigId={selectedConfigId}
-          channelsByDevice={channelsByDevice}
+          segsByDevice={segsByDevice}
         />
       )}
     </div>
