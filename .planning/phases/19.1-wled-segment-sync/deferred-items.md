@@ -77,3 +77,21 @@ got the same fixture migration and remains GREEN.
 The 2 `test_phase19_e2e.py` failures stay deferred — Plan 08 owns the file deletion
 per D-23 mapping; `test_phase19_1_e2e.py` (already green from Plan 04) is its
 designated replacement.
+
+### Plan 06 (2026-05-15)
+
+**2 pre-existing failures in `Frontend/src/components/Settings/WledStripPainter.test.tsx`**
+— confirmed pre-existing on the post-Plan-05 baseline via `git stash + npx vitest run`.
+Both tests do `vi.spyOn(wledApi, 'listWledChannels').mockResolvedValue(...)`; this property
+no longer exists on the wled api module (Plan 02 dropped `wled_channels`; Plan 05 / Plan 06
+removed the matching client function — channel CRUD is gone per CONTEXT.md D-10). The
+WledStripPainter component itself and its test file are explicitly Wave 4 surface per
+`19.1-CONTEXT.md` and `19.1-PATTERNS.md`. Out of scope for Plan 06 (api/store/utils plumbing).
+
+Owner: **Plan 07 / Plan 08** — whichever Wave 4 plan rewrites WledStripPainter into the
+read-only segment visualizer per D-06. The test file will be rewritten alongside the
+component.
+
+Failing tests:
+- `src/components/Settings/WledStripPainter.test.tsx > WledStripPainter > List rendering: ...`
+- `src/components/Settings/WledStripPainter.test.tsx > WledStripPainter > Strip seed channel: ...`
