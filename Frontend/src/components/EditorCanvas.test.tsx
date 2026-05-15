@@ -36,24 +36,25 @@ vi.mock('react-konva', () => ({
 }))
 
 // -----------------------------------------------------------------------
-// Mock @/api/wled
+// Mock @/api/wled (Phase 19.1: composite-key shape per D-13)
 // -----------------------------------------------------------------------
 const mockUpsertWledAssignment = vi.fn().mockResolvedValue({
   region_id: 'region-1',
-  wled_channel_id: 'chan-1',
+  wled_device_id: 'dev-1',
+  seg_index: 0,
   entertainment_config_id: 'cfg-1',
   orientation: 'auto',
 })
 const mockListWledAssignments = vi.fn().mockResolvedValue({ assignments: [] })
 const mockGetWledDevices = vi.fn().mockResolvedValue({ devices: [] })
-const mockListWledChannels = vi.fn().mockResolvedValue({ channels: [] })
+const mockListSegments = vi.fn().mockResolvedValue({ segments: [] })
 const mockPatchRegionOrientation = vi.fn().mockResolvedValue({ updated: 1 })
 
 vi.mock('@/api/wled', () => ({
   upsertWledAssignment: (...args: unknown[]) => mockUpsertWledAssignment(...args),
   listWledAssignments: (...args: unknown[]) => mockListWledAssignments(...args),
   getWledDevices: (...args: unknown[]) => mockGetWledDevices(...args),
-  listWledChannels: (...args: unknown[]) => mockListWledChannels(...args),
+  listSegments: (...args: unknown[]) => mockListSegments(...args),
   patchRegionOrientation: (...args: unknown[]) => mockPatchRegionOrientation(...args),
 }))
 
@@ -115,7 +116,7 @@ function seedRegion() {
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
-describe('EditorCanvas.handleDrop — WLED branch', () => {
+describe('EditorCanvas.handleDrop — WLED branch (Phase 19.1 composite key)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset store between tests
@@ -125,14 +126,15 @@ describe('EditorCanvas.handleDrop — WLED branch', () => {
     mockStage.getPointerPosition.mockReturnValue({ x: 50, y: 50 })
   })
 
-  it('WLED drop: when wledChannelId is present, calls upsertWledAssignment and returns', async () => {
+  it('WLED drop: discriminates on wledDeviceId presence; POSTs composite-key body per D-13', async () => {
     seedRegion()
     const { container } = render(
       <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
     )
     const dropTarget = container.firstChild as HTMLElement
     const evt = makeDropEvent({
-      wledChannelId: 'chan-1',
+      wledDeviceId: 'dev-1',
+      seg_index: '0',
       entertainment_config_id: 'cfg-1',
     })
 
@@ -145,14 +147,15 @@ describe('EditorCanvas.handleDrop — WLED branch', () => {
     expect(mockUpsertWledAssignment).toHaveBeenCalledOnce()
     expect(mockUpsertWledAssignment).toHaveBeenCalledWith({
       region_id: 'region-1',
-      wled_channel_id: 'chan-1',
+      wled_device_id: 'dev-1',
+      seg_index: 0,
       entertainment_config_id: 'cfg-1',
     })
     // Hue branch must NOT have been called
     expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
   })
 
-  it('Hue drop preserved: payload without wledChannelId still calls updateRegionAPI', async () => {
+  it('Hue drop preserved: payload without wledDeviceId still calls updateRegionAPI', async () => {
     seedRegion()
     const { container } = render(
       <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
@@ -174,14 +177,15 @@ describe('EditorCanvas.handleDrop — WLED branch', () => {
     expect(mockUpdateRegionAPI).toHaveBeenCalledOnce()
   })
 
-  it('WLED branch returns: payload with BOTH wledChannelId and lightId only calls WLED handler', async () => {
+  it('WLED branch returns: payload with BOTH wledDeviceId and lightId only calls WLED handler', async () => {
     seedRegion()
     const { container } = render(
       <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
     )
     const dropTarget = container.firstChild as HTMLElement
     const evt = makeDropEvent({
-      wledChannelId: 'chan-1',
+      wledDeviceId: 'dev-1',
+      seg_index: '0',
       entertainment_config_id: 'cfg-1',
       lightId: 'light-42',
       channelId: '3',
@@ -194,6 +198,48 @@ describe('EditorCanvas.handleDrop — WLED branch', () => {
 
     // WLED path runs; Hue path is guarded by the explicit return
     expect(mockUpsertWledAssignment).toHaveBeenCalledOnce()
+    expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
+  })
+
+  it('WLED drop: missing seg_index aborts without POST', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({
+      wledDeviceId: 'dev-1',
+      // seg_index intentionally missing
+      entertainment_config_id: 'cfg-1',
+    })
+
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(mockUpsertWledAssignment).not.toHaveBeenCalled()
+    expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
+  })
+
+  it('WLED drop: missing entertainment_config_id aborts without POST', async () => {
+    seedRegion()
+    const { container } = render(
+      <EditorCanvas width={100} height={100} selectedConfigId="cfg-1" />,
+    )
+    const dropTarget = container.firstChild as HTMLElement
+    const evt = makeDropEvent({
+      wledDeviceId: 'dev-1',
+      seg_index: '0',
+      // entertainment_config_id intentionally missing
+    })
+
+    await act(async () => {
+      fireEvent.drop(dropTarget, evt)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(mockUpsertWledAssignment).not.toHaveBeenCalled()
     expect(mockUpdateRegionAPI).not.toHaveBeenCalled()
   })
 
