@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 19.1-06-PLAN.md
-last_updated: "2026-05-15T19:10:01.048Z"
+stopped_at: Completed 19.1-07-PLAN.md
+last_updated: "2026-05-15T19:23:48.488Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 52
-  completed_plans: 48
-  percent: 92
+  completed_plans: 49
+  percent: 94
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 19.1 (wled-segment-sync) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
 Last activity: 2026-05-15
 
@@ -57,6 +57,7 @@ Last activity: 2026-05-15
 | Phase 19.1 P04 | 20min | 2 tasks | 3 files |
 | Phase 19.1 P05 | 31min | 2 tasks | 4 files |
 | Phase Phase 19.1 PP06 | 6min | 3 tasks | 5 files |
+| Phase 19.1 P07 | 8min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,11 @@ Recent decisions affecting current work:
 - [19.1-06] api/wled.ts rewritten end-to-end: channel-CRUD client fns removed (D-10), refreshSegments + listSegments added (D-17/D-18), upsertWledAssignment + deleteWledAssignment bodies reshaped to D-13 composite key; WledApiError + WledOrientation + device CRUD preserved byte-for-byte
 - [19.1-06] patchRegionOrientation signature preserved verbatim from Phase 19 (?config= query param + {orientation} body) rather than rewritten to the plan's reference body shape — keeps binary-compat with Plan 04's backend deviation
 - [19.1-06] useRegionStore.ts required zero body changes — WledAssignment reshape inside api/wled.ts propagates through 'import type' transparently; all 8 store tests still pass without edits
+- [19.1-07] WledStripPainter rewritten as a read-only segment visualizer; paint reducer + Stage pointer handlers + BoundaryHandle subcomponent + createWledChannel/resizeWledChannelBoundary calls all removed per D-06; ledToPixel inlined to drop the wled-paint-reducer dependency Plan 09 will delete
+- [19.1-07] Per-device Refresh button + stale-badge added to the strip per D-03/D-04; refreshing/refreshError state lives in WledStripPainter (records keyed by device_id) so DeviceStrip stays a pure renderer
+- [19.1-07] ZoneTestSentinel hidden-span pattern: Konva renders zones to a single canvas, hiding them from testing-library, so each Group mounts a zero-pixel <span data-testid> peer that becomes a discoverable DOM node in JSDOM-mocked tests where react-konva is stubbed to a fragment pass-through
+- [19.1-07] WledChannelSidebar rewritten as a read-only metadata <dl> panel per D-07; all <input> fields, name/start/end draft state, saveField+blur callbacks, and Delete button removed; optional Clear-selection button kept (UI-only, doesn't mutate data)
+- [19.1-07] SettingsPanel + SettingsPage rewired in the same diff per RESEARCH.md Pitfall 6; lifted state reshape (selectedChannelId, selectedDeviceId) -> selectedSeg:{device_id, seg_index}|null; refreshTrigger counter + onChange callback dropped (no mutation flows through these containers anymore)
 
 ### Pending Todos
 
@@ -112,8 +118,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-15T19:10:01.042Z
-Stopped at: Completed 19.1-06-PLAN.md
+Last session: 2026-05-15T19:23:48.483Z
+Stopped at: Completed 19.1-07-PLAN.md
 Resume file: None
 
 **Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z
