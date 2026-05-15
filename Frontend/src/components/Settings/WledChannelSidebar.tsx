@@ -1,224 +1,153 @@
+// Phase 19.1 Plan 07: WledChannelSidebar is now a READ-ONLY metadata panel.
+//
+// Phase 19 had editable name/start/end input fields plus a Delete button —
+// all removed per D-07. The sidebar now resolves the selected segment from
+// the cached `listSegments(deviceId)` response and displays its metadata
+// (name via segmentName(seg), seg_index, range, length) in a read-only DL.
+// Selection is owned by the parent (SettingsPanel / SettingsPage) via the
+// `selectedSeg: {device_id, seg_index} | null` prop.
+
 import { useEffect, useState } from 'react'
-import {
-  listWledChannels,
-  updateWledChannel,
-  deleteWledChannel,
-  type WledChannel,
-  WledApiError,
-} from '@/api/wled'
+import { listSegments, WledApiError } from '@/api/wled'
+import type { WledSegment } from '@/utils/wled-segment'
+import { segmentName } from '@/utils/wled-segment'
 
 interface Props {
-  selectedChannelId: string | null
-  selectedDeviceId: string | null
-  onChange: () => Promise<void> | void
-  onClear: () => void
+  selectedSeg: { device_id: string; seg_index: number } | null
+  onClear?: () => void
 }
 
-export function WledChannelSidebar({
-  selectedChannelId,
-  selectedDeviceId,
-  onChange,
-  onClear,
-}: Props) {
-  const [channel, setChannel] = useState<WledChannel | null>(null)
-  const [nameDraft, setNameDraft] = useState('')
-  const [startDraft, setStartDraft] = useState('')
-  const [endDraft, setEndDraft] = useState('')
+export function WledChannelSidebar({ selectedSeg, onClear }: Props) {
+  const [seg, setSeg] = useState<WledSegment | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    if (!selectedChannelId || !selectedDeviceId) {
-      setChannel(null)
+    if (!selectedSeg) {
+      setSeg(null)
       setError(null)
+      setLoading(false)
       return
     }
     let alive = true
     setError(null)
-    listWledChannels(selectedDeviceId)
+    setLoading(true)
+    listSegments(selectedSeg.device_id)
       .then((resp) => {
         if (!alive) return
-        const found = resp.channels.find((c) => c.id === selectedChannelId)
+        const found = resp.segments.find(
+          (s) => s.seg_index === selectedSeg.seg_index,
+        )
         if (!found) {
-          setChannel(null)
-          return
+          setSeg(null)
+          setError('Segment not found in cache.')
+        } else {
+          setSeg(found)
+          setError(null)
         }
-        setChannel(found)
-        setNameDraft(found.name)
-        setStartDraft(String(found.start_led))
-        setEndDraft(String(found.end_led))
+        setLoading(false)
       })
       .catch((err) => {
         if (!alive) return
-        console.error('Failed to load channel detail:', err)
-        setError('Failed to load channel.')
+        console.error('Failed to load segment detail:', err)
+        const msg =
+          err instanceof WledApiError
+            ? `Failed to load segment (HTTP ${err.status}).`
+            : 'Failed to load segment.'
+        setError(msg)
+        setLoading(false)
       })
     return () => {
       alive = false
     }
-  }, [selectedChannelId, selectedDeviceId])
+  }, [selectedSeg?.device_id, selectedSeg?.seg_index])
 
-  if (!selectedChannelId || !channel) {
+  if (!selectedSeg) {
     return (
       <div
         className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3 text-xs text-muted-foreground"
         data-testid="wled-channel-sidebar-empty"
       >
         <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-          Selected channel
+          Selected segment
         </h3>
-        Select a zone on the strip to edit it.
+        Select a zone on the strip to view it.
       </div>
     )
   }
 
-  async function saveField(patch: Partial<{ name: string; start_led: number; end_led: number }>) {
-    if (!selectedDeviceId || !channel) return
-    setSaving(true)
-    setError(null)
-    try {
-      const updated = await updateWledChannel(selectedDeviceId, channel.id, patch)
-      setChannel(updated)
-      await onChange()
-    } catch (err) {
-      const msg =
-        err instanceof WledApiError
-          ? `Save failed. HTTP ${err.status}`
-          : 'Save failed.'
-      setError(msg)
-    } finally {
-      setSaving(false)
-    }
+  if (error) {
+    return (
+      <div
+        className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3 text-xs text-red-400"
+        data-testid="wled-channel-sidebar-error"
+      >
+        <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+          Selected segment
+        </h3>
+        {error}
+      </div>
+    )
   }
 
-  async function handleNameBlur() {
-    if (channel && nameDraft !== channel.name && nameDraft.trim()) {
-      await saveField({ name: nameDraft.trim() })
-    }
+  if (loading || !seg) {
+    return (
+      <div
+        className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3 text-xs text-muted-foreground"
+        data-testid="wled-channel-sidebar-loading"
+      >
+        <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+          Selected segment
+        </h3>
+        Loading…
+      </div>
+    )
   }
 
-  async function handleStartBlur() {
-    if (!channel) return
-    const n = Number(startDraft)
-    if (!Number.isFinite(n) || n < 0) {
-      setStartDraft(String(channel.start_led))
-      return
-    }
-    if (n !== channel.start_led) await saveField({ start_led: Math.floor(n) })
-  }
-
-  async function handleEndBlur() {
-    if (!channel) return
-    const n = Number(endDraft)
-    if (!Number.isFinite(n) || n < 0) {
-      setEndDraft(String(channel.end_led))
-      return
-    }
-    if (n !== channel.end_led) await saveField({ end_led: Math.floor(n) })
-  }
-
-  async function handleDelete() {
-    if (!selectedDeviceId || !channel) return
-    setSaving(true)
-    setError(null)
-    try {
-      await deleteWledChannel(selectedDeviceId, channel.id)
-      setToast('Channel deleted.')
-      onClear()
-      await onChange()
-      setTimeout(() => setToast(null), 3000)
-    } catch (err) {
-      const msg =
-        err instanceof WledApiError
-          ? `Delete failed. HTTP ${err.status}`
-          : 'Delete failed.'
-      setError(msg)
-    } finally {
-      setSaving(false)
-    }
-  }
-
+  const length = seg.stop_led - seg.start_led + 1
   return (
     <div
       className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3 flex flex-col gap-2"
       data-testid="wled-channel-sidebar"
     >
       <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-        Selected channel
+        Selected segment
       </h3>
-
-      <label className="flex flex-col gap-1 text-xs">
-        <span className="sr-only">Channel name</span>
-        <input
-          type="text"
-          aria-label="Channel name"
-          placeholder="Channel N"
-          value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={handleNameBlur}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          }}
-          className="h-7 text-xs rounded-lg px-2.5"
-          disabled={saving}
-          data-testid="wled-channel-name-input"
-        />
-      </label>
-
-      <div className="flex gap-2">
-        <label className="flex flex-col gap-1 text-xs flex-1">
-          <span className="sr-only">Start LED</span>
-          <input
-            type="number"
-            aria-label="Start LED"
-            placeholder="0"
-            value={startDraft}
-            onChange={(e) => setStartDraft(e.target.value)}
-            onBlur={handleStartBlur}
-            className="h-7 text-xs rounded-lg px-2.5 font-mono"
-            disabled={saving}
-            data-testid="wled-channel-start-input"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs flex-1">
-          <span className="sr-only">End LED</span>
-          <input
-            type="number"
-            aria-label="End LED"
-            placeholder="0"
-            value={endDraft}
-            onChange={(e) => setEndDraft(e.target.value)}
-            onBlur={handleEndBlur}
-            className="h-7 text-xs rounded-lg px-2.5 font-mono"
-            disabled={saving}
-            data-testid="wled-channel-end-input"
-          />
-        </label>
-      </div>
-
-      <button
-        type="button"
-        onClick={handleDelete}
-        disabled={saving}
-        className="h-7 text-[11px] rounded-lg px-2.5 bg-destructive/10 text-red-400 hover:bg-destructive/20 border border-destructive/30 disabled:opacity-50"
-        data-testid="wled-channel-delete-button"
-      >
-        Delete channel
-      </button>
-
-      {error && (
-        <p className="text-[11px] text-red-400" data-testid="wled-channel-sidebar-error">
-          {error}
-        </p>
-      )}
-      {toast && (
-        <p
-          className="text-[11px] text-muted-foreground"
-          data-testid="wled-channel-sidebar-toast"
+      <dl className="text-xs space-y-1">
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Name</dt>
+          <dd className="font-medium truncate" data-testid="sidebar-seg-name">
+            {segmentName(seg)}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Index</dt>
+          <dd className="font-mono" data-testid="sidebar-seg-index">
+            {seg.seg_index}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Range</dt>
+          <dd className="font-mono" data-testid="sidebar-seg-range">
+            {seg.start_led}–{seg.stop_led}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Length</dt>
+          <dd className="font-mono" data-testid="sidebar-seg-length">
+            {length} LEDs
+          </dd>
+        </div>
+      </dl>
+      {onClear && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="mt-1 text-[11px] text-muted-foreground hover:text-foreground self-start"
+          data-testid="wled-channel-sidebar-clear"
         >
-          {toast}
-        </p>
+          Clear selection
+        </button>
       )}
     </div>
   )
