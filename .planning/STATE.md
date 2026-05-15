@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 19.1-07-PLAN.md
-last_updated: "2026-05-15T19:23:48.488Z"
+stopped_at: Completed 19.1-08-PLAN.md
+last_updated: "2026-05-15T19:36:26.118Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 52
-  completed_plans: 49
-  percent: 94
+  completed_plans: 50
+  percent: 96
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 19.1 (wled-segment-sync) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Status: Ready to execute
 Last activity: 2026-05-15
 
@@ -58,6 +58,7 @@ Last activity: 2026-05-15
 | Phase 19.1 P05 | 31min | 2 tasks | 4 files |
 | Phase Phase 19.1 PP06 | 6min | 3 tasks | 5 files |
 | Phase 19.1 P07 | 8min | 3 tasks | 6 files |
+| Phase Phase 19.1 PP08 | 7min | 3 tasks tasks | 5 files files |
 
 ## Accumulated Context
 
@@ -98,6 +99,9 @@ Recent decisions affecting current work:
 - [19.1-07] ZoneTestSentinel hidden-span pattern: Konva renders zones to a single canvas, hiding them from testing-library, so each Group mounts a zero-pixel <span data-testid> peer that becomes a discoverable DOM node in JSDOM-mocked tests where react-konva is stubbed to a fragment pass-through
 - [19.1-07] WledChannelSidebar rewritten as a read-only metadata <dl> panel per D-07; all <input> fields, name/start/end draft state, saveField+blur callbacks, and Delete button removed; optional Clear-selection button kept (UI-only, doesn't mutate data)
 - [19.1-07] SettingsPanel + SettingsPage rewired in the same diff per RESEARCH.md Pitfall 6; lifted state reshape (selectedChannelId, selectedDeviceId) -> selectedSeg:{device_id, seg_index}|null; refreshTrigger counter + onChange callback dropped (no mutation flows through these containers anymore)
+- [19.1-08] LightPanel.tsx, EditorCanvas.tsx, RegionOrientationPopover.tsx rewired to D-13 composite (wled_device_id, seg_index) key; drag payload sets wledDeviceId + seg_index + wledSegName + entertainment_config_id; EditorCanvas discriminator changes from wledChannelId presence to wledDeviceId presence with Number.isFinite guard on seg_index
+- [19.1-08] Popover deviceChannelIndexById useMemo deleted entirely per D-09 — seg_index IS the palette index, so channelColor(a.seg_index) is a direct render-time call with zero per-device sort-position resolver
+- [19.1-08] JSDOM normalizes hsl(h,s%,l%) to rgb(r,g,b) when reading element.style.background — chip-color tests use pairwise inequality (two seg_index values produce different rgb strings) instead of literal hsl(...) string compare; same D-09 semantic guarantee, JSDOM-stable
 
 ### Pending Todos
 
@@ -118,8 +122,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-15T19:23:48.483Z
-Stopped at: Completed 19.1-07-PLAN.md
+Last session: 2026-05-15T19:36:17.094Z
+Stopped at: Completed 19.1-08-PLAN.md
 Resume file: None
 
 **Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z
