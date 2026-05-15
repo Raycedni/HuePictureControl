@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Wireless Input
 status: executing
-stopped_at: Completed 19.1-03-PLAN.md
-last_updated: "2026-05-14T20:03:37.703Z"
-last_activity: 2026-05-14
+stopped_at: Completed 19.1-04-PLAN.md
+last_updated: "2026-05-15T18:24:21.214Z"
+last_activity: 2026-05-15
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 52
-  completed_plans: 45
-  percent: 87
+  completed_plans: 46
+  percent: 88
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 19.1 (wled-segment-sync) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Status: Ready to execute
-Last activity: 2026-05-14
+Last activity: 2026-05-15
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Last activity: 2026-05-14
 | Phase 19.1 P01 | 25min | 2 tasks | 5 files |
 | Phase 19.1 P02 | 24min | 2 tasks | 4 files |
 | Phase 19.1 P03 | 12min | 1 tasks | 1 files |
+| Phase 19.1 P04 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,9 @@ Recent decisions affecting current work:
 - [19.1-02] orientation column baked into new wled_light_assignments CREATE; Phase 19 next_channel_n ALTER preserved as harmless dormant column per D-10 Claude's Discretion
 - [19.1-03] reconcile_segments cascades via NOT IN sub-SELECT against freshly-written cache inside one transaction — simpler than diff-by-set, robust to duplicate seg_index, and naturally handles N->0 because empty cache means every assignment for the device is in the NOT IN set
 - [19.1-03] reconcile_segments has zero network I/O — caller (Plan 04 router) owns fetch_wled_state plus httpx/ValueError -> HTTP translation; keeps the unit tests httpx-free and the transaction window tight
+- [19.1-04] Two-fetch atomic registration before any DB write: /json/info + /json/state in one try-block ensures /json/state failure leaves zero wled_devices rows (D-02); proven by test_register_device_rolls_back_on_state_failure
+- [19.1-04] reconcile_segments runs AFTER device-row commit (not inside same transaction) — reconcile owns its own commit; on brand-new device the cache is empty so it is just an INSERT batch; reconcile-failure post-commit yields empty cache, which D-04 frontend handles as stale-badge offline
+- [19.1-04] PATCH /regions/{id}/orientation keeps Phase 19 query-param 'config' shape (not body) for binary-compat with the existing frontend until Plan 06+ rewrites it; SQL filter (region_id, entertainment_config_id) unchanged across the D-13 rename
 
 ### Pending Todos
 
@@ -99,8 +103,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-14T20:03:37.698Z
-Stopped at: Completed 19.1-03-PLAN.md
+Last session: 2026-05-15T18:24:21.209Z
+Stopped at: Completed 19.1-04-PLAN.md
 Resume file: None
 
 **Planned Phase:** 19.1 (WLED Segment Sync) — 10 plans — 2026-05-14T17:38:50.370Z
