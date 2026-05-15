@@ -240,18 +240,25 @@ class StreamingCoordinator:
     # ------------------------------------------------------------------
 
     async def _load_wled_device_rows(self, config_id: str) -> list[dict]:
-        """Load enabled WLED devices with their channel + region assignments.
+        """Load enabled WLED devices with their cached segment + region assignments.
 
         Returns the ``device_rows`` list ``WledStreamer.start`` expects:
         ``[{"id", "ip", "led_count", "enabled", "channels": [{"id",
         "region_id", "start_led", "end_led"}, ...]}, ...]``.
 
         Per D-11 the global ``/api/capture/start`` attaches all
-        ``wled_devices WHERE enabled = 1`` as UDP sinks. Per the
-        T-17-DB-JOIN mitigation, the channel-side LEFT JOIN scopes
-        ``wla.entertainment_config_id`` so channels not assigned for the
+        ``wled_devices WHERE enabled = 1`` as UDP sinks. Per Phase 19.1 D-22
+        the per-channel rows come from ``wled_seg_cache`` (mirroring the
+        device's ``/json/state seg[]``) joined against
+        ``wled_light_assignments`` on the composite
+        ``(wled_device_id, seg_index)`` key — segments not assigned for the
         active config surface ``region_id = NULL`` and WledStreamer.render
         skips them.
+
+        Per RESEARCH.md Open Question #1 the emitted ``id`` is
+        ``str(seg_index)`` — this is the minimum diff that preserves the
+        ``WledStreamer.start`` channel-dict contract (which keys per-device
+        state on the channel ``id``).
 
         Returns an empty list if no devices are registered or all are
         disabled. Falls back to ``[]`` if the wled_* tables don't yet exist
@@ -281,38 +288,50 @@ class StreamingCoordinator:
                     dev[0], dev[1], dev[2], dev[3]
                 )
             try:
+                # Phase 19.1 D-22 + RESEARCH.md Open Question #1: read segment
+                # ranges from wled_seg_cache (mirrors WLED /json/state) joined
+                # against the composite (wled_device_id, seg_index) key on
+                # wled_light_assignments. ``id`` emitted as ``str(seg_index)``
+                # keeps the WledStreamer.start channel-dict contract stable
+                # with the minimum diff.
                 async with await self._db.execute(
                     """
-                    SELECT wc.id AS channel_id, wc.start_led, wc.end_led, wla.region_id
-                    FROM wled_channels wc
+                    SELECT wsc.seg_index, wla.region_id, wsc.start_led, wsc.stop_led
+                    FROM wled_seg_cache wsc
                     LEFT JOIN wled_light_assignments wla
-                        ON wla.wled_channel_id = wc.id
-                        AND wla.entertainment_config_id = ?
-                    WHERE wc.device_id = ?
+                        ON wla.wled_device_id = wsc.device_id
+                       AND wla.seg_index = wsc.seg_index
+                       AND wla.entertainment_config_id = ?
+                    WHERE wsc.device_id = ?
+                    ORDER BY wsc.seg_index
                     """,
                     (config_id, dev_id),
                 ) as cur:
                     ch_rows = await cur.fetchall()
             except Exception as exc:
                 logger.warning(
-                    "WLED channel query failed for device %s: %s", dev_id, exc
+                    "WLED segment query failed for device %s: %s", dev_id, exc
                 )
                 ch_rows = []
             channels = []
             for c in ch_rows:
                 try:
                     channels.append({
-                        "id": c["channel_id"],
+                        "id": str(c["seg_index"]),
                         "region_id": c["region_id"],
                         "start_led": int(c["start_led"]),
-                        "end_led": int(c["end_led"]),
+                        # ``wsc.stop_led`` is INCLUSIVE (Plan 02 enforced
+                        # EXCLUSIVE->INCLUSIVE at the parse boundary).
+                        # WledStreamer treats ``end_led`` as INCLUSIVE too,
+                        # so we pass it through unchanged.
+                        "end_led": int(c["stop_led"]),
                     })
                 except Exception:
                     channels.append({
-                        "id": c[0],
-                        "region_id": c[3] if len(c) > 3 else None,
-                        "start_led": int(c[1]),
-                        "end_led": int(c[2]),
+                        "id": str(c[0]),
+                        "region_id": c[1] if len(c) > 1 else None,
+                        "start_led": int(c[2]),
+                        "end_led": int(c[3]),
                     })
             rows.append({
                 "id": dev_id,
@@ -338,26 +357,35 @@ class StreamingCoordinator:
         for Hue-only regions.
 
         The query joins ``regions`` with both Hue (``light_assignments``) and
-        WLED (``wled_light_assignments`` -> ``wled_channels``) sides and computes
-        ``N_region = COALESCE(MAX(end_led - start_led + 1), 1)``. In Plan 05
-        (no WLED rows yet) the WLED JOIN returns zero rows so N_region defaults
-        to 1 — fan-out is numerically identical to the old per-channel-average
-        path. Plan 06 will populate WLED tables and the same query starts
-        returning N_region > 1 for strip-assigned regions.
+        WLED (``wled_light_assignments`` -> ``wled_seg_cache``) sides and computes
+        ``N_region = COALESCE(MAX(stop_led - start_led + 1), 1)`` against the
+        Phase 19.1 segment cache (D-22). Both ``start_led`` and ``stop_led`` are
+        INCLUSIVE (Plan 02 converts WLED's EXCLUSIVE ``seg.stop`` at the parse
+        boundary), so the ``+ 1`` produces the correct LED count.
 
         N.B. This query is for gradient sub-sampling ONLY. The Hue
         channel_id -> region_id mapping is HueStreamer's responsibility inside
         ``_load_channel_to_region``, which runs independently in
         ``HueStreamer.start()``. See ``17-05-PLAN.md`` ``<query_responsibilities>``.
         """
+        # Phase 19.1 D-22 + Plan 05 SQL rewrite: JOIN wled_seg_cache (the
+        # /json/state mirror) on the composite (wled_device_id, seg_index)
+        # key instead of the dropped per-channel UUID surrogate. The Hue
+        # branch (light_assignments) and the COALESCE / GROUP BY shape are
+        # unchanged so the gradient contract {region_id: gradient_array}
+        # remains intact for Hue-only regions.
         sql = """
             SELECT DISTINCT r.id AS region_id, r.polygon,
-                   COALESCE(MAX(wc.end_led - wc.start_led + 1), 1) AS n_region,
+                   COALESCE(MAX(wsc.stop_led - wsc.start_led + 1), 1) AS n_region,
                    COALESCE(MAX(wla.orientation), 'auto') AS orientation
             FROM regions r
-            LEFT JOIN light_assignments la ON la.region_id = r.id AND la.entertainment_config_id = :cfg
-            LEFT JOIN wled_light_assignments wla ON wla.region_id = r.id AND wla.entertainment_config_id = :cfg
-            LEFT JOIN wled_channels wc ON wc.id = wla.wled_channel_id
+            LEFT JOIN light_assignments la
+                ON la.region_id = r.id AND la.entertainment_config_id = :cfg
+            LEFT JOIN wled_light_assignments wla
+                ON wla.region_id = r.id AND wla.entertainment_config_id = :cfg
+            LEFT JOIN wled_seg_cache wsc
+                ON wsc.device_id = wla.wled_device_id
+               AND wsc.seg_index = wla.seg_index
             WHERE la.region_id IS NOT NULL OR wla.region_id IS NOT NULL
             GROUP BY r.id, r.polygon
         """
