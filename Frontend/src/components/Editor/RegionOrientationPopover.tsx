@@ -4,9 +4,9 @@ import { Popover } from '@base-ui/react'
 import { useRegionStore } from '@/store/useRegionStore'
 import {
   patchRegionOrientation,
-  type WledChannel,
   type WledOrientation,
 } from '@/api/wled'
+import { segmentName, type WledSegment } from '@/utils/wled-segment'
 import { channelColor } from '@/utils/wled-palette'
 
 import { OrientationSegmentedControl } from './OrientationSegmentedControl'
@@ -17,33 +17,31 @@ interface Props {
   canvasContainerEl: HTMLElement | null
   selectedConfigId: string
   /**
-   * Per-device channel map keyed by device id. EditorCanvas already loads this
-   * via getWledDevices + listWledChannels (see Plan 19-11 pattern) and passes
-   * it down. Channels in each device's list MUST be sorted by start_led
-   * ascending — the sorted index in that list IS the per-device channel_index
-   * passed to channelColor(), which guarantees chip parity with the
-   * LightPanel and the strip painter (UI-SPEC §Color line 95).
+   * Per-device segment cache keyed by device id. EditorCanvas loads this via
+   * getWledDevices + listSegments (Plan 19.1-08) and passes it down. Each
+   * `seg.seg_index` IS the palette index per D-09 — no sort-position resolver
+   * needed. Chip color = `channelColor(a.seg_index)` for every assignment.
    */
-  channelsByDevice: Record<string, WledChannel[]>
+  segsByDevice: Record<string, WledSegment[]>
 }
 
 /**
- * Region orientation popover - per-region narrowing (CONTEXT.md D-19/D-22).
+ * Region orientation popover — per-region narrowing (CONTEXT.md D-19/D-22).
  *
  * Renders ONE OrientationSegmentedControl per region (not per assignment) plus
- * a read-only list of the WLED channels assigned to that region. Anchored via
+ * a read-only list of the WLED segments assigned to that region. Anchored via
  * Base UI's virtual-anchor pattern to the selected region's screen-coord bbox.
  *
- * Chip color is computed via channelColor(per-device channel_index) — the
- * SAME formula the LightPanel and the strip painter use. This guarantees the
- * UI-SPEC §Color line 95 contract: identical input across all three surfaces.
+ * Phase 19.1 D-13: the assignment list is keyed by composite
+ * `(wled_device_id, seg_index)` — `segmentName(seg)` resolves the display name
+ * (with D-08 fallback), and `channelColor(seg_index)` paints the chip.
  */
 export function RegionOrientationPopover({
   canvasWidth,
   canvasHeight,
   canvasContainerEl,
   selectedConfigId,
-  channelsByDevice,
+  segsByDevice,
 }: Props) {
   const selectedId = useRegionStore((s) => s.selectedId)
   const regions = useRegionStore((s) => s.regions)
@@ -63,26 +61,6 @@ export function RegionOrientationPopover({
   // Per-region invariant: all assignments share the same orientation.
   const currentOrientation: WledOrientation =
     assignments[0]?.orientation ?? 'auto'
-
-  // -------------------------------------------------------------------------
-  // Per-device channel_index resolver (UI-SPEC §Color line 95 contract).
-  //
-  // Builds Record<wled_channel_id, channel_index> where channel_index is the
-  // channel's position in its OWN device's start_led-sorted channel list —
-  // identical to the formula LightPanel.tsx applies (Plan 19-11). This
-  // guarantees that for any channel C:
-  //   popover chip color === LightPanel chip color === strip painter zone fill
-  // -------------------------------------------------------------------------
-  const deviceChannelIndexById = useMemo(() => {
-    const out: Record<string, number> = {}
-    for (const channels of Object.values(channelsByDevice)) {
-      const sorted = channels.slice().sort((a, b) => a.start_led - b.start_led)
-      sorted.forEach((ch, idx) => {
-        out[ch.id] = idx
-      })
-    }
-    return out
-  }, [channelsByDevice])
 
   const virtualAnchor = useMemo(() => {
     if (!region || !canvasContainerEl) return null
@@ -180,7 +158,7 @@ export function RegionOrientationPopover({
                   <>
                     {' · '}
                     {assignments.length}{' '}
-                    {assignments.length === 1 ? 'channel' : 'channels'}
+                    {assignments.length === 1 ? 'segment' : 'segments'}
                   </>
                 )}
               </h4>
@@ -197,7 +175,7 @@ export function RegionOrientationPopover({
                 className="text-xs text-muted-foreground"
                 data-testid="region-orientation-popover-empty"
               >
-                Drag a channel from the LightPanel to add an assignment.
+                Drag a segment from the LightPanel to add an assignment.
               </p>
             ) : (
               <>
@@ -214,37 +192,34 @@ export function RegionOrientationPopover({
                 )}
 
                 <p className="text-[10px] font-mono text-muted-foreground mt-3 mb-1">
-                  Channels in this region
+                  Segments in this region
                 </p>
                 <div className="flex flex-col gap-1">
                   {assignments.map((a) => {
-                    // UI-SPEC §Color line 95: chip color uses the channel's
-                    // per-device channel_index (its position in its OWN
-                    // device's start_led-sorted channel list) — NOT the
-                    // in-region position. This guarantees the popover chip
-                    // color matches the LightPanel chip and the strip
-                    // painter zone for the same channel.
-                    const deviceChannelIndex =
-                      deviceChannelIndexById[a.wled_channel_id] ?? 0
-                    // Try to surface the channel's human-readable name from
-                    // channelsByDevice; fall back to the id if not found.
-                    const channelName =
-                      Object.values(channelsByDevice)
-                        .flat()
-                        .find((c) => c.id === a.wled_channel_id)?.name ??
-                      a.wled_channel_id
+                    // Phase 19.1 D-09: chip color is channelColor(seg_index)
+                    // directly — seg_index IS the palette index, no per-device
+                    // sort-position resolver needed. This guarantees parity
+                    // with the LightPanel chip and the strip painter zone for
+                    // the same (device_id, seg_index) pair.
+                    const seg = (segsByDevice[a.wled_device_id] ?? []).find(
+                      (s) => s.seg_index === a.seg_index,
+                    )
+                    const displayName = seg
+                      ? segmentName(seg)
+                      : `Segment ${a.seg_index}`
+                    const compositeKey = `${a.wled_device_id}:${a.seg_index}`
                     return (
                       <div
-                        key={a.wled_channel_id}
+                        key={compositeKey}
                         className="flex items-center gap-2 text-xs"
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ background: channelColor(deviceChannelIndex) }}
-                          data-testid={`region-orientation-popover-chip-${a.wled_channel_id}`}
+                          style={{ background: channelColor(a.seg_index) }}
+                          data-testid={`region-orientation-popover-chip-${a.wled_device_id}-${a.seg_index}`}
                         />
                         <span className="truncate text-foreground/80">
-                          {channelName}
+                          {displayName}
                         </span>
                       </div>
                     )
