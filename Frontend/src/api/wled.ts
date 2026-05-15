@@ -1,9 +1,22 @@
-// Phase 17 Plan 08: Typed REST client for /api/wled/* endpoints (D-17, D-18).
+// Phase 19.1 Plan 06: Typed REST client for /api/wled/* endpoints.
 //
 // Mirrors the conventions used by Frontend/src/api/cameras.ts and
 // Frontend/src/api/hue.ts: typed exports, JSON bodies for mutations, and a
 // dedicated error class so the UI can branch on HTTP status (409 conflict,
 // 422 validation, 502 unreachable, etc.).
+//
+// Phase 19.1 changes (vs Phase 19):
+//   - All channel-CRUD client fns removed (D-10) — channels are no longer a
+//     paint-managed concept; segments are mirrored from the WLED device's own
+//     /json/state seg[] array.
+//   - New: refreshSegments(device_id) → POST /devices/{id}/segments/refresh
+//     (D-17). Returns the post-refresh seg cache + the count of assignments
+//     dropped by the reconcile cascade.
+//   - New: listSegments(device_id) → GET /devices/{id}/segments (D-18). Pure
+//     cache read, never contacts the device.
+//   - upsertWledAssignment / deleteWledAssignment now take the D-13 composite
+//     shape (region_id, wled_device_id, seg_index, entertainment_config_id).
+//   - patchRegionOrientation keeps the Phase 19 query-param contract verbatim.
 
 export interface WledDevice {
   id: string
@@ -79,10 +92,10 @@ export async function scanWledDevices(): Promise<WledScanResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 19 — Channel CRUD + Assignment + Region orientation
+// Phase 19.1 — Segment refresh / list + D-13 assignments
 // ---------------------------------------------------------------------------
 
-/** Per-region orientation enum for the sub-sample axis (D-17). */
+/** Per-region orientation enum for the sub-sample axis (preserved from Phase 19 D-16/D-22). */
 export type WledOrientation =
   | 'auto'
   | 'horizontal-LTR'
@@ -90,116 +103,74 @@ export type WledOrientation =
   | 'vertical-TTB'
   | 'vertical-BTT'
 
-export interface WledChannel {
-  id: string
-  device_id: string
-  name: string
+/** Cached WLED segment row mirrored from the device's /json/state seg[] (D-12). */
+export interface WledSegment {
+  seg_index: number
   start_led: number
-  end_led: number
+  stop_led: number
+  name: string | null
+  refreshed_at?: string | null
 }
 
-export interface WledChannelsResponse {
-  channels: WledChannel[]
+export interface WledSegmentsResponse {
+  segments: WledSegment[]
 }
 
+export interface WledRefreshResponse {
+  segments: WledSegment[]
+  dropped_assignments: number
+}
+
+/**
+ * Trigger a /json/state fetch on the device, write the result into
+ * wled_seg_cache, and cascade-delete any wled_light_assignments rows whose
+ * seg_index disappeared (D-14, D-15). Returns the freshly-written seg list
+ * plus the count of assignments dropped by the cascade (D-17).
+ */
+export async function refreshSegments(deviceId: string): Promise<WledRefreshResponse> {
+  const res = await fetch(
+    `/api/wled/devices/${encodeURIComponent(deviceId)}/segments/refresh`,
+    { method: 'POST' },
+  )
+  if (!res.ok) throw new WledApiError(res.status)
+  return res.json()
+}
+
+/**
+ * Read the cached seg[] for a device from wled_seg_cache. NEVER contacts the
+ * device — used to render the strip after a page reload without forcing a
+ * refresh (D-18, D-04 offline-tolerant rendering).
+ */
+export async function listSegments(deviceId: string): Promise<WledSegmentsResponse> {
+  const res = await fetch(
+    `/api/wled/devices/${encodeURIComponent(deviceId)}/segments`,
+  )
+  if (!res.ok) throw new WledApiError(res.status)
+  return res.json()
+}
+
+/** Region → segment assignment (D-13 composite key). */
 export interface WledAssignment {
   region_id: string
-  wled_channel_id: string
+  wled_device_id: string
+  seg_index: number
   entertainment_config_id: string
   orientation: WledOrientation
 }
 
-/** List all channels for a WLED device, ordered by start_led ASC. */
-export async function listWledChannels(
-  deviceId: string,
-): Promise<WledChannelsResponse> {
-  const res = await fetch(
-    `/api/wled/devices/${encodeURIComponent(deviceId)}/channels`,
-  )
-  if (!res.ok) throw new WledApiError(res.status)
-  return res.json()
-}
-
-/** Create a channel — backend applies overlap auto-split (D-02). */
-export async function createWledChannel(
-  deviceId: string,
-  body: { start_led: number; end_led: number; name?: string },
-): Promise<WledChannel> {
-  const res = await fetch(
-    `/api/wled/devices/${encodeURIComponent(deviceId)}/channels`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  )
-  if (!res.ok) throw new WledApiError(res.status)
-  return res.json()
-}
-
-/** Rename and/or resize a single channel (partial PUT — all fields optional). */
-export async function updateWledChannel(
-  deviceId: string,
-  channelId: string,
-  body: { name?: string; start_led?: number; end_led?: number },
-): Promise<WledChannel> {
-  const res = await fetch(
-    `/api/wled/devices/${encodeURIComponent(deviceId)}/channels/${encodeURIComponent(channelId)}`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  )
-  if (!res.ok) throw new WledApiError(res.status)
-  return res.json()
+export interface WledAssignmentsResponse {
+  assignments: WledAssignment[]
 }
 
 /**
- * Atomically move the shared boundary between two adjacent channels.
- * Fires once on drag end — NEVER per onDragMove (RESEARCH.md §Boundary
- * Drag-Handle Resize commit cadence).
- */
-export async function resizeWledChannelBoundary(
-  deviceId: string,
-  body: {
-    left_channel_id: string
-    right_channel_id: string
-    boundary: number
-  },
-): Promise<{ ok: true }> {
-  const res = await fetch(
-    `/api/wled/devices/${encodeURIComponent(deviceId)}/channels/boundary`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  )
-  if (!res.ok) throw new WledApiError(res.status)
-  return res.json()
-}
-
-/** Delete a channel — cascades to wled_light_assignments (D-04, Success #5). */
-export async function deleteWledChannel(
-  deviceId: string,
-  channelId: string,
-): Promise<void> {
-  const res = await fetch(
-    `/api/wled/devices/${encodeURIComponent(deviceId)}/channels/${encodeURIComponent(channelId)}`,
-    { method: 'DELETE' },
-  )
-  if (!res.ok) throw new WledApiError(res.status)
-}
-
-/**
- * Upsert a region→channel assignment for a specific config (D-21).
+ * Upsert a region→segment assignment for a specific config (D-13, D-21).
  * New assignments inherit the region's current orientation; existing rows
  * keep their orientation unchanged unless `orientation` is in the body.
  */
 export async function upsertWledAssignment(body: {
   region_id: string
-  wled_channel_id: string
+  wled_device_id: string
+  seg_index: number
   entertainment_config_id: string
   orientation?: WledOrientation
 }): Promise<WledAssignment> {
@@ -212,10 +183,11 @@ export async function upsertWledAssignment(body: {
   return res.json()
 }
 
-/** Remove a region→channel assignment for a specific config (D-21). */
+/** Remove a region→segment assignment for a specific config (D-13, D-21). */
 export async function deleteWledAssignment(body: {
   region_id: string
-  wled_channel_id: string
+  wled_device_id: string
+  seg_index: number
   entertainment_config_id: string
 }): Promise<void> {
   const res = await fetch('/api/wled/assignments', {
@@ -226,12 +198,28 @@ export async function deleteWledAssignment(body: {
   if (!res.ok) throw new WledApiError(res.status)
 }
 
+/** List WLED assignments. With no arg returns all; with a config id, filters server-side. */
+export async function listWledAssignments(
+  entertainment_config_id?: string,
+): Promise<WledAssignmentsResponse> {
+  const url = entertainment_config_id
+    ? `/api/wled/assignments?config=${encodeURIComponent(entertainment_config_id)}`
+    : '/api/wled/assignments'
+  const res = await fetch(url)
+  if (!res.ok) throw new WledApiError(res.status)
+  return res.json()
+}
+
 /**
  * Region-scoped orientation update (CONTEXT.md per-region narrowing 2026-05-14).
  *
  * Writes the same orientation value to EVERY wled_light_assignments row that
  * matches (region_id, entertainment_config_id) — one statement on the
  * backend. Returns the number of rows updated for optimistic-UI verification.
+ *
+ * Phase 19.1 D-22 preserves the Phase 19 query-param contract:
+ *   PATCH /api/wled/regions/{region_id}/orientation?config={cfg}
+ *   body: {orientation: WledOrientation}
  */
 export async function patchRegionOrientation(
   regionId: string,
@@ -246,17 +234,6 @@ export async function patchRegionOrientation(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orientation }),
   })
-  if (!res.ok) throw new WledApiError(res.status)
-  return res.json()
-}
-
-/** List all WLED assignments scoped to a config — used to hydrate useRegionStore.wledAssignments. */
-export async function listWledAssignments(
-  configId: string,
-): Promise<{ assignments: WledAssignment[] }> {
-  // The router exposes this via `GET /api/wled/assignments?config={cid}`.
-  const url = `/api/wled/assignments?config=${encodeURIComponent(configId)}`
-  const res = await fetch(url)
   if (!res.ok) throw new WledApiError(res.status)
   return res.json()
 }
