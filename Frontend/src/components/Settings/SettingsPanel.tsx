@@ -1,6 +1,9 @@
-// Phase 17 D-17 / D-20: Settings panel hosts WLED device CRUD now and the
-// Phase 19 paint canvas. The placeholder slot reserved in Phase 17 has been
-// replaced with WledStripPainter + WledChannelSidebar in Phase 19 Plan 10.
+// Phase 17 D-17 / D-20: Settings panel hosts WLED device CRUD and the
+// WLED strip view. Phase 19 used a paint canvas + sidebar with editable
+// channels; Phase 19.1 Plan 07 turns the strip into a read-only segment
+// visualizer (D-06) with a per-device Refresh button (D-03) and a
+// metadata-only sidebar (D-07). Selection is lifted into one composite
+// state shape: {device_id, seg_index} | null.
 
 import { useState } from 'react'
 import { WledDevicesPanel } from './WledDevicesPanel'
@@ -12,9 +15,9 @@ interface Props {
 }
 
 export function SettingsPanel({ onClose }: Props) {
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null)
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
-  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [selectedSeg, setSelectedSeg] = useState<
+    { device_id: string; seg_index: number } | null
+  >(null)
 
   return (
     <div
@@ -38,24 +41,17 @@ export function SettingsPanel({ onClose }: Props) {
           </button>
         </header>
         <div className="flex-1 overflow-auto p-4 flex flex-col md:flex-row gap-4">
-          {/* Phase 19: paint canvas slot now hosts WledStripPainter + sidebar. */}
+          {/* Phase 19.1: paint canvas slot now hosts the read-only strip view + metadata sidebar. */}
           <div className="hidden md:flex md:flex-[6] flex-col gap-3 min-h-[200px]">
             <WledStripPainter
-              selectedChannelId={selectedChannelId}
-              onSelectChannel={(cid, did) => {
-                setSelectedChannelId(cid)
-                setSelectedDeviceId(did)
-              }}
-              refreshTrigger={refreshTrigger}
+              selectedSeg={selectedSeg}
+              onSelectSegment={(seg, deviceId) =>
+                setSelectedSeg({ device_id: deviceId, seg_index: seg.seg_index })
+              }
             />
             <WledChannelSidebar
-              selectedChannelId={selectedChannelId}
-              selectedDeviceId={selectedDeviceId}
-              onChange={() => setRefreshTrigger((n) => n + 1)}
-              onClear={() => {
-                setSelectedChannelId(null)
-                setSelectedDeviceId(null)
-              }}
+              selectedSeg={selectedSeg}
+              onClear={() => setSelectedSeg(null)}
             />
           </div>
           <div className="flex-1 md:flex-[4]">
