@@ -28,11 +28,11 @@ vi.mock('@/api/regions', () => ({
   clearAllAssignments: vi.fn().mockResolvedValue(undefined),
 }))
 
-// Phase 19: mock the WLED API so LightPanel can be tested without a backend.
+// Phase 19.1: mock the WLED API so LightPanel can be tested without a backend.
 // Default: no devices registered (WLED section hidden).
 vi.mock('@/api/wled', () => ({
   getWledDevices: vi.fn().mockResolvedValue({ devices: [] }),
-  listWledChannels: vi.fn().mockResolvedValue({ channels: [] }),
+  listSegments: vi.fn().mockResolvedValue({ segments: [] }),
   listWledAssignments: vi.fn().mockResolvedValue({ assignments: [] }),
 }))
 
@@ -311,9 +311,9 @@ describe('LightPanel', () => {
   })
 })
 
-// Phase 19 — WLED section tests (Plan 19-11 flips these from todo to green).
+// Phase 19.1 Plan 08 — WLED section tests rewritten for composite-key drag payload.
 
-import { getWledDevices, listWledChannels, listWledAssignments } from '@/api/wled'
+import { getWledDevices, listSegments, listWledAssignments } from '@/api/wled'
 
 const mockDevice1 = {
   id: 'dev-1',
@@ -327,20 +327,20 @@ const mockDevice1 = {
   last_success_at: null,
 }
 
-const mockChannel1 = {
-  id: 'ch-1',
-  device_id: 'dev-1',
-  name: 'Channel 1',
+const mockSeg1 = {
+  seg_index: 0,
   start_led: 0,
-  end_led: 59,
+  stop_led: 59,
+  name: 'Sofa',
+  refreshed_at: '2026-05-15T19:00:00',
 }
 
-const mockChannel2 = {
-  id: 'ch-2',
-  device_id: 'dev-1',
-  name: 'Channel 2',
+const mockSeg2 = {
+  seg_index: 1,
   start_led: 60,
-  end_led: 119,
+  stop_led: 119,
+  name: 'TV',
+  refreshed_at: '2026-05-15T19:00:00',
 }
 
 const wledDefaultProps = {
@@ -357,13 +357,13 @@ describe('LightPanel WLED section', () => {
     vi.clearAllMocks()
     // Reset WLED mocks to defaults (no devices) before each test
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [] })
-    vi.mocked(listWledChannels).mockResolvedValue({ channels: [] })
+    vi.mocked(listSegments).mockResolvedValue({ segments: [] })
     vi.mocked(listWledAssignments).mockResolvedValue({ assignments: [] })
   })
 
   it('renders WLED section header below Lights section', async () => {
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
-    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1] })
+    vi.mocked(listSegments).mockResolvedValue({ segments: [mockSeg1] })
 
     render(<LightPanel {...wledDefaultProps} />)
 
@@ -376,14 +376,14 @@ describe('LightPanel WLED section', () => {
   it('counter chip: "M" mono text with text-muted-foreground (no threshold colors per D-14)', async () => {
     const dev2 = { ...mockDevice1, id: 'dev-2', name: 'Bedroom Strip', ip: '192.168.1.51' }
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1, dev2] })
-    // Each device has 3 channels — total = 6
-    const makeChannels = (deviceId: string) => [
-      { id: `${deviceId}-ch1`, device_id: deviceId, name: 'Ch 1', start_led: 0, end_led: 29 },
-      { id: `${deviceId}-ch2`, device_id: deviceId, name: 'Ch 2', start_led: 30, end_led: 59 },
-      { id: `${deviceId}-ch3`, device_id: deviceId, name: 'Ch 3', start_led: 60, end_led: 89 },
+    // Each device has 3 segments — total = 6
+    const makeSegs = () => [
+      { seg_index: 0, start_led: 0, stop_led: 29, name: 'A', refreshed_at: null },
+      { seg_index: 1, start_led: 30, stop_led: 59, name: 'B', refreshed_at: null },
+      { seg_index: 2, start_led: 60, stop_led: 89, name: 'C', refreshed_at: null },
     ]
-    vi.mocked(listWledChannels).mockImplementation((deviceId) =>
-      Promise.resolve({ channels: makeChannels(deviceId) }),
+    vi.mocked(listSegments).mockImplementation(() =>
+      Promise.resolve({ segments: makeSegs() }),
     )
 
     render(<LightPanel {...wledDefaultProps} />)
@@ -406,36 +406,43 @@ describe('LightPanel WLED section', () => {
     expect(screen.queryByTestId('lightpanel-wled-section')).toBeNull()
   })
 
-  it.todo('groups channels per device with sub-header showing {ip} · {led_count} LEDs · {channel_count} channels')
+  it.todo('groups segments per device with sub-header showing {ip} · {led_count} LEDs · {seg_count} segments')
 
-  it.todo('WLED chip matches palette: each channel row chip background equals channelColor(channel.index)')
+  it.todo('WLED chip matches palette: each segment row chip background equals channelColor(seg.seg_index)')
 
-  it('WLED drag payload: dataTransfer.setData called with wledChannelId, wledDeviceId, wledChannelName, entertainment_config_id', async () => {
+  it('WLED drag payload uses wledDeviceId + seg_index per D-13', async () => {
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
-    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1, mockChannel2] })
+    vi.mocked(listSegments).mockResolvedValue({ segments: [mockSeg1, mockSeg2] })
 
     render(<LightPanel {...wledDefaultProps} />)
 
-    const row = await screen.findByTestId(`lightpanel-wled-channel-${mockChannel1.id}`)
+    const row = await screen.findByTestId(
+      `lightpanel-wled-seg-${mockDevice1.id}-${mockSeg1.seg_index}`,
+    )
 
     const setData = vi.fn()
     fireEvent.dragStart(row, {
       dataTransfer: { setData, effectAllowed: '' },
     })
 
-    expect(setData).toHaveBeenCalledWith('wledChannelId', mockChannel1.id)
     expect(setData).toHaveBeenCalledWith('wledDeviceId', mockDevice1.id)
-    expect(setData).toHaveBeenCalledWith('wledChannelName', mockChannel1.name)
-    expect(setData).toHaveBeenCalledWith('entertainment_config_id', wledDefaultProps.selectedConfigId)
+    expect(setData).toHaveBeenCalledWith('seg_index', String(mockSeg1.seg_index))
+    expect(setData).toHaveBeenCalledWith('wledSegName', mockSeg1.name)
+    expect(setData).toHaveBeenCalledWith(
+      'entertainment_config_id',
+      wledDefaultProps.selectedConfigId,
+    )
   })
 
-  it('WLED drag payload: existing Hue keys (channelId/channelName/lightId/configId) are NOT set on WLED rows', async () => {
+  it('WLED drag payload: legacy Phase-19 keys (wledChannelId/wledChannelName) and Hue keys are NOT set on WLED rows', async () => {
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
-    vi.mocked(listWledChannels).mockResolvedValue({ channels: [mockChannel1] })
+    vi.mocked(listSegments).mockResolvedValue({ segments: [mockSeg1] })
 
     render(<LightPanel {...wledDefaultProps} />)
 
-    const row = await screen.findByTestId(`lightpanel-wled-channel-${mockChannel1.id}`)
+    const row = await screen.findByTestId(
+      `lightpanel-wled-seg-${mockDevice1.id}-${mockSeg1.seg_index}`,
+    )
 
     const setData = vi.fn()
     fireEvent.dragStart(row, {
@@ -443,11 +450,40 @@ describe('LightPanel WLED section', () => {
     })
 
     const calledKeys = setData.mock.calls.map((call) => call[0])
+    expect(calledKeys).not.toContain('wledChannelId')
+    expect(calledKeys).not.toContain('wledChannelName')
     expect(calledKeys).not.toContain('channelId')
     expect(calledKeys).not.toContain('channelName')
     expect(calledKeys).not.toContain('lightId')
     expect(calledKeys).not.toContain('configId')
   })
 
-  it.todo('Assigned-to line: when channel has an assignment, "Assigned: {region.name}" renders in text-hue-amber/60')
+  it('chip color uses channelColor(seg_index) per D-09 parity', async () => {
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
+    const seg = { seg_index: 2, start_led: 0, stop_led: 9, name: null, refreshed_at: null }
+    vi.mocked(listSegments).mockResolvedValue({ segments: [seg] })
+
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const chip = await screen.findByTestId(
+      `lightpanel-wled-chip-${mockDevice1.id}-${seg.seg_index}`,
+    )
+    const expectedHue = (2 * 137.508) % 360
+    expect(chip.style.background).toBe(`hsl(${expectedHue}, 60%, 60%)`)
+  })
+
+  it('segment display uses segmentName() — falls back to "Segment N" when name is null', async () => {
+    vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
+    const unnamed = { seg_index: 3, start_led: 0, stop_led: 9, name: null, refreshed_at: null }
+    vi.mocked(listSegments).mockResolvedValue({ segments: [unnamed] })
+
+    render(<LightPanel {...wledDefaultProps} />)
+
+    const row = await screen.findByTestId(
+      `lightpanel-wled-seg-${mockDevice1.id}-${unnamed.seg_index}`,
+    )
+    expect(row).toHaveTextContent('Segment 3')
+  })
+
+  it.todo('Assigned-to line: when seg has an assignment, "Assigned: {region.name}" renders in text-hue-amber/60')
 })
