@@ -4,11 +4,12 @@ import { fetchRegions, startStreaming, stopStreaming, clearAllAssignments } from
 import { putCameraAssignment, putLastZone, type CamerasResponse } from '@/api/cameras'
 import {
   getWledDevices,
-  listWledChannels,
+  listSegments,
   listWledAssignments,
   type WledDevice,
-  type WledChannel,
+  type WledSegment,
 } from '@/api/wled'
+import { segmentName } from '@/utils/wled-segment'
 import { channelColor } from '@/utils/wled-palette'
 import { useStatusStore } from '@/store/useStatusStore'
 import { useRegionStore } from '@/store/useRegionStore'
@@ -40,12 +41,12 @@ export function LightPanel({
   const [streamError, setStreamError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
-  // Phase 19 D-12/D-14: WLED section state
+  // Phase 19.1 D-12/D-14: WLED section state — segment-based (composite key)
   const [wledDevices, setWledDevices] = useState<WledDevice[]>([])
-  const [wledChannelsByDevice, setWledChannelsByDevice] = useState<Record<string, WledChannel[]>>({})
-  const [wledAssignmentsByChannel, setWledAssignmentsByChannel] = useState<
+  const [wledSegsByDevice, setWledSegsByDevice] = useState<Record<string, WledSegment[]>>({})
+  const [wledAssignmentsBySeg, setWledAssignmentsBySeg] = useState<
     Record<string, string>
-  >({})  // channelId -> region.name
+  >({})  // `${device_id}:${seg_index}` -> region.name
 
   const isStreaming = useStatusStore((s) => s.isStreaming)
   const activeConfigId = useStatusStore((s) => s.activeConfigId)
@@ -136,7 +137,7 @@ export function LightPanel({
       .catch((err) => console.error('Failed to load channels:', err))
   }, [selectedConfigId])
 
-  // Phase 19: load WLED devices + channels + assignments for the WLED section.
+  // Phase 19.1: load WLED devices + segments + assignments for the WLED section.
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -144,26 +145,29 @@ export function LightPanel({
         const devicesResp = await getWledDevices()
         if (!alive) return
         setWledDevices(devicesResp.devices)
-        const byDevice: Record<string, WledChannel[]> = {}
+        const byDevice: Record<string, WledSegment[]> = {}
         for (const d of devicesResp.devices) {
-          const chResp = await listWledChannels(d.id)
+          const segResp = await listSegments(d.id)
           if (!alive) return
-          byDevice[d.id] = chResp.channels
+          byDevice[d.id] = segResp.segments
         }
-        setWledChannelsByDevice(byDevice)
+        setWledSegsByDevice(byDevice)
         if (selectedConfigId) {
           const asgResp = await listWledAssignments(selectedConfigId)
           if (!alive) return
-          // Map channelId -> first region.name that uses it (LightPanel display only)
+          // Map `${device_id}:${seg_index}` -> first region.name that uses it.
           const map: Record<string, string> = {}
           const regionsById = new Map(regions.map((r) => [r.id, r]))
           for (const a of asgResp.assignments) {
             const region = regionsById.get(a.region_id)
-            if (region) map[a.wled_channel_id] = region.name
+            if (region) {
+              const key = `${a.wled_device_id}:${a.seg_index}`
+              map[key] = region.name
+            }
           }
-          setWledAssignmentsByChannel(map)
+          setWledAssignmentsBySeg(map)
         } else {
-          setWledAssignmentsByChannel({})
+          setWledAssignmentsBySeg({})
         }
       } catch (err) {
         console.error('Failed to load WLED data for LightPanel:', err)
@@ -264,9 +268,9 @@ export function LightPanel({
   // Channel counter: count regions with any light assigned
   const assignedCount = regions.filter((r) => r.light_id !== null).length
 
-  // Phase 19 D-14: WLED channel count (mono chip, no threshold colors)
+  // Phase 19.1 D-14: WLED segment count (mono chip, no threshold colors)
   const wledChannelCount = wledDevices.reduce(
-    (sum, d) => sum + (wledChannelsByDevice[d.id]?.length ?? 0),
+    (sum, d) => sum + (wledSegsByDevice[d.id]?.length ?? 0),
     0,
   )
 
@@ -525,7 +529,7 @@ export function LightPanel({
 
             <div className="flex flex-col gap-1">
               {wledDevices.map((device) => {
-                const channels = wledChannelsByDevice[device.id] ?? []
+                const segs = wledSegsByDevice[device.id] ?? []
                 return (
                   <div key={device.id} className="flex flex-col gap-0.5">
                     {/* Device header */}
@@ -535,27 +539,29 @@ export function LightPanel({
                           {device.name}
                         </span>
                         <span className="text-[10px] text-muted-foreground font-mono truncate">
-                          {device.ip} · {device.led_count} LEDs · {channels.length} channels
+                          {device.ip} · {device.led_count} LEDs · {segs.length} segments
                         </span>
                       </div>
                     </div>
 
-                    {/* Per-channel draggable rows */}
-                    {channels.length > 0 && (
+                    {/* Per-segment draggable rows (D-13 composite key) */}
+                    {segs.length > 0 && (
                       <div className="ml-3 border-l-2 border-hue-orange/20 flex flex-col gap-0.5 pl-1">
-                        {channels
+                        {segs
                           .slice()
-                          .sort((a, b) => a.start_led - b.start_led)
-                          .map((channel, channelIndex) => {
-                            const assignedTo = wledAssignmentsByChannel[channel.id]
+                          .sort((a, b) => a.seg_index - b.seg_index)
+                          .map((seg) => {
+                            const compositeKey = `${device.id}:${seg.seg_index}`
+                            const assignedTo = wledAssignmentsBySeg[compositeKey]
+                            const displayName = segmentName(seg)
                             return (
                               <div
-                                key={channel.id}
+                                key={compositeKey}
                                 draggable
                                 onDragStart={(e) => {
-                                  e.dataTransfer.setData('wledChannelId', channel.id)
                                   e.dataTransfer.setData('wledDeviceId', device.id)
-                                  e.dataTransfer.setData('wledChannelName', channel.name)
+                                  e.dataTransfer.setData('seg_index', String(seg.seg_index))
+                                  e.dataTransfer.setData('wledSegName', displayName)
                                   e.dataTransfer.setData(
                                     'entertainment_config_id',
                                     selectedConfigId ?? '',
@@ -563,19 +569,19 @@ export function LightPanel({
                                   e.dataTransfer.effectAllowed = 'copy'
                                 }}
                                 className="flex flex-col gap-0.5 rounded-lg px-2.5 py-1.5 border border-white/[0.06] cursor-grab active:opacity-60 hover:bg-white/[0.04] select-none transition-colors"
-                                data-testid={`lightpanel-wled-channel-${channel.id}`}
+                                data-testid={`lightpanel-wled-seg-${device.id}-${seg.seg_index}`}
                               >
                                 <div className="flex items-center gap-2">
                                   <span
                                     className="w-2.5 h-2.5 rounded-full shrink-0"
-                                    style={{ background: channelColor(channelIndex) }}
-                                    data-testid={`lightpanel-wled-chip-${channel.id}`}
+                                    style={{ background: channelColor(seg.seg_index) }}
+                                    data-testid={`lightpanel-wled-chip-${device.id}-${seg.seg_index}`}
                                   />
                                   <span className="text-[11px] font-medium text-foreground/80 truncate flex-1">
-                                    {channel.name}
+                                    {displayName}
                                   </span>
                                   <span className="text-[10px] text-muted-foreground font-mono">
-                                    LEDs {channel.start_led}–{channel.end_led}
+                                    LEDs {seg.start_led}–{seg.stop_led}
                                   </span>
                                 </div>
                                 {assignedTo && (

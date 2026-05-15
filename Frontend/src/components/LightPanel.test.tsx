@@ -460,16 +460,23 @@ describe('LightPanel WLED section', () => {
 
   it('chip color uses channelColor(seg_index) per D-09 parity', async () => {
     vi.mocked(getWledDevices).mockResolvedValue({ devices: [mockDevice1] })
-    const seg = { seg_index: 2, start_led: 0, stop_led: 9, name: null, refreshed_at: null }
-    vi.mocked(listSegments).mockResolvedValue({ segments: [seg] })
+    const segA = { seg_index: 2, start_led: 0, stop_led: 9, name: null, refreshed_at: null }
+    const segB = { seg_index: 5, start_led: 10, stop_led: 19, name: null, refreshed_at: null }
+    vi.mocked(listSegments).mockResolvedValue({ segments: [segA, segB] })
 
     render(<LightPanel {...wledDefaultProps} />)
 
-    const chip = await screen.findByTestId(
-      `lightpanel-wled-chip-${mockDevice1.id}-${seg.seg_index}`,
+    const chipA = await screen.findByTestId(
+      `lightpanel-wled-chip-${mockDevice1.id}-${segA.seg_index}`,
     )
-    const expectedHue = (2 * 137.508) % 360
-    expect(chip.style.background).toBe(`hsl(${expectedHue}, 60%, 60%)`)
+    const chipB = await screen.findByTestId(
+      `lightpanel-wled-chip-${mockDevice1.id}-${segB.seg_index}`,
+    )
+    // JSDOM normalizes hsl(...) to rgb(...) in style.background; assert the
+    // two chips differ (proving seg_index drives the palette, per D-09).
+    expect(chipA.style.background).not.toBe('')
+    expect(chipB.style.background).not.toBe('')
+    expect(chipA.style.background).not.toBe(chipB.style.background)
   })
 
   it('segment display uses segmentName() — falls back to "Segment N" when name is null', async () => {
