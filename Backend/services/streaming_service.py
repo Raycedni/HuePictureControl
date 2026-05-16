@@ -203,6 +203,21 @@ class HueStreamer:
         if self._streaming is None:
             return
 
+        # quick-task 260516-kra: per-frame read of the global brightness
+        # cutoff. 0.0 = disabled (default; byte-identical to pre-feature
+        # path). Read defensively — `_app_state` may be absent in tests
+        # that instantiate HueStreamer directly without going through the
+        # coordinator wiring in main.py.
+        threshold = 0.0
+        app_state = getattr(self, "_app_state", None)
+        if app_state is not None:
+            try:
+                threshold = float(
+                    getattr(app_state, "brightness_cutoff_threshold", 0.0)
+                )
+            except (TypeError, ValueError):
+                threshold = 0.0
+
         # 1. Collect (channel_id, xy, bri) for every channel that has a
         #    matching region gradient. Skip channels with no gradient (same
         #    as the pre-batch behavior).
@@ -226,7 +241,15 @@ class HueStreamer:
             b = int(mean_rgb[2])
             x, y = rgb_to_xy(r, g, b)
             bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
-            if bri < 0.01:
+            # quick-task 260516-kra: brightness cutoff gating. When the
+            # global threshold is > 0 AND this channel's region luma is
+            # below it, force the channel off (bri=0 → b_u16=0 in DTLS).
+            # When threshold == 0.0 the elif branch runs unchanged → the
+            # pre-feature 0.01 dark-scene floor still applies, preserving
+            # byte-identity for default-disabled deployments.
+            if threshold > 0.0 and bri < threshold:
+                bri = 0.0
+            elif bri < 0.01:
                 bri = 0.01  # dark-scene floor
             any_channel = True
 

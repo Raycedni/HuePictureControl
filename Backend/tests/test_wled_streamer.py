@@ -394,3 +394,105 @@ async def test_unassigned_channel_region_id_none_sends_nothing():
             assert q.empty(), "unassigned channel (region_id=None) should not send"
         finally:
             await streamer.stop()
+
+
+# ---------------------------------------------------------------------------
+# quick-task 260516-kra: WLED brightness-cutoff gating
+#
+# Three tests pin the gating contract for WLED:
+#   1. zero_threshold_no_change — threshold==0.0 → bytes identical to the
+#      pre-feature path (a 10% gray gradient still emits 0x19 0x19 0x19
+#      triplets, not zeros).
+#   2. above_threshold_zeros_led_slice — threshold > region luma → the
+#      channel's LEDs are zeroed in the packet body.
+#   3. above_threshold_only_zeros_below_threshold_channels — mixed device
+#      with one dark + one bright channel: dark channel's LEDs go to zero,
+#      bright channel's LEDs keep their RGB (per-channel decision, not
+#      whole-device).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_zero_threshold_no_change():
+    """Cutoff disabled → byte-identical to today's behavior for any region."""
+    from types import SimpleNamespace
+    with udp_listener(port=LOOPBACK_PORT) as q:
+        streamer = WledStreamer(udp_port=LOOPBACK_PORT)
+        streamer._app_state = SimpleNamespace(brightness_cutoff_threshold=0.0)
+        await streamer.start([_row(led_count=10, channels=[
+            {"id": "c1", "region_id": "r1", "start_led": 0, "end_led": 9},
+        ])])
+        try:
+            # Low-luma (≈ 0.098) gray — would be cutoff for any threshold > 0.1
+            await streamer.render({"r1": _gradient(10, [25, 25, 25])})
+            await asyncio.sleep(0.1)
+            pkt = q.get(timeout=1.0)
+            # Body must contain (25, 25, 25) triplets — gating NOT engaged
+            assert pkt.data[0] == 0x02  # DRGB
+            for i in range(10):
+                triplet = pkt.data[2 + i * 3 : 2 + (i + 1) * 3]
+                assert triplet == bytes([25, 25, 25]), (
+                    f"LED {i}: expected (25,25,25), got {tuple(triplet)} "
+                    f"— threshold=0.0 should be byte-identical"
+                )
+        finally:
+            await streamer.stop()
+
+
+@pytest.mark.asyncio
+async def test_render_above_threshold_zeros_led_slice():
+    """threshold > region luma → every LED in that channel's range goes to (0,0,0)."""
+    from types import SimpleNamespace
+    with udp_listener(port=LOOPBACK_PORT) as q:
+        streamer = WledStreamer(udp_port=LOOPBACK_PORT)
+        streamer._app_state = SimpleNamespace(brightness_cutoff_threshold=0.5)
+        await streamer.start([_row(led_count=10, channels=[
+            {"id": "c1", "region_id": "r1", "start_led": 0, "end_led": 9},
+        ])])
+        try:
+            # RGB (76, 76, 76) → luma 76/255 ≈ 0.298, below 0.5
+            await streamer.render({"r1": _gradient(10, [76, 76, 76])})
+            await asyncio.sleep(0.1)
+            pkt = q.get(timeout=1.0)
+            # Body bytes 2..32 are the 10 RGB triplets — all must be zero.
+            assert pkt.data[0] == 0x02  # DRGB
+            assert pkt.data[2:32] == bytes(30), (
+                f"expected all-zero body for below-threshold channel, "
+                f"got {list(pkt.data[2:32])}"
+            )
+        finally:
+            await streamer.stop()
+
+
+@pytest.mark.asyncio
+async def test_render_above_threshold_only_zeros_below_threshold_channels():
+    """Per-channel decision — only the dark channel is zeroed; bright channel keeps RGB."""
+    from types import SimpleNamespace
+    with udp_listener(port=LOOPBACK_PORT) as q:
+        streamer = WledStreamer(udp_port=LOOPBACK_PORT)
+        streamer._app_state = SimpleNamespace(brightness_cutoff_threshold=0.5)
+        await streamer.start([_row(led_count=10, channels=[
+            # LEDs [0..4] driven by rDark (luma ≈ 0.1 — below threshold)
+            {"id": "cA", "region_id": "rDark", "start_led": 0, "end_led": 4},
+            # LEDs [5..9] driven by rBright (luma ≈ 0.8 — above threshold)
+            {"id": "cB", "region_id": "rBright", "start_led": 5, "end_led": 9},
+        ])])
+        try:
+            await streamer.render({
+                "rDark": _gradient(5, [25, 25, 25]),   # luma ≈ 0.098
+                "rBright": _gradient(5, [204, 204, 204]),  # luma ≈ 0.8
+            })
+            await asyncio.sleep(0.1)
+            pkt = q.get(timeout=1.0)
+            body = pkt.data[2:]
+            # LEDs 0..4 must be zero (dark channel below cutoff)
+            assert body[:15] == bytes(15), (
+                f"dark channel LEDs 0..4 should be zeroed, got {list(body[:15])}"
+            )
+            # LEDs 5..9 must carry the bright RGB (above cutoff → unchanged)
+            assert body[15:30] == bytes([204, 204, 204] * 5), (
+                f"bright channel LEDs 5..9 should keep (204,204,204), "
+                f"got {list(body[15:30])}"
+            )
+        finally:
+            await streamer.stop()

@@ -332,6 +332,135 @@ async def test_render_brightness_clamped_for_black(hue_imports):
     assert bri >= 0.01
 
 
+# ---------------------------------------------------------------------------
+# quick-task 260516-kra: brightness-cutoff gating tests
+#
+# Three tests pin the contract:
+#   1. zero_threshold_keeps_existing_floor — feature disabled → 0.01 floor
+#      still applies for black scenes (existing dark-scene protection).
+#   2. above_threshold_zeros_bri_in_batched_packet — when threshold > 0 and
+#      a channel's region luma falls below it, the DTLS record's b_u16 must
+#      encode 0. x/y still come from gamut projection (no x/y mutation).
+#   3. default_byte_identical_for_canonical_frame — pinned-bytes snapshot
+#      proves a refactor cannot drift the threshold==0.0 default path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_zero_threshold_keeps_existing_floor(hue_imports):
+    """When the cutoff is disabled (0.0 / unset) the 0.01 dark-scene floor still applies.
+
+    Two configurations both produce the same floored bri: (a) no app_state
+    attached at all, (b) app_state.brightness_cutoff_threshold = 0.0.
+    """
+    from types import SimpleNamespace
+    HueStreamer, *_ = hue_imports
+
+    # Case (a): no _app_state attribute at all
+    sink = HueStreamer(MagicMock())
+    streaming_mock = MagicMock()
+    sink._streaming = streaming_mock
+    sink._channel_to_region = {0: "rBlack"}
+    region_gradients = {"rBlack": np.zeros((1, 3), dtype=np.uint8)}
+    await sink.render(region_gradients)
+    _, _, bri_a, _ = streaming_mock.set_input.call_args.args[0]
+    assert bri_a >= 0.01, "no app_state → 0.01 floor must still apply"
+
+    # Case (b): _app_state present but threshold = 0.0
+    streaming_mock.reset_mock()
+    sink._app_state = SimpleNamespace(brightness_cutoff_threshold=0.0)
+    await sink.render(region_gradients)
+    _, _, bri_b, _ = streaming_mock.set_input.call_args.args[0]
+    assert bri_b >= 0.01, "threshold=0.0 → 0.01 floor must still apply"
+
+
+@pytest.mark.asyncio
+async def test_render_above_threshold_zeros_bri_in_batched_packet(hue_imports):
+    """threshold > region luma → channel's DTLS record encodes b_u16 == 0.
+
+    Uses the batched-DTLS path (dtls_socket + entertainment_id wired) so we
+    can directly assert the packet bytes. x/y values still come from the
+    standard gamut projection — only brightness is zeroed.
+    """
+    import struct as _struct
+    from types import SimpleNamespace
+    HueStreamer, *_ = hue_imports
+
+    sink = HueStreamer(MagicMock())
+    streaming_mock = MagicMock()
+    sink._streaming = streaming_mock
+    sink._channel_to_region = {0: "rDark"}
+    sink._dtls_socket = MagicMock()
+    sink._entertainment_id_bytes = b"E" * 36
+    sink._app_state = SimpleNamespace(brightness_cutoff_threshold=0.5)
+
+    # RGB (76, 76, 76) → luma = (76 * (0.2126+0.7152+0.0722))/255 = 76/255 ≈ 0.298
+    region_gradients = {"rDark": np.array([[76, 76, 76]], dtype=np.uint8)}
+    await sink.render(region_gradients)
+
+    sent = sink._dtls_socket.send.call_args.args[0]
+    # Header is 52 bytes; channel record is the next 7 bytes
+    record = sent[52:59]
+    ch_id, x_u16, y_u16, b_u16 = _struct.unpack(">BHHH", record)
+    assert ch_id == 0
+    assert b_u16 == 0, f"expected b_u16=0 (cutoff fired); got {b_u16}"
+    # x/y still come from gamut projection — must not be zeroed.
+    # A neutral gray maps to a non-trivial xy near the white point.
+    assert x_u16 > 0, "x_u16 must come from gamut projection, not be zeroed"
+    assert y_u16 > 0, "y_u16 must come from gamut projection, not be zeroed"
+
+
+@pytest.mark.asyncio
+async def test_render_default_byte_identical_for_canonical_frame(hue_imports):
+    """Pinned-bytes snapshot: threshold==0.0 must produce these exact DTLS bytes.
+
+    Canonical fixture:
+      - 3 channels (ids 0, 1, 2) mapped to regions rA, rB, rC
+      - RGB (120, 150, 200), (0, 0, 0), (200, 50, 50)
+      - 36-byte entertainment_id of NUL bytes
+    The pinned hex was captured from this same code path during quick-task
+    260516-kra implementation. If a future refactor drifts the default
+    (threshold==0.0) path even by a single byte, this test fails — exactly
+    the byte-identity guarantee the plan requires.
+    """
+    from types import SimpleNamespace
+    HueStreamer, *_ = hue_imports
+
+    sink = HueStreamer(MagicMock())
+    streaming_mock = MagicMock()
+    sink._streaming = streaming_mock
+    sink._channel_to_region = {0: "rA", 1: "rB", 2: "rC"}
+    sink._dtls_socket = MagicMock()
+    sink._entertainment_id_bytes = b"\x00" * 36
+    sink._app_state = SimpleNamespace(brightness_cutoff_threshold=0.0)
+
+    region_gradients = {
+        "rA": np.array([[120, 150, 200]], dtype=np.uint8),
+        "rB": np.array([[0, 0, 0]], dtype=np.uint8),
+        "rC": np.array([[200, 50, 50]], dtype=np.uint8),
+    }
+    await sink.render(region_gradients)
+
+    sent = sink._dtls_socket.send.call_args.args[0]
+    # Layout: 16-byte header + 36-byte entertainment_id (all zero in this
+    # test) + 3 × 7-byte channel records. Hex captured from this code path
+    # during quick-task 260516-kra implementation; pins byte-identity for
+    # the default (threshold == 0.0) path.
+    expected_hex = (
+        "48756553747265616d02000700000100"  # 16-byte header
+        "000000000000000000000000000000000000000000000000"
+        "000000000000000000000000"                          # 36-byte ent_id
+        "003ac03e4f93ce"        # ch 0: rgb (120,150,200)
+        "01500c5439028f"        # ch 1: rgb (0,0,0) — bri=0.01 (dark-scene floor)
+        "02a8294a855235"        # ch 2: rgb (200,50,50)
+    )
+    assert sent.hex() == expected_hex, (
+        "Default-path bytes drifted! threshold==0.0 must be byte-identical "
+        "to the pre-feature path. Expected:\n"
+        f"  {expected_hex}\nGot:\n  {sent.hex()}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_render_skips_channels_without_region_gradient(hue_imports):
     """If a channel's region_id is missing from region_gradients, skip set_input."""
