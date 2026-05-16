@@ -6,6 +6,7 @@
 // state shape: {device_id, seg_index} | null.
 
 import { useState } from 'react'
+import { BrightnessCutoffControl } from './BrightnessCutoffControl'
 import { WledDevicesPanel } from './WledDevicesPanel'
 import { WledStripPainter } from './WledStripPainter'
 import { WledChannelSidebar } from './WledChannelSidebar'
@@ -40,6 +41,12 @@ export function SettingsPanel({ onClose }: Props) {
             ×
           </button>
         </header>
+        {/* quick-task 260516-kra: global brightness cutoff slider — same
+            component as SettingsPage so changes in either surface persist
+            to the same DB row + app.state field. */}
+        <div className="px-4 pt-3">
+          <BrightnessCutoffControl />
+        </div>
         <div className="flex-1 overflow-auto p-4 flex flex-col md:flex-row gap-4">
           {/* Phase 19.1: paint canvas slot now hosts the read-only strip view + metadata sidebar. */}
           <div className="hidden md:flex md:flex-[6] flex-col gap-3 min-h-[200px]">

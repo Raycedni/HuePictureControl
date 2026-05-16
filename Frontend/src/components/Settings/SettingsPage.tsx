@@ -13,6 +13,7 @@
 // this same wiring (RESEARCH.md Pitfall 6: both surfaces must stay in sync).
 
 import { useState } from 'react'
+import { BrightnessCutoffControl } from './BrightnessCutoffControl'
 import { WledDevicesPanel } from './WledDevicesPanel'
 import { WledStripPainter } from './WledStripPainter'
 import { WledChannelSidebar } from './WledChannelSidebar'
@@ -25,6 +26,10 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col flex-1 min-h-0 p-4 text-left" data-testid="settings-page">
       <h2 className="text-sm font-semibold mb-3">Settings</h2>
+      {/* quick-task 260516-kra: global brightness cutoff slider. */}
+      <div className="mb-3">
+        <BrightnessCutoffControl />
+      </div>
       <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
         {/* Phase 19.1: paint canvas slot now hosts the read-only strip view + metadata sidebar. */}
         <div className="hidden md:flex md:flex-[6] flex-col gap-3 min-h-[200px]">
