@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-05-16
+Last activity: 2026-05-16 - Completed quick task 260516-kra: Add global brightness threshold (Hue+WLED)
 
 ## Performance Metrics
 
@@ -129,6 +129,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260516-iqp | Tier 1 real-time light sync performance pass: batched DTLS, vectorized WLED build, parallel sink render | 2026-05-16 | 48f6482 | [260516-iqp-tier-1-real-time-light-sync-performance-](./quick/260516-iqp-tier-1-real-time-light-sync-performance-/) |
+| 260516-kra | Add global brightness threshold (Hue+WLED) — per-region luma cutoff, default 0.0 disabled | 2026-05-16 | d550877 | [260516-kra-add-global-brightness-threshold-hue-wled](./quick/260516-kra-add-global-brightness-threshold-hue-wled/) |
 
 ## Session Continuity
 
