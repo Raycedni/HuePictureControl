@@ -7,7 +7,7 @@
     "researcher_model": "sonnet",
     "synthesizer_model": "sonnet",
     "roadmapper_model": "sonnet",
-    "_auto_chain_active": true
+    "_auto_chain_active": false
   },
   "preferences": {
     "backend": "python",
