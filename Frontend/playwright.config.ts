@@ -8,7 +8,7 @@ import { defineConfig, devices } from '@playwright/test'
  *
  * Pre-req: backend + frontend dev servers running.
  *   Backend:  uvicorn main:app --reload --port 8000
- *   Frontend: npm run dev   (binds 8091 per CLAUDE.md)
+ *   Frontend: npm run dev   (binds 5173, Vite default)
  */
 export default defineConfig({
   testDir: './e2e',
@@ -18,7 +18,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:8091',
+    baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     actionTimeout: 5_000,

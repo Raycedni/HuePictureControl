@@ -5,6 +5,7 @@ import type { Region } from '@/api/regions'
 import { useRegionStore } from '@/store/useRegionStore'
 import { denormalize, normalize } from '@/utils/geometry'
 import { updateRegion as updateRegionAPI } from '@/api/regions'
+import type { WledSegment } from '@/api/wled'
 
 interface RegionPolygonProps {
   region: Region
@@ -12,6 +13,7 @@ interface RegionPolygonProps {
   stageWidth: number
   stageHeight: number
   color?: string
+  segsByDevice?: Record<string, WledSegment[]>
 }
 
 export function RegionPolygon({
@@ -20,10 +22,12 @@ export function RegionPolygon({
   stageWidth,
   stageHeight,
   color,
+  segsByDevice,
 }: RegionPolygonProps) {
   const setSelectedId = useRegionStore((s) => s.setSelectedId)
   const setDrawingMode = useRegionStore((s) => s.setDrawingMode)
   const updateRegionInStore = useRegionStore((s) => s.updateRegion)
+  const assignments = useRegionStore((s) => s.wledAssignments[region.id]) ?? []
 
   // Local pixel coordinates for immediate visual feedback
   const [localPoints, setLocalPoints] = useState<[number, number][]>(() =>
@@ -248,6 +252,51 @@ export function RegionPolygon({
   const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
   const handleRadius = isTouchDevice ? 12 : 6
 
+  // LED-split dividers — mirrors Backend/services/color_math.py sub_sample_gradient:
+  // sample centers at t=i/(N-1) along the bbox-longest axis (or the explicit
+  // orientation). Boundary between LED i and i+1 sits at the midpoint
+  // t=(i+0.5)/(N-1), giving N-1 divider lines for an N-LED segment.
+  let dividerLines: Array<[number, number, number, number]> = []
+  if (assignments.length > 0 && segsByDevice) {
+    let n = 0
+    for (const a of assignments) {
+      const seg = (segsByDevice[a.wled_device_id] ?? []).find(
+        (s) => s.seg_index === a.seg_index,
+      )
+      if (!seg) continue
+      const len = seg.stop_led - seg.start_led + 1
+      if (len > n) n = len
+    }
+    if (n >= 2) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const [x, y] of localPoints) {
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+      const w = maxX - minX
+      const h = maxY - minY
+      const orientation = assignments[0]?.orientation ?? 'auto'
+      const axisX =
+        orientation === 'horizontal-LTR' || orientation === 'horizontal-RTL'
+          ? true
+          : orientation === 'vertical-TTB' || orientation === 'vertical-BTT'
+            ? false
+            : w >= h
+      for (let i = 0; i < n - 1; i++) {
+        const t = (i + 0.5) / (n - 1)
+        if (axisX) {
+          const x = minX + t * w
+          dividerLines.push([x, minY, x, maxY])
+        } else {
+          const y = minY + t * h
+          dividerLines.push([minX, y, maxX, y])
+        }
+      }
+    }
+  }
+
   return (
     <Group
       draggable={isSelected}
@@ -264,6 +313,30 @@ export function RegionPolygon({
         strokeWidth={2}
         listening
       />
+      {dividerLines.length > 0 && (
+        <Group
+          listening={false}
+          clipFunc={(ctx) => {
+            if (localPoints.length === 0) return
+            ctx.beginPath()
+            ctx.moveTo(localPoints[0][0], localPoints[0][1])
+            for (let i = 1; i < localPoints.length; i++) {
+              ctx.lineTo(localPoints[i][0], localPoints[i][1])
+            }
+            ctx.closePath()
+          }}
+        >
+          {dividerLines.map(([x1, y1, x2, y2], i) => (
+            <Line
+              key={i}
+              points={[x1, y1, x2, y2]}
+              stroke="rgba(255,255,255,0.7)"
+              strokeWidth={1}
+              listening={false}
+            />
+          ))}
+        </Group>
+      )}
       <Text
         x={cx - 50}
         y={cy - 8}

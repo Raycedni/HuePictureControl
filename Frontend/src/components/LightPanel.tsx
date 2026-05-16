@@ -562,6 +562,7 @@ export function LightPanel({
                                   e.dataTransfer.setData('wledDeviceId', device.id)
                                   e.dataTransfer.setData('seg_index', String(seg.seg_index))
                                   e.dataTransfer.setData('wledSegName', displayName)
+                                  e.dataTransfer.setData('wledDeviceName', device.name)
                                   e.dataTransfer.setData(
                                     'entertainment_config_id',
                                     selectedConfigId ?? '',

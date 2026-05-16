@@ -262,6 +262,8 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
     if (wledDeviceId) {
       const segIndexStr = e.dataTransfer.getData('seg_index')
       const entertainmentConfigId = e.dataTransfer.getData('entertainment_config_id')
+      const wledDeviceName = e.dataTransfer.getData('wledDeviceName')
+      const wledSegName = e.dataTransfer.getData('wledSegName')
       if (!segIndexStr || !entertainmentConfigId) {
         console.error('WLED drop missing seg_index or entertainment_config_id')
         return
@@ -289,6 +291,22 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
           seg_index: segIndex,
           entertainment_config_id: entertainmentConfigId,
         })
+        // Rename the region to "[DEVICE] - [SEGMENT]" so the canvas label and
+        // LightPanel WLED chips reflect the assignment without a page reload.
+        // Mutating region.name also bumps the regions array reference, which
+        // re-fires the LightPanel hydration effect that builds the
+        // wledAssignmentsBySeg map.
+        if (wledDeviceName && wledSegName) {
+          const newName = `${wledDeviceName} - ${wledSegName}`
+          if (newName !== hit.name) {
+            try {
+              await updateRegionAPI(hit.id, { name: newName })
+              updateRegionInStore(hit.id, { name: newName })
+            } catch (err) {
+              console.error('Failed to rename region after WLED assignment:', err)
+            }
+          }
+        }
         // Refresh assignments + surface the popover for the dropped-on region.
         const resp = await listWledAssignments(entertainmentConfigId)
         const byRegion: Record<string, WledAssignment[]> = {}
@@ -382,6 +400,7 @@ export function EditorCanvas({ width, height, onDeleteRequest, device, previewEn
               isSelected={region.id === selectedId}
               stageWidth={width}
               stageHeight={height}
+              segsByDevice={segsByDevice}
             />
           ))}
 

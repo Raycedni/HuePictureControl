@@ -113,8 +113,13 @@ export function RegionOrientationPopover({
   return (
     <Popover.Root
       open={open}
-      onOpenChange={(o) => {
-        if (!o) setSelectedId(null)
+      onOpenChange={() => {
+        // Selection is owned by the canvas. The popover purely follows
+        // selectedId — it does NOT clear it on outside-click, because Base UI
+        // fires onOpenChange(false) for every click outside the popup
+        // (including clicks landing on another region), which would race
+        // RegionPolygon's onClick and clobber the new selection. The explicit
+        // × button below calls setSelectedId(null) directly.
       }}
     >
       <Popover.Portal>
@@ -162,12 +167,14 @@ export function RegionOrientationPopover({
                   </>
                 )}
               </h4>
-              <Popover.Close
+              <button
+                type="button"
                 aria-label="Close orientation panel"
+                onClick={() => setSelectedId(null)}
                 className="text-muted-foreground hover:text-foreground text-base leading-none"
               >
                 ×
-              </Popover.Close>
+              </button>
             </div>
 
             {assignments.length === 0 ? (

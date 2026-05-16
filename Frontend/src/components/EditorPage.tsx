@@ -99,6 +99,7 @@ export function EditorPage() {
             onDeleteRequest={handleEditorDelete}
             device={selectedDevice}
             previewEnabled={previewEnabled}
+            selectedConfigId={selectedConfigId}
           />
         </div>
       </div>
