@@ -12,7 +12,7 @@ Argument: `$ARGUMENTS` (default: all tabs).
 
 ## Steps
 
-1. Navigate to `http://localhost:8091`
+1. Navigate to `http://localhost:5173`
 2. Take a screenshot of the current tab (Setup)
 3. Click the **Preview** tab, wait for content to load, take a screenshot
 4. Click the **Editor** tab, wait for content to load, take a screenshot
@@ -30,4 +30,4 @@ Use `mcp__playwright__browser_snapshot` to get element refs, then `mcp__playwrig
 ## Output
 For each tab, report what you see and flag anything that looks broken (missing elements, error messages, blank sections that shouldn't be blank). Include screenshots in your response.
 
-If the frontend isn't running on :8091, try :5173 (dev server). Suggest `docker compose up -d` or `cd Frontend && npm run dev`.
+If the frontend isn't running on :5173, suggest `cd Frontend && npm run dev`.

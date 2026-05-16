@@ -20,7 +20,7 @@ The fastest way to get running. Works on Linux and WSL2.
 docker compose up -d
 ```
 
-- Frontend: http://localhost:8091
+- Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
 - Health check: http://localhost:8000/api/health
 

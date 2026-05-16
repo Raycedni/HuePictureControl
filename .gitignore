@@ -9,3 +9,4 @@
 /.claude/vm-exec.sh
 /.claude/proxmox access.txt
 /.claude/vm-run.sh
+/node_modules/

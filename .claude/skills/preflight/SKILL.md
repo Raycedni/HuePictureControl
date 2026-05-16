@@ -23,7 +23,7 @@ Check API endpoints:
 If backend is not running, skip and note it.
 
 ### Phase 3: Visual Verification (only if frontend is running)
-Use Playwright MCP to navigate to http://localhost:8091 and screenshot each tab.
+Use Playwright MCP to navigate to http://localhost:5173 and screenshot each tab.
 If frontend is not running, skip and note it.
 
 ## Output Format

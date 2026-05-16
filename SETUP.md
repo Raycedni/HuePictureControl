@@ -11,7 +11,7 @@
 1. Clone the repository
 2. Attach your USB capture card (see WSL2 section below if on Windows)
 3. Start the stack: `docker compose up -d`
-4. Visit http://localhost:8091 to open the web UI
+4. Visit http://localhost:5173 to open the web UI
 5. Backend API is available at http://localhost:8001
 
 ## Multi-Device Passthrough
@@ -138,7 +138,7 @@ ls /dev/video*
 # Expected: /dev/video0  /dev/video2  (paths may differ)
 ```
 
-Both devices should appear in the camera selector dropdown in the web UI at http://localhost:8091.
+Both devices should appear in the camera selector dropdown in the web UI at http://localhost:5173.
 
 ## Common Gotchas
 

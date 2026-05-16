@@ -37,7 +37,7 @@ curl -sf http://localhost:8000/api/regions
 
 ### 6. Frontend Dev Server
 ```bash
-curl -sf -o /dev/null -w "%{http_code}" http://localhost:8091
+curl -sf -o /dev/null -w "%{http_code}" http://localhost:5173
 ```
 
 ### 7. WebSocket Status Endpoint

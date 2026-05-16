@@ -23,7 +23,7 @@ docker compose up -d
 
 ## Dev Servers
 - Backend: http://localhost:8000 (runs via Docker or `uvicorn main:app --reload --port 8000`)
-- Frontend: http://localhost:8091 (`npm run dev` in Frontend/)
+- Frontend: http://localhost:5173 (`npm run dev` in Frontend/)
 - Backend health: `curl http://localhost:8000/api/health`
 
 ## Key API Endpoints
@@ -53,7 +53,7 @@ Before making changes, verify:
 1. `python -m pytest` — all backend tests pass (167+)
 2. `npx vitest run` — all frontend tests pass (30+)
 3. `curl localhost:8000/api/health` — backend is reachable
-4. Use Playwright MCP to visually verify frontend changes at http://localhost:8091
+4. Use Playwright MCP to visually verify frontend changes at http://localhost:5173
 
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
