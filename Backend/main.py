@@ -13,6 +13,7 @@ from routers.health import router as health_router
 from routers.hue import router as hue_router
 from routers.preview_ws import router as preview_ws_router
 from routers.regions import router as regions_router
+from routers.settings import router as settings_router
 from routers.streaming_ws import router as streaming_ws_router
 from routers.wled import router as wled_router
 from services.capture_service import CaptureRegistry
@@ -27,6 +28,28 @@ async def lifespan(app: FastAPI):
     # Startup: open DB connection and initialize schema
     db = await init_db(DATABASE_PATH)
     app.state.db = db
+
+    # quick-task 260516-kra: hydrate live brightness cutoff from DB so the
+    # streamers pick it up on first frame after startup. Default 0.0 (disabled
+    # → byte-identical to pre-feature behavior). Defensive try/except: the
+    # settings table is always created by init_db on this code path, but a
+    # stale DB image without it should still boot cleanly.
+    app.state.brightness_cutoff_threshold = 0.0
+    try:
+        async with db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("brightness_cutoff_threshold",),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            try:
+                app.state.brightness_cutoff_threshold = float(row["value"])
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        # settings table may not exist if init_db ran against a stale DB image —
+        # safe default already set above.
+        pass
 
     # Startup: purge regions smaller than MIN_REGION_AREA
     from routers.regions import MIN_REGION_AREA, polygon_area
@@ -51,7 +74,12 @@ async def lifespan(app: FastAPI):
     broadcaster = StatusBroadcaster()
     app.state.broadcaster = broadcaster
 
-    coordinator = StreamingCoordinator(db=db, capture_registry=registry, broadcaster=broadcaster)
+    coordinator = StreamingCoordinator(
+        db=db,
+        capture_registry=registry,
+        broadcaster=broadcaster,
+        app_state=app.state,
+    )
     app.state.coordinator = coordinator
 
     yield
@@ -82,6 +110,7 @@ app.include_router(capture_router)
 app.include_router(cameras_router)
 app.include_router(wled_router)
 app.include_router(regions_router)
+app.include_router(settings_router)
 app.include_router(streaming_ws_router)
 app.include_router(preview_ws_router)
 

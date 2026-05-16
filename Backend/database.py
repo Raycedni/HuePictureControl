@@ -89,6 +89,21 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
             updated_at TEXT NOT NULL
         )
     """)
+    # quick-task 260516-kra: global KV settings table. Same idempotent
+    # CREATE/INSERT-OR-IGNORE pattern bridge_config / known_cameras use; NOT
+    # the PRAGMA user_version guard (that one is reserved for Phase 19.1
+    # schema upgrades). On a fresh DB the INSERT seeds the default 0.0; on
+    # an upgrade the INSERT OR IGNORE keeps the user's persisted value.
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    await db.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ("brightness_cutoff_threshold", "0.0"),
+    )
     # Phase 17 D-07: WLED device table. wled_devices stays (Phase 19.1 keeps it
     # unchanged). The Phase 17 wled_channels + Phase 17/19 wled_light_assignments
     # are dropped + rewritten below under the PRAGMA user_version guard (D-20).

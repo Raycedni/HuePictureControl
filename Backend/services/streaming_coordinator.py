@@ -59,6 +59,7 @@ class StreamingCoordinator:
         broadcaster,
         hue_streamer=None,
         wled_streamer=None,
+        app_state=None,
     ) -> None:
         self._db = db
         self._capture_registry = capture_registry
@@ -78,6 +79,24 @@ class StreamingCoordinator:
         # health_snapshot. The streamer is started inside _run_loop with the
         # device_rows produced by _load_wled_device_rows.
         self._wled = wled_streamer if wled_streamer is not None else WledStreamer()
+        # quick-task 260516-kra: per-frame brightness cutoff. The streamers
+        # read `app_state.brightness_cutoff_threshold` on every render() call
+        # so PUT /api/settings/brightness_cutoff_threshold takes effect on
+        # the next frame WITHOUT a stream restart. Attribute is set on the
+        # sink instance AFTER construction so MagicMock injections in
+        # test_streaming_coordinator.py (which don't accept an app_state
+        # kwarg) keep working — sinks read `_app_state` defensively via
+        # getattr() inside render().
+        self._app_state = app_state
+        if app_state is not None:
+            try:
+                self._hue._app_state = app_state
+            except (AttributeError, TypeError):
+                pass
+            try:
+                self._wled._app_state = app_state
+            except (AttributeError, TypeError):
+                pass
         self._run_event: asyncio.Event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._state: str = "idle"
