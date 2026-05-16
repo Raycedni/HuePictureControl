@@ -124,6 +124,143 @@ def rgb_to_xy(r: int, g: int, b: int) -> tuple[float, float]:
     return round(cx, 4), round(cy, 4)
 
 
+# ---------------------------------------------------------------------------
+# Vectorized rgb_to_xy + bri (quick-task 260516-iqp)
+# ---------------------------------------------------------------------------
+# Wide-RGB D65 matrix (same numbers as scalar rgb_to_xy) — kept module-level
+# so rgb_to_xy_batch's matmul reads from a pre-built array on each call.
+_WIDE_RGB_D65 = np.array(
+    [
+        [0.649926, 0.103455, 0.197109],
+        [0.234327, 0.743075, 0.022598],
+        [0.0,      0.053077, 1.035763],
+    ],
+    dtype=np.float32,
+)
+
+# Gamut C vertices in the order [R, G, B] so vectorized barycentric tests
+# can broadcast across N input pixels.
+_GAMUT_C_VERTS = np.array(
+    [GAMUT_C["red"], GAMUT_C["green"], GAMUT_C["blue"]],
+    dtype=np.float32,
+)
+
+# Rec. 709 luma coefficients used by HueStreamer for the per-channel bri.
+# float64 so the 0.01 dark-scene floor is represented exactly — float32's
+# round-off would emit 0.009999... and break HueStreamer's `bri >= 0.01`
+# contract (see test_render_brightness_clamped_for_black).
+_REC709_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
+_BRI_FLOOR = np.float64(0.01)
+
+# D65 white-point fallback for black input (matches scalar rgb_to_xy).
+_D65_XY = np.array([0.3127, 0.3290], dtype=np.float32)
+
+
+def _gamma_expand(values: np.ndarray) -> np.ndarray:
+    """sRGB → linear vectorized. Matches the scalar piecewise definition."""
+    threshold = 0.04045
+    high = ((values + 0.055) / 1.055) ** 2.4
+    low = values / 12.92
+    return np.where(values > threshold, high, low).astype(np.float32, copy=False)
+
+
+def _clamp_to_gamut_batch(points: np.ndarray) -> np.ndarray:
+    """Project each (cx, cy) outside Gamut C to its nearest triangle edge.
+
+    Mirrors the scalar _closest_point_on_segment / _clamp_to_gamut combo
+    but vectorized over N points. Returns an (N, 2) array.
+    """
+    r, g, b = _GAMUT_C_VERTS[0], _GAMUT_C_VERTS[1], _GAMUT_C_VERTS[2]
+    edges = [(r, g), (g, b), (b, r)]
+    candidates = np.empty((len(edges), points.shape[0], 2), dtype=np.float32)
+    for i, (a, c) in enumerate(edges):
+        ac = c - a
+        ap = points - a
+        denom = float(ac[0] ** 2 + ac[1] ** 2) + 1e-10
+        t = (ap[:, 0] * ac[0] + ap[:, 1] * ac[1]) / denom
+        t = np.clip(t, 0.0, 1.0)
+        candidates[i, :, 0] = a[0] + t * ac[0]
+        candidates[i, :, 1] = a[1] + t * ac[1]
+    # Pick the closest of the three projections per point.
+    deltas = candidates - points[np.newaxis, :, :]
+    sq_dist = (deltas ** 2).sum(axis=2)         # (3, N)
+    best_idx = np.argmin(sq_dist, axis=0)        # (N,)
+    n = points.shape[0]
+    return candidates[best_idx, np.arange(n), :]
+
+
+def rgb_to_xy_batch(
+    rgb: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorized sRGB→xy + Rec. 709 bri for an (N, 3) RGB array.
+
+    Quick-task 260516-iqp: replaces the per-channel scalar ``rgb_to_xy`` +
+    Python luma compute that HueStreamer ran in a Python for-loop per
+    frame. Single numpy pipeline:
+
+        normalize → gamma expand → matmul XYZ → xy chromaticity →
+        Gamut C in-gamut test + per-row segment-projection clamp →
+        round to 4 decimals (same precision the scalar path emitted).
+
+    Args:
+        rgb: shape (N, 3), dtype convertible to float32. Values in [0, 255]
+            (uint8 frame means or float means produced by gradient.mean).
+
+    Returns:
+        xy:  shape (N, 2), float32, rounded to 4 decimals.
+        bri: shape (N,),   float32, Rec. 709 luma / 255 with the same
+             0.01 dark-scene floor HueStreamer applied scalar-wise.
+    """
+    arr = np.asarray(rgb, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr[np.newaxis, :]
+    if arr.shape[-1] != 3:
+        raise ValueError(f"rgb_to_xy_batch expects (..., 3) array; got {arr.shape}")
+
+    normalized = arr / np.float32(255.0)
+    linear = _gamma_expand(normalized)
+    # XYZ = linear @ M.T (per-row matrix multiply with our row vectors).
+    xyz = linear @ _WIDE_RGB_D65.T  # (N, 3)
+    denom = xyz.sum(axis=1)
+    # Black-input mask: matches scalar guard `denom < 1e-10`.
+    black = denom < 1e-10
+    safe_denom = np.where(black, np.float32(1.0), denom)
+    xy = xyz[:, :2] / safe_denom[:, np.newaxis]
+
+    # In-gamut barycentric test (same triangle vertices as scalar path).
+    r, g, b = _GAMUT_C_VERTS[0], _GAMUT_C_VERTS[1], _GAMUT_C_VERTS[2]
+    v0 = g - r
+    v1 = b - r
+    v2 = xy - r
+    dot00 = float(v0 @ v0)
+    dot01 = float(v0 @ v1)
+    dot11 = float(v1 @ v1)
+    dot02 = v2 @ v0
+    dot12 = v2 @ v1
+    inv = 1.0 / (dot00 * dot11 - dot01 * dot01 + 1e-10)
+    u = (dot11 * dot02 - dot01 * dot12) * inv
+    v = (dot00 * dot12 - dot01 * dot02) * inv
+    inside = (u >= 0) & (v >= 0) & ((u + v) <= 1)
+    outside = ~inside
+    if outside.any():
+        xy[outside] = _clamp_to_gamut_batch(xy[outside])
+
+    # Black input overrides clamp result with D65 white point.
+    if black.any():
+        xy[black] = _D65_XY
+
+    # Match scalar 4-decimal rounding so test parity holds.
+    xy = np.round(xy, 4)
+
+    # Rec. 709 luma / 255, with the dark-scene floor applied per row.
+    # float64 throughout so the 0.01 floor is exact (float32 round-off
+    # would round it to ~0.0099999998 and break the >= 0.01 contract).
+    bri = (arr.astype(np.float64) @ _REC709_LUMA) / 255.0
+    bri = np.maximum(bri, _BRI_FLOOR)
+
+    return xy.astype(np.float32, copy=False), bri
+
+
 @dataclass
 class RegionMask:
     """Pre-computed mask with bounding box for fast ROI-cropped color extraction."""
@@ -270,26 +407,69 @@ def sub_sample_gradient(
         reverse = True
     else:
         raise ValueError(f"Unknown orientation: {orientation!r}")
-    roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
 
+    # Quick-task 260516-iqp: replace the N×cv2.mean Python loop with a
+    # single per-region reduction along the long axis. Strategy:
+    #   1. Zero out unmasked pixels in the ROI once.
+    #   2. Reduce to per-axis (column or row) sums + per-axis pixel counts.
+    #   3. Use a prefix-sum trick to compute every 3-wide slab sum/count in
+    #      one vectorized lookup — bit-exact match to the old loop's
+    #      cv2.mean(slab, mask=slab_mask) → int() conversion.
+    roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
+    roi_mask_bool = region.roi_mask > 0
+
+    # Masked frame: unmasked pixels contribute zero to the sums.
+    masked = np.where(
+        roi_mask_bool[:, :, np.newaxis],
+        roi_frame,
+        np.zeros_like(roi_frame),
+    ).astype(np.int64, copy=False)
+
+    if axis_x:
+        axis_len = width
+        # Per-column (BGR) sums + per-column masked-pixel counts.
+        axis_sums = masked.sum(axis=0)                          # (W, 3)
+        axis_counts = roi_mask_bool.sum(axis=0).astype(np.int64)  # (W,)
+        centers = np.round(
+            np.linspace(0.0, axis_len - 1, n_effective)
+        ).astype(np.int64)
+    else:
+        axis_len = height
+        axis_sums = masked.sum(axis=1)                          # (H, 3)
+        axis_counts = roi_mask_bool.sum(axis=1).astype(np.int64)  # (H,)
+        centers = np.round(
+            np.linspace(0.0, axis_len - 1, n_effective)
+        ).astype(np.int64)
+
+    # Prefix sums so each slab's sum is a single subtraction.
+    cum_sums = np.concatenate(
+        [np.zeros((1, 3), dtype=np.int64), axis_sums.cumsum(axis=0)],
+        axis=0,
+    )
+    cum_counts = np.concatenate(
+        [np.zeros(1, dtype=np.int64), axis_counts.cumsum()],
+    )
+
+    slab_lo = np.maximum(centers - 1, 0)
+    slab_hi = np.minimum(centers + 2, axis_len)
+
+    slab_sums = cum_sums[slab_hi] - cum_sums[slab_lo]            # (N, 3)
+    slab_counts = cum_counts[slab_hi] - cum_counts[slab_lo]      # (N,)
+
+    # Divide where slab has any masked pixels; zero otherwise (matches
+    # cv2.mean's all-masked-out behavior which returns 0 for each channel).
+    safe = slab_counts > 0
+    slab_means_bgr = np.zeros((n_effective, 3), dtype=np.float64)
+    if safe.any():
+        slab_means_bgr[safe] = slab_sums[safe] / slab_counts[safe, None]
+
+    # BGR → RGB via channel reversal; truncate to uint8 (same as
+    # the old `int(mean_bgr[...])` cast, which rounded toward zero).
     means = np.empty((n_effective, 3), dtype=np.uint8)
-    for i in range(n_effective):
-        t = i / (n_effective - 1) if n_effective > 1 else 0.0
-        if axis_x:
-            col_center = int(round(t * (width - 1)))
-            slab_x1 = max(col_center - 1, 0)
-            slab_x2 = min(col_center + 2, width)
-            slab_frame = roi_frame[:, slab_x1:slab_x2]
-            slab_mask = region.roi_mask[:, slab_x1:slab_x2]
-        else:
-            row_center = int(round(t * (height - 1)))
-            slab_y1 = max(row_center - 1, 0)
-            slab_y2 = min(row_center + 2, height)
-            slab_frame = roi_frame[slab_y1:slab_y2, :]
-            slab_mask = region.roi_mask[slab_y1:slab_y2, :]
-        mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
-        # cv2.mean returns BGR; convert to RGB for output
-        means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
+    means[:, 0] = slab_means_bgr[:, 2].astype(np.uint8, copy=False)
+    means[:, 1] = slab_means_bgr[:, 1].astype(np.uint8, copy=False)
+    means[:, 2] = slab_means_bgr[:, 0].astype(np.uint8, copy=False)
+
     if reverse:
         means = means[::-1]
     return means

@@ -371,19 +371,111 @@ async def test_render_averages_n_sample_gradient(hue_imports):
     await sink.render(region_gradients)
 
     streaming_mock.set_input.assert_called_once()
-    # If we monkeypatch rgb_to_xy we can assert the exact RGB seen.
-    # Easier: re-run with rgb_to_xy patched to identity capture.
+    # Quick-task 260516-iqp: render() now batches all channels through
+    # rgb_to_xy_batch instead of calling scalar rgb_to_xy per channel.
+    # Capture the (N, 3) RGB array reaching the batch function to verify
+    # the gradient mean was computed correctly (collapse axis=0 → (50,100,150)).
     captured: list = []
     streaming_mock.set_input.reset_mock()
 
-    def _capture_rgb(r, g, b):
-        captured.append((r, g, b))
-        return (0.3, 0.3)
+    def _capture_batch(rgb_arr):
+        captured.append(np.asarray(rgb_arr).copy())
+        n = np.asarray(rgb_arr).shape[0]
+        return (
+            np.tile(np.array([0.3, 0.3], dtype=np.float32), (n, 1)),
+            np.full(n, 0.5, dtype=np.float64),
+        )
 
-    with patch("services.streaming_service.rgb_to_xy", side_effect=_capture_rgb):
+    with patch(
+        "services.streaming_service.rgb_to_xy_batch", side_effect=_capture_batch
+    ):
         await sink.render(region_gradients)
 
-    assert captured == [(50, 100, 150)]
+    assert len(captured) == 1
+    np.testing.assert_allclose(captured[0], [[50.0, 100.0, 150.0]], rtol=0, atol=0)
+
+
+# ---------------------------------------------------------------------------
+# Batched DTLS packet tests (quick-task 260516-iqp)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_sends_one_batched_dtls_packet_for_all_channels(hue_imports):
+    """When the DTLS socket is captured, render emits ONE packet for N channels."""
+    import struct
+
+    HueStreamer, *_ = hue_imports
+
+    sink = HueStreamer(MagicMock())
+    streaming_mock = MagicMock()
+    sink._streaming = streaming_mock
+    # Three channels mapped to the same region — pre-batch code emitted three
+    # DTLS packets; post-batch should emit exactly one.
+    sink._channel_to_region = {0: "rA", 1: "rA", 2: "rA"}
+
+    # Wire up the batched-send path: DTLS socket captured + entertainment_id.
+    dtls_sock = MagicMock()
+    sink._dtls_socket = dtls_sock
+    sink._entertainment_id_bytes = b"x" * 36  # 36-byte UUID placeholder
+
+    region_gradients = {"rA": np.array([[100, 150, 200]], dtype=np.uint8)}
+    await sink.render(region_gradients)
+
+    # Exactly one DTLS send per frame, regardless of channel count.
+    assert dtls_sock.send.call_count == 1
+    # No pykit queue/thread fan-out — set_input must NOT be called when the
+    # batched path is active.
+    streaming_mock.set_input.assert_not_called()
+
+    sent_bytes = dtls_sock.send.call_args.args[0]
+    # Header layout per pykit StreamingService._build_message:
+    #   HueStream(9) + v2(2) + seq(1) + reserved(2) + color_space(1) +
+    #   reserved2(1) + entertainment_id(36) = 52 bytes header
+    assert sent_bytes[:9] == b"HueStream"
+    assert sent_bytes[9:11] == b"\x02\x00"           # version 2.0
+    assert sent_bytes[11:12] == b"\x07"               # seq id
+    assert sent_bytes[12:14] == b"\x00\x00"           # reserved
+    assert sent_bytes[14:15] == b"\x01"               # color space = xyb
+    assert sent_bytes[15:16] == b"\x00"               # reserved2
+    assert sent_bytes[16:52] == b"x" * 36             # entertainment_id
+
+    body = sent_bytes[52:]
+    # Three 7-byte channel records, one per channel.
+    assert len(body) == 7 * 3
+    for i in range(3):
+        record = body[i * 7 : (i + 1) * 7]
+        ch_id, x_u16, y_u16, b_u16 = struct.unpack(">BHHH", record)
+        assert ch_id == i
+        # x, y, b are uint16 scaled from [0, 1] floats — bounds check.
+        assert 0 <= x_u16 <= 65535
+        assert 0 <= y_u16 <= 65535
+        assert 0 <= b_u16 <= 65535
+
+    # pykit's keep-alive thread re-sends self._last_message during idle gaps;
+    # our render must update it so keep-alive ships the latest frame.
+    assert streaming_mock._last_message == sent_bytes
+
+
+@pytest.mark.asyncio
+async def test_render_falls_back_to_set_input_when_dtls_socket_missing(hue_imports):
+    """If pykit internals were mocked away (no DTLS socket), keep the set_input path.
+
+    This preserves backwards compatibility with existing tests that mock
+    self._streaming without wiring up the DTLS socket.
+    """
+    HueStreamer, *_ = hue_imports
+
+    sink = HueStreamer(MagicMock())
+    streaming_mock = MagicMock()
+    sink._streaming = streaming_mock
+    sink._channel_to_region = {0: "rA"}
+    # _dtls_socket stays None — fallback engages.
+
+    region_gradients = {"rA": np.array([[100, 150, 200]], dtype=np.uint8)}
+    await sink.render(region_gradients)
+
+    streaming_mock.set_input.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

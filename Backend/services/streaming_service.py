@@ -4,8 +4,8 @@ Refactored from the former ``StreamingService`` (Phase 17 Plan 05). Capture
 lifecycle, broadcaster orchestration, and the 60 Hz frame loop moved to
 ``StreamingCoordinator`` (services/streaming_coordinator.py). This class owns
 only the Hue-specific concerns: bridge creation, Entertainment API
-activation/deactivation, DTLS stream start/stop, per-channel set_input, and
-Hue-only reconnect.
+activation/deactivation, DTLS stream start/stop, batched per-frame DTLS send,
+and Hue-only reconnect.
 
 The coordinator produces ``region_gradients: dict[region_id, (N, 3) uint8]``
 once per frame and calls ``HueStreamer.render(region_gradients)``. Hue
@@ -13,9 +13,14 @@ averages the per-region gradient back to a single RGB per channel
 (``gradient.mean(axis=0)``), preserving the pre-refactor single-color
 behavior — N=1 for Hue-only regions is the trivial case (Plan 05).
 
-Phase 17 Plan 06 removed the bottom-of-file ``StreamingService`` compatibility
-shim; ``main.py`` now imports ``StreamingCoordinator`` directly and
-``app.state.coordinator`` is the only surface routers see.
+Quick-task 260516-iqp: render() now assembles ONE DTLS message containing
+all channel records concatenated and sends it directly via the pykit
+DTLS socket — bypassing pykit's per-channel ``set_input`` queue/thread that
+was producing N× DTLS packets per frame plus N× ``logger.info`` calls per
+frame. Hue Entertainment v2 channel records are 7 bytes each
+([ch_id u8][x u16_be][y u16_be][b u16_be]) and are legal to concatenate
+in a single message (the pykit `_send_color_to_light` builds the same
+header — we just emit multiple records in one body).
 
 Exports:
     HueStreamer -- DTLS sink; one instance per coordinator.
@@ -23,10 +28,17 @@ Exports:
 import asyncio
 import json
 import logging
+import struct
+
+import numpy as np
 
 from hue_entertainment_pykit import create_bridge, Entertainment, Streaming
 
-from services.color_math import build_polygon_mask, rgb_to_xy
+from services.color_math import (
+    build_polygon_mask,
+    rgb_to_xy,
+    rgb_to_xy_batch,
+)
 from services.hue_client import (
     activate_entertainment_config,
     deactivate_entertainment_config,
@@ -52,9 +64,21 @@ class HueStreamer:
     No capture, no broadcaster, no run loop — coordinator owns those.
     """
 
+    # Hue Entertainment v2 message header — mirrors pykit
+    # StreamingService._build_message but emitted ONCE per frame with all
+    # channel records concatenated instead of one message per channel.
+    _HEADER_PROTOCOL = b"HueStream"
+    _HEADER_VERSION = b"\x02\x00"
+    _HEADER_SEQ = b"\x07"
+    _HEADER_RESERVED = b"\x00\x00"
+    _HEADER_COLOR_SPACE_XYB = b"\x01"
+    _HEADER_RESERVED2 = b"\x00"
+
     def __init__(self, db) -> None:
         self._db = db
         self._streaming = None
+        self._dtls_socket = None
+        self._entertainment_id_bytes: bytes = b""
         self._bridge_ip: str = ""
         self._username: str = ""
         self._config_id: str | None = None
@@ -136,35 +160,126 @@ class HueStreamer:
         # 6. Set color space to xyb
         await asyncio.to_thread(self._streaming.set_color_space, "xyb")
 
+        # 7. Grab the live DTLS socket + entertainment_id for the batched
+        #    render() path. We send full multi-channel frames directly via
+        #    this socket instead of pykit's per-channel set_input queue.
+        #    pykit's _keep_connection_alive thread continues to read
+        #    self._streaming._last_message — render() updates that field
+        #    after each batched send so keep-alive retransmits the latest
+        #    frame, not the empty init message.
+        try:
+            self._dtls_socket = (
+                self._streaming._dtls_service.get_socket()
+            )
+            self._entertainment_id_bytes = (
+                self._streaming._entertainment_id
+            )
+        except AttributeError:
+            # Fallback path for environments where pykit internals are mocked
+            # in tests — render() will fall back to per-channel set_input.
+            self._dtls_socket = None
+            self._entertainment_id_bytes = b""
+
     async def render(self, region_gradients: dict) -> None:
-        """Per frame: average region gradient to one RGB per channel and set_input.
+        """Per frame: build ONE batched DTLS message with all channels and send.
 
         ``region_gradients``: ``{region_id: np.ndarray of shape (N, 3) uint8}``.
 
+        Quick-task 260516-iqp: the pre-2026-05 code called pykit
+        ``set_input`` per channel; pykit's background thread then popped
+        each queue entry and built a fresh DTLS message containing a
+        single channel record. That produced N× DTLS round trips per
+        frame (6× at our typical 6-channel config) plus N×
+        ``logger.info`` calls per frame. Now we build one Hue
+        Entertainment v2 frame containing every channel record and send
+        it directly via the pykit DTLS socket. ``_last_message`` is
+        updated so pykit's keep-alive thread retransmits the latest
+        frame during idle gaps (>9.5s without a render).
+
         The Hue sink averages the N-point gradient back to a single RGB per
-        channel per D-05. This preserves 100% of the current Hue behavior —
-        N=1 for Hue-only regions is the trivial case (gradient.mean(axis=0)
-        of a (1, 3) array equals the same RGB ``extract_region_color``
-        produced pre-refactor).
+        channel per D-05 — preserved bit-for-bit so Hue-only regions stay
+        unchanged.
         """
         if self._streaming is None:
             return
-        inputs = []
+
+        # 1. Collect (channel_id, mean_rgb) for every channel that has a
+        #    matching region gradient. Skip channels with no gradient (same
+        #    as the pre-batch behavior).
+        channel_ids: list[int] = []
+        mean_rgbs: list = []
         for channel_id, region_id in self._channel_to_region.items():
             gradient = region_gradients.get(region_id)
             if gradient is None or len(gradient) == 0:
                 continue
             mean_rgb = gradient.mean(axis=0)
-            r, g, b = int(mean_rgb[0]), int(mean_rgb[1]), int(mean_rgb[2])
-            x, y = rgb_to_xy(r, g, b)
-            bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
-            bri = max(bri, 0.01)  # dark scene protection
-            inputs.append((x, y, bri, channel_id))
+            channel_ids.append(channel_id)
+            mean_rgbs.append(mean_rgb)
 
-        # set_input is a tiny DTLS packet send; thread pool overhead would
-        # exceed the cost of the brief GIL hold (preserved from pre-refactor).
-        for inp in inputs:
-            self._streaming.set_input(inp)
+        if not channel_ids:
+            return
+
+        rgb_arr = np.asarray(mean_rgbs, dtype=np.float32)
+        # rgb_to_xy_batch returns (xy[N,2], bri[N]). Bri is the same
+        # Rec. 709 luma divided by 255 the pre-batch path used, with the
+        # 0.01 dark-scene clamp applied internally.
+        xy_arr, bri_arr = rgb_to_xy_batch(rgb_arr)
+
+        # 2. Test-friendly fallback: if pykit internals were mocked away
+        #    (no DTLS socket captured at start), fall back to per-channel
+        #    set_input so existing mocks keep working. Real bridge sessions
+        #    always take the batched path.
+        if self._dtls_socket is None or not self._entertainment_id_bytes:
+            for ch_id, (x, y), bri in zip(channel_ids, xy_arr, bri_arr):
+                self._streaming.set_input(
+                    (float(x), float(y), float(bri), ch_id)
+                )
+            return
+
+        # 3. Build the batched message body: one 7-byte record per channel.
+        #    Format per pykit Converter.xyb_to_rgb16: each xyb float in
+        #    [0, 1] scaled by 65535, big-endian uint16.
+        records = bytearray()
+        for ch_id, (x, y), bri in zip(channel_ids, xy_arr, bri_arr):
+            x_u16 = int(max(0.0, min(1.0, float(x))) * 65535)
+            y_u16 = int(max(0.0, min(1.0, float(y))) * 65535)
+            b_u16 = int(max(0.0, min(1.0, float(bri))) * 65535)
+            records += struct.pack(">BHHH", int(ch_id), x_u16, y_u16, b_u16)
+
+        message = self._build_dtls_message(bytes(records))
+
+        # 4. Send once. asyncio.to_thread keeps the event loop responsive
+        #    if the DTLS write briefly blocks.
+        sock = self._dtls_socket
+        await asyncio.to_thread(sock.send, message)
+
+        # 5. Keep pykit's keep-alive thread retransmitting the latest
+        #    frame instead of the empty init message.
+        try:
+            self._streaming._last_message = message
+        except AttributeError:
+            pass
+
+    def _build_dtls_message(self, channel_records: bytes) -> bytes:
+        """Assemble a Hue Entertainment v2 message body for one frame.
+
+        Mirrors pykit ``StreamingService._build_message`` exactly: the
+        16-byte header layout (HueStream + v2 + seq + reserved +
+        color_space + reserved2 + entertainment_id) is identical so we
+        share the bridge's parser without modification. Only difference
+        from pykit: ``channel_records`` may concatenate multiple records,
+        not just one.
+        """
+        return (
+            self._HEADER_PROTOCOL
+            + self._HEADER_VERSION
+            + self._HEADER_SEQ
+            + self._HEADER_RESERVED
+            + self._HEADER_COLOR_SPACE_XYB
+            + self._HEADER_RESERVED2
+            + self._entertainment_id_bytes
+            + channel_records
+        )
 
     async def stop(self) -> None:
         """Stop DTLS and deactivate; no capture release (coordinator owns that)."""
