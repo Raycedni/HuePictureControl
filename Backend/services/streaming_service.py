@@ -203,49 +203,57 @@ class HueStreamer:
         if self._streaming is None:
             return
 
-        # 1. Collect (channel_id, mean_rgb) for every channel that has a
+        # 1. Collect (channel_id, xy, bri) for every channel that has a
         #    matching region gradient. Skip channels with no gradient (same
         #    as the pre-batch behavior).
-        channel_ids: list[int] = []
-        mean_rgbs: list = []
+        #
+        #    Microbench note: scalar rgb_to_xy for 6 channels takes ~16us
+        #    total — faster than rgb_to_xy_batch's ~56us per-call overhead
+        #    at small N (numpy broadcasting + per-row gamut projection
+        #    dominate). For typical Hue configs (≤16 channels) we stay
+        #    scalar. rgb_to_xy_batch remains exported for callers that
+        #    want bulk conversion (e.g. potential future WLED gamma path).
+        records = bytearray()
+        fallback_inputs: list = []
+        any_channel = False
         for channel_id, region_id in self._channel_to_region.items():
             gradient = region_gradients.get(region_id)
             if gradient is None or len(gradient) == 0:
                 continue
             mean_rgb = gradient.mean(axis=0)
-            channel_ids.append(channel_id)
-            mean_rgbs.append(mean_rgb)
+            r = int(mean_rgb[0])
+            g = int(mean_rgb[1])
+            b = int(mean_rgb[2])
+            x, y = rgb_to_xy(r, g, b)
+            bri = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
+            if bri < 0.01:
+                bri = 0.01  # dark-scene floor
+            any_channel = True
 
-        if not channel_ids:
-            return
-
-        rgb_arr = np.asarray(mean_rgbs, dtype=np.float32)
-        # rgb_to_xy_batch returns (xy[N,2], bri[N]). Bri is the same
-        # Rec. 709 luma divided by 255 the pre-batch path used, with the
-        # 0.01 dark-scene clamp applied internally.
-        xy_arr, bri_arr = rgb_to_xy_batch(rgb_arr)
-
-        # 2. Test-friendly fallback: if pykit internals were mocked away
-        #    (no DTLS socket captured at start), fall back to per-channel
-        #    set_input so existing mocks keep working. Real bridge sessions
-        #    always take the batched path.
-        if self._dtls_socket is None or not self._entertainment_id_bytes:
-            for ch_id, (x, y), bri in zip(channel_ids, xy_arr, bri_arr):
-                self._streaming.set_input(
-                    (float(x), float(y), float(bri), ch_id)
+            if self._dtls_socket is None or not self._entertainment_id_bytes:
+                # Test-friendly fallback: pykit internals are mocked away.
+                fallback_inputs.append(
+                    (float(x), float(y), float(bri), channel_id)
                 )
+                continue
+
+            x_u16 = int(max(0.0, min(1.0, x)) * 65535)
+            y_u16 = int(max(0.0, min(1.0, y)) * 65535)
+            b_u16 = int(max(0.0, min(1.0, bri)) * 65535)
+            records += struct.pack(">BHHH", int(channel_id), x_u16, y_u16, b_u16)
+
+        if not any_channel:
             return
 
-        # 3. Build the batched message body: one 7-byte record per channel.
-        #    Format per pykit Converter.xyb_to_rgb16: each xyb float in
-        #    [0, 1] scaled by 65535, big-endian uint16.
-        records = bytearray()
-        for ch_id, (x, y), bri in zip(channel_ids, xy_arr, bri_arr):
-            x_u16 = int(max(0.0, min(1.0, float(x))) * 65535)
-            y_u16 = int(max(0.0, min(1.0, float(y))) * 65535)
-            b_u16 = int(max(0.0, min(1.0, float(bri))) * 65535)
-            records += struct.pack(">BHHH", int(ch_id), x_u16, y_u16, b_u16)
+        # 2. Fallback path: real bridge sessions always have a captured
+        #    DTLS socket; tests that mock self._streaming without wiring
+        #    up the socket keep working via per-channel set_input.
+        if fallback_inputs:
+            for inp in fallback_inputs:
+                self._streaming.set_input(inp)
+            return
 
+        # 3. Batched send.
         message = self._build_dtls_message(bytes(records))
 
         # 4. Send once. asyncio.to_thread keeps the event loop responsive

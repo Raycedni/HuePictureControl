@@ -371,28 +371,21 @@ async def test_render_averages_n_sample_gradient(hue_imports):
     await sink.render(region_gradients)
 
     streaming_mock.set_input.assert_called_once()
-    # Quick-task 260516-iqp: render() now batches all channels through
-    # rgb_to_xy_batch instead of calling scalar rgb_to_xy per channel.
-    # Capture the (N, 3) RGB array reaching the batch function to verify
-    # the gradient mean was computed correctly (collapse axis=0 → (50,100,150)).
+    # render() still walks scalar rgb_to_xy per channel for small N (faster
+    # than numpy batch overhead at ≤16 channels — see microbench in
+    # quick-task 260516-iqp SUMMARY). Patch rgb_to_xy to capture the
+    # gradient-mean RGB that reaches it.
     captured: list = []
     streaming_mock.set_input.reset_mock()
 
-    def _capture_batch(rgb_arr):
-        captured.append(np.asarray(rgb_arr).copy())
-        n = np.asarray(rgb_arr).shape[0]
-        return (
-            np.tile(np.array([0.3, 0.3], dtype=np.float32), (n, 1)),
-            np.full(n, 0.5, dtype=np.float64),
-        )
+    def _capture_rgb(r, g, b):
+        captured.append((r, g, b))
+        return (0.3, 0.3)
 
-    with patch(
-        "services.streaming_service.rgb_to_xy_batch", side_effect=_capture_batch
-    ):
+    with patch("services.streaming_service.rgb_to_xy", side_effect=_capture_rgb):
         await sink.render(region_gradients)
 
-    assert len(captured) == 1
-    np.testing.assert_allclose(captured[0], [[50.0, 100.0, 150.0]], rtol=0, atol=0)
+    assert captured == [(50, 100, 150)]
 
 
 # ---------------------------------------------------------------------------

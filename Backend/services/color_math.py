@@ -408,68 +408,33 @@ def sub_sample_gradient(
     else:
         raise ValueError(f"Unknown orientation: {orientation!r}")
 
-    # Quick-task 260516-iqp: replace the N×cv2.mean Python loop with a
-    # single per-region reduction along the long axis. Strategy:
-    #   1. Zero out unmasked pixels in the ROI once.
-    #   2. Reduce to per-axis (column or row) sums + per-axis pixel counts.
-    #   3. Use a prefix-sum trick to compute every 3-wide slab sum/count in
-    #      one vectorized lookup — bit-exact match to the old loop's
-    #      cv2.mean(slab, mask=slab_mask) → int() conversion.
+    # Quick-task 260516-iqp note: a prefix-sum vectorized path was
+    # benchmarked here. It produced bit-identical output but was 16–40×
+    # slower at typical N (6–100) because numpy's per-region setup
+    # (np.where + sum + cumsum) is heavier than N cv2.mean calls over
+    # 3-wide slabs. Crossover with the scalar loop is around N=490
+    # (full DRGB strip). The cv2.mean loop is kept because it wins for
+    # every realistic N (≤300 LEDs typical).
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
-    roi_mask_bool = region.roi_mask > 0
 
-    # Masked frame: unmasked pixels contribute zero to the sums.
-    masked = np.where(
-        roi_mask_bool[:, :, np.newaxis],
-        roi_frame,
-        np.zeros_like(roi_frame),
-    ).astype(np.int64, copy=False)
-
-    if axis_x:
-        axis_len = width
-        # Per-column (BGR) sums + per-column masked-pixel counts.
-        axis_sums = masked.sum(axis=0)                          # (W, 3)
-        axis_counts = roi_mask_bool.sum(axis=0).astype(np.int64)  # (W,)
-        centers = np.round(
-            np.linspace(0.0, axis_len - 1, n_effective)
-        ).astype(np.int64)
-    else:
-        axis_len = height
-        axis_sums = masked.sum(axis=1)                          # (H, 3)
-        axis_counts = roi_mask_bool.sum(axis=1).astype(np.int64)  # (H,)
-        centers = np.round(
-            np.linspace(0.0, axis_len - 1, n_effective)
-        ).astype(np.int64)
-
-    # Prefix sums so each slab's sum is a single subtraction.
-    cum_sums = np.concatenate(
-        [np.zeros((1, 3), dtype=np.int64), axis_sums.cumsum(axis=0)],
-        axis=0,
-    )
-    cum_counts = np.concatenate(
-        [np.zeros(1, dtype=np.int64), axis_counts.cumsum()],
-    )
-
-    slab_lo = np.maximum(centers - 1, 0)
-    slab_hi = np.minimum(centers + 2, axis_len)
-
-    slab_sums = cum_sums[slab_hi] - cum_sums[slab_lo]            # (N, 3)
-    slab_counts = cum_counts[slab_hi] - cum_counts[slab_lo]      # (N,)
-
-    # Divide where slab has any masked pixels; zero otherwise (matches
-    # cv2.mean's all-masked-out behavior which returns 0 for each channel).
-    safe = slab_counts > 0
-    slab_means_bgr = np.zeros((n_effective, 3), dtype=np.float64)
-    if safe.any():
-        slab_means_bgr[safe] = slab_sums[safe] / slab_counts[safe, None]
-
-    # BGR → RGB via channel reversal; truncate to uint8 (same as
-    # the old `int(mean_bgr[...])` cast, which rounded toward zero).
     means = np.empty((n_effective, 3), dtype=np.uint8)
-    means[:, 0] = slab_means_bgr[:, 2].astype(np.uint8, copy=False)
-    means[:, 1] = slab_means_bgr[:, 1].astype(np.uint8, copy=False)
-    means[:, 2] = slab_means_bgr[:, 0].astype(np.uint8, copy=False)
-
+    for i in range(n_effective):
+        t = i / (n_effective - 1) if n_effective > 1 else 0.0
+        if axis_x:
+            col_center = int(round(t * (width - 1)))
+            slab_x1 = max(col_center - 1, 0)
+            slab_x2 = min(col_center + 2, width)
+            slab_frame = roi_frame[:, slab_x1:slab_x2]
+            slab_mask = region.roi_mask[:, slab_x1:slab_x2]
+        else:
+            row_center = int(round(t * (height - 1)))
+            slab_y1 = max(row_center - 1, 0)
+            slab_y2 = min(row_center + 2, height)
+            slab_frame = roi_frame[slab_y1:slab_y2, :]
+            slab_mask = region.roi_mask[slab_y1:slab_y2, :]
+        mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
+        # cv2.mean returns BGR; convert to RGB for output
+        means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
     if reverse:
         means = means[::-1]
     return means
