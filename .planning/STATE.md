@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: Wireless Input
 status: milestone_complete
 stopped_at: Completed 19.1-09-PLAN.md
-last_updated: "2026-05-15T19:45:31.153Z"
-last_activity: 2026-05-15
+last_updated: "2026-05-16T11:29:39.763Z"
+last_activity: 2026-05-16
 progress:
   total_phases: 11
   completed_phases: 10
@@ -123,6 +123,12 @@ None yet.
 ### Blockers/Concerns
 
 (None — Phase 16 clean close; ready for Phase 17 kickoff)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260516-iqp | Tier 1 real-time light sync performance pass: batched DTLS, vectorized WLED build, parallel sink render | 2026-05-16 | 48f6482 | [260516-iqp-tier-1-real-time-light-sync-performance-](./quick/260516-iqp-tier-1-real-time-light-sync-performance-/) |
 
 ## Session Continuity
 
