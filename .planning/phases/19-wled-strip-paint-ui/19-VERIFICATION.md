@@ -1,9 +1,16 @@
 ---
 phase: 19-wled-strip-paint-ui
 verified: 2026-05-14T16:10:00Z
-status: human_needed
+status: resolved_by_19.1
 score: 5/5 must-haves verified (paint-driven architecture)
 overrides_applied: 0
+resolved_by: 19.1-wled-segment-sync
+resolved_on: 2026-05-16
+resolution_note: |
+  The 4 human_needed items (V1, V2, V3, V4) were intentionally deferred to Phase 19.1
+  per the redesign decision on 2026-05-14. Phase 19.1 re-ran them as V1, V2, V3', V4
+  against the segment-driven model on 2026-05-16. User signed off "approved" — all four
+  PASSED. See 19.1-10-SUMMARY.md for the full UAT record.
 human_verification:
   - test: "Open browser at http://localhost:8091. Register a WLED device. Paint a channel range on the strip. Drag the channel from LightPanel onto a canvas region. Start streaming."
     expected: "Physical LED strip lights update to match the on-screen region color at ~60 Hz."

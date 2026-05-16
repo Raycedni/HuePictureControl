@@ -116,7 +116,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 17: WLED Backend and Streaming** - WLED device management API, UDP streaming service (DRGB/DNRGB), StreamingCoordinator for concurrent Hue+WLED output (completed 2026-04-27)
 - [ ] **Phase 18: Home Assistant Control Endpoints** - REST endpoints for HA to start/stop streaming, select camera, select zone, and query status
 - [ ] **Phase 19: WLED Strip Paint UI** - Visual strip painter for defining LED channel ranges, channel assignment via existing drag-drop workflow
-- [ ] **Phase 19.1: WLED Segment Sync** (INSERTED) - Channels auto-queried from WLED device `/json/state seg[]` instead of paint-managed; manual UAT V1–V4 re-tested against segment-driven model
+- [x] **Phase 19.1: WLED Segment Sync** (INSERTED) - Channels auto-queried from WLED device `/json/state seg[]` instead of paint-managed; manual UAT V1–V4 re-tested against segment-driven model (completed 2026-05-16)
 
 ## Phase Details (v1.3)
 
@@ -222,7 +222,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   - [x] 19.1-07-PLAN.md — Wave 4: WledStripPainter read-only conversion + Refresh button + stale badge + WledChannelSidebar read-only + SettingsPanel/Page sync
   - [x] 19.1-08-PLAN.md — Wave 4: LightPanel new drag payload + EditorCanvas handleDrop discriminator + RegionOrientationPopover composite-key lookups
   - [x] 19.1-09-PLAN.md — Wave 5: hard-delete wled_channels.py + tests + wled-paint-reducer + rewrite e2e as wled-segments.spec.ts
-  - [ ] 19.1-10-PLAN.md — Wave 6: automation gate (Skill test/health/verify-ui) + manual UAT V1/V2/V3'/V4 checkpoint
+  - [x] 19.1-10-PLAN.md — Wave 6: automation gate (Skill test/health/verify-ui) + manual UAT V1/V2/V3'/V4 checkpoint
 **UI hint**: yes
 
 ---
@@ -251,7 +251,7 @@ Full details: [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 | 17. WLED Backend and Streaming | v1.3 | 9/9 | Complete    | 2026-04-27 |
 | 18. Home Assistant Control Endpoints | v1.3 | 0/TBD | Not started | - |
 | 19. WLED Strip Paint UI | v1.3 | 0/13 | Not started | - |
-| 19.1. WLED Segment Sync | v1.3 | 9/10 | In progress | - |
+| 19.1. WLED Segment Sync | v1.3 | 10/10 | Complete    | 2026-05-16 |
 
 ---
 *Roadmap created: 2026-03-23*
