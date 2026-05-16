@@ -552,13 +552,29 @@ class StreamingCoordinator:
                 for rid, (mask, n_region, orientation) in region_plan.items()
             }
 
-            try:
-                await self._hue.render(region_gradients)
-                await self._wled.render(region_gradients)
-            except Exception as exc:
-                # Per D-06: Hue errors trigger Hue reconnect; WLED errors are
-                # isolated per-device inside WledStreamer and never reach here.
-                ok = await self._hue.handle_bridge_error(exc)
+            # Quick-task 260516-iqp: fan out to both sinks concurrently.
+            # Hue does one batched DTLS send and WLED does one UDP send per
+            # device — neither blocks the event loop on its own, but running
+            # them in series serialized the DTLS handshake-locked send
+            # against the WLED to_thread, costing a frame of latency at
+            # 60Hz. gather() lets them overlap on the event loop.
+            # return_exceptions=True so a WLED-side exception (which D-06
+            # says should not normally escape) can't mask a Hue-side
+            # bridge error.
+            results = await asyncio.gather(
+                self._hue.render(region_gradients),
+                self._wled.render(region_gradients),
+                return_exceptions=True,
+            )
+            hue_exc, wled_exc = results
+            if isinstance(wled_exc, BaseException):
+                logger.warning(
+                    "WLED render raised unexpectedly (should be isolated): %s",
+                    wled_exc,
+                )
+            if isinstance(hue_exc, BaseException):
+                # Per D-06: Hue errors trigger Hue reconnect.
+                ok = await self._hue.handle_bridge_error(hue_exc)
                 if not ok:
                     return
 

@@ -43,7 +43,28 @@ DRGB_MAX_LEDS: int = 490            # 2-byte header + 490*3 body = 1472 bytes
 DNRGB_MAX_LEDS_PER_PACKET: int = 489  # 4-byte header + 489*3 body = 1471 bytes
 
 
-def build_drgb_packet(colors: list[tuple[int, int, int]]) -> bytes:
+def _colors_to_uint8_array(colors) -> np.ndarray:
+    """Coerce input colors to a contiguous (N, 3) uint8 array.
+
+    Accepts the legacy list-of-tuples shape used by existing tests AND a
+    pre-built numpy (N, 3) uint8 array produced by the per-frame
+    vectorized fill in ``WledStreamer._render_one_device``.
+
+    Quick-task 260516-iqp: the ndarray path skips Python-level
+    iteration entirely and lets ``np.ndarray.tobytes()`` emit the
+    packet body in C.
+    """
+    if isinstance(colors, np.ndarray):
+        if colors.ndim != 2 or colors.shape[1] != 3:
+            raise ValueError(
+                f"ndarray colors must be (N, 3); got {colors.shape}"
+            )
+        return np.ascontiguousarray(colors, dtype=np.uint8)
+    # Legacy list-of-tuples path — convert in one np.asarray call.
+    return np.asarray(colors, dtype=np.uint8).reshape(-1, 3)
+
+
+def build_drgb_packet(colors) -> bytes:
     """Build a DRGB packet for a full strip (<=490 LEDs).
 
     Layout: ``[0x02, 0x02, R0, G0, B0, R1, G1, B1, ...]``
@@ -51,55 +72,65 @@ def build_drgb_packet(colors: list[tuple[int, int, int]]) -> bytes:
     Header byte 0 is the DRGB protocol marker; byte 1 is the timeout (D-14).
     Body is sequential RGB triplets, one per LED, in RGB order (not BGR).
 
+    Accepts either a list-of-tuples (legacy) or an (N, 3) uint8 ndarray.
+
     Raises:
         ValueError: if ``len(colors) > 490``.
     """
-    if len(colors) > DRGB_MAX_LEDS:
+    arr = _colors_to_uint8_array(colors)
+    if arr.shape[0] > DRGB_MAX_LEDS:
         raise ValueError(
-            f"DRGB supports at most {DRGB_MAX_LEDS} LEDs, got {len(colors)}"
+            f"DRGB supports at most {DRGB_MAX_LEDS} LEDs, got {arr.shape[0]}"
         )
     header = bytes([DRGB_PROTOCOL, TIMEOUT_SECONDS])
-    body = bytes(c for rgb in colors for c in rgb)
-    return header + body
+    # arr.tobytes() emits R0 G0 B0 R1 G1 B1 ... in C — replaces the old
+    # Python generator + bytes() build that ran one yield per channel.
+    return header + arr.tobytes()
 
 
-def build_dnrgb_packets(colors: list[tuple[int, int, int]]) -> list[bytes]:
+def build_dnrgb_packets(colors) -> list[bytes]:
     """Chunk a long strip into DNRGB packets (up to 489 LEDs each).
 
     Layout per packet: ``[0x04, 0x02, start_hi, start_lo, R0, G0, B0, ...]``
     where ``start_hi``/``start_lo`` is a big-endian uint16 LED index offset.
 
+    Accepts either a list-of-tuples (legacy) or an (N, 3) uint8 ndarray.
     Returns an empty list for empty input. Otherwise one or more packets,
     each ready for a single sendto() call.
     """
+    arr = _colors_to_uint8_array(colors)
+    n = arr.shape[0]
     packets: list[bytes] = []
-    for chunk_start in range(0, len(colors), DNRGB_MAX_LEDS_PER_PACKET):
-        chunk = colors[chunk_start : chunk_start + DNRGB_MAX_LEDS_PER_PACKET]
+    for chunk_start in range(0, n, DNRGB_MAX_LEDS_PER_PACKET):
+        chunk = arr[chunk_start : chunk_start + DNRGB_MAX_LEDS_PER_PACKET]
         header = bytes([
             DNRGB_PROTOCOL,
             TIMEOUT_SECONDS,
             (chunk_start >> 8) & 0xFF,
             chunk_start & 0xFF,
         ])
-        body = bytes(c for rgb in chunk for c in rgb)
-        packets.append(header + body)
+        packets.append(header + chunk.tobytes())
     return packets
 
 
-def build_packets_for_device(
-    led_count: int, colors: list[tuple[int, int, int]]
-) -> list[bytes]:
+def build_packets_for_device(led_count: int, colors) -> list[bytes]:
     """Auto-select DRGB (led_count <= 490) or DNRGB (>490) and return packet list.
 
     Always returns a list (single-element for DRGB, multi-element for DNRGB)
     so the per-frame send loop has a uniform shape regardless of strip size.
 
+    Accepts either a list-of-tuples or an (N, 3) uint8 ndarray for colors.
+
     Raises:
         ValueError: if ``len(colors) != led_count`` (caller bug).
     """
-    if len(colors) != led_count:
+    if isinstance(colors, np.ndarray):
+        actual_n = colors.shape[0]
+    else:
+        actual_n = len(colors)
+    if actual_n != led_count:
         raise ValueError(
-            f"colors length {len(colors)} != led_count {led_count}"
+            f"colors length {actual_n} != led_count {led_count}"
         )
     if led_count <= DRGB_MAX_LEDS:
         return [build_drgb_packet(colors)]
@@ -304,12 +335,20 @@ class WledStreamer:
     async def _render_one_device(
         self, device_id: str, snap: dict, region_gradients: dict
     ) -> None:
-        """Build and send packets for one device in a single to_thread batch."""
+        """Build and send packets for one device in a single to_thread batch.
+
+        Quick-task 260516-iqp: the per-LED Python loop that built a
+        list-of-tuples is replaced with one numpy fill per channel:
+        ``colors[start:end+1] = slice_arr`` after computing the LED range
+        intersected with [0, led_count). ``build_packets_for_device``
+        accepts the (led_count, 3) uint8 buffer directly and uses
+        ``tobytes()`` to emit packet bodies in C.
+        """
         led_count = snap["led_count"]
         if led_count <= 0:
             return
 
-        colors: list[tuple[int, int, int]] = [(0, 0, 0)] * led_count
+        colors = np.zeros((led_count, 3), dtype=np.uint8)
         populated = False
         for ch in snap["channels"]:
             region_id = ch.get("region_id")
@@ -330,19 +369,25 @@ class WledStreamer:
                 slice_arr = gradient
             elif src_n == 1:
                 # Single-color region — broadcast the same color across the range
-                slice_arr = np.tile(gradient[0], (range_len, 1))
+                slice_arr = np.broadcast_to(
+                    np.asarray(gradient[0], dtype=np.uint8), (range_len, 3)
+                )
             else:
                 # Resample the gradient along its first axis to match range_len (D-10).
                 idx = np.linspace(0, src_n - 1, range_len).astype(np.int32)
                 slice_arr = gradient[idx]
-            for i in range(range_len):
-                pos = start + i
-                if 0 <= pos < led_count:
-                    r = int(slice_arr[i][0])
-                    g = int(slice_arr[i][1])
-                    b = int(slice_arr[i][2])
-                    colors[pos] = (r, g, b)
-                    populated = True
+
+            # Intersect [start, end] with [0, led_count) in one slice op.
+            clip_lo = max(start, 0)
+            clip_hi = min(start + range_len, led_count)
+            if clip_hi <= clip_lo:
+                continue
+            src_lo = clip_lo - start
+            src_hi = src_lo + (clip_hi - clip_lo)
+            colors[clip_lo:clip_hi] = np.asarray(
+                slice_arr[src_lo:src_hi], dtype=np.uint8
+            )
+            populated = True
 
         if not populated:
             return  # no channels in this device matched the frame's regions
