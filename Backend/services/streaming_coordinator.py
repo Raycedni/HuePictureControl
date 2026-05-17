@@ -529,15 +529,40 @@ class StreamingCoordinator:
 
         For each frame:
           * grab frame from capture
-          * for each (region_id, (mask, N_region)) in region_plan,
-            compute sub_sample_gradient(frame, mask, N_region)
-          * await self._hue.render(region_gradients)
-          * await self._wled.render(region_gradients) — always called now
-            (Plan 06). With no enabled devices the call is a cheap no-op.
+          * compute ``hue_gradients`` with ``n=1`` per region on the event
+            loop (cheap: ``sub_sample_gradient(n=1)`` returns the
+            full-region mean via ``extract_region_color``, byte-identical
+            to ``HueStreamer.render`` taking ``gradient.mean(axis=0)`` over
+            the (N, 3) WLED-sized gradient)
+          * spawn ``_wled_pipeline`` that computes ``wled_gradients`` with
+            full ``n=N_region`` inside ``asyncio.to_thread`` BEFORE awaiting
+            ``self._wled.render(...)`` -- keeps the heavy cv2.mean loop
+            off the event loop so it cannot delay the Hue per-frame DTLS
+            send
+          * ``asyncio.gather(hue.render, _wled_pipeline)`` so the two run
+            concurrently with the same return_exceptions=True contract as
+            before
+
+        Why split: when ``n_region`` jumps from 1 (Hue-only) to N (WLED
+        assigned, 30-300+ LEDs), the shared ``region_gradients`` dict
+        comprehension and the synchronous numpy work inside
+        ``WledStreamer._render_one_device`` both run on the event loop and
+        serialize with the ``HueStreamer.render`` DTLS message pack. The
+        orchestrator measured Hue per-frame event-loop time inflating from
+        0.15 ms to 0.89 ms (6x) with 4 WLED devices at 300 LEDs each.
+        Splitting the gradient compute by-sink and pushing the WLED-sized
+        compute into a worker thread keeps the Hue per-frame event-loop
+        time at the no-WLED baseline regardless of WLED LED count or
+        device count. Hue output remains byte-identical because
+        ``sub_sample_gradient(frame, mask, n=1)`` short-circuits to
+        ``extract_region_color`` (full-region mean) and
+        ``HueStreamer.render`` mean-reduces back to a single RGB anyway
+        (D-05).
+
         Bridge errors call ``self._hue.handle_bridge_error(exc)``; capture
-        errors trigger ``_capture_reconnect_loop``. Per D-06 WLED errors are
-        isolated per-device inside ``WledStreamer`` and never escape its
-        ``render`` — they cannot reach the bridge-reconnect path.
+        errors trigger ``_capture_reconnect_loop``. Per D-06 WLED errors
+        are isolated per-device inside ``WledStreamer`` and never escape
+        its ``render`` -- they cannot reach the bridge-reconnect path.
         """
         seq = 0
         prev_t0 = time.monotonic()
@@ -562,27 +587,43 @@ class StreamingCoordinator:
                 )
                 return
 
-            # Phase 19 D-22 (per-region narrowing): orientation comes from the
-            # region's resolved value in region_plan; sub_sample_gradient
-            # defaults to 'auto' which preserves Phase 17 behavior for
-            # Hue-only regions.
-            region_gradients: dict[str, np.ndarray] = {
-                rid: sub_sample_gradient(frame, mask, n_region, orientation=orientation)
+            # Phase 19 D-22 (per-region narrowing): orientation comes from
+            # the region's resolved value in region_plan. The Hue sink
+            # gets n=1 (full-region mean via extract_region_color) -- cheap
+            # to compute on the event loop and byte-identical to the
+            # pre-split path's ``gradient.mean(axis=0)`` reduction inside
+            # HueStreamer.render (D-05). The WLED sink gets the full
+            # n=N_region gradient built INSIDE ``asyncio.to_thread`` below
+            # so the cv2.mean loop never blocks the event loop.
+            hue_gradients: dict[str, np.ndarray] = {
+                rid: sub_sample_gradient(frame, mask, 1, orientation=orientation)
                 for rid, (mask, n_region, orientation) in region_plan.items()
             }
 
-            # Quick-task 260516-iqp: fan out to both sinks concurrently.
-            # Hue does one batched DTLS send and WLED does one UDP send per
-            # device — neither blocks the event loop on its own, but running
-            # them in series serialized the DTLS handshake-locked send
-            # against the WLED to_thread, costing a frame of latency at
-            # 60Hz. gather() lets them overlap on the event loop.
-            # return_exceptions=True so a WLED-side exception (which D-06
-            # says should not normally escape) can't mask a Hue-side
-            # bridge error.
+            async def _wled_pipeline(plan=region_plan, current_frame=frame):
+                # Build the WLED-sized gradients in a worker thread so the
+                # event loop stays free for the Hue DTLS pack/send. The
+                # per-LED cv2.mean loop is ~0.6 ms per region at n=300 --
+                # well worth the to_thread hop.
+                def _compute() -> dict[str, np.ndarray]:
+                    return {
+                        rid: sub_sample_gradient(
+                            current_frame, mask, n_region, orientation=orientation
+                        )
+                        for rid, (mask, n_region, orientation) in plan.items()
+                    }
+                wled_gradients = await asyncio.to_thread(_compute)
+                await self._wled.render(wled_gradients)
+
+            # Quick-task 260516-iqp + wled-activation-latency fix: fan out
+            # to both sinks concurrently. Hue gets its cheap n=1 gradients
+            # immediately; WLED first builds n=N gradients off the loop
+            # via to_thread, then sends. return_exceptions=True so a
+            # WLED-side exception (D-06 says it should not normally escape)
+            # cannot mask a Hue-side bridge error.
             results = await asyncio.gather(
-                self._hue.render(region_gradients),
-                self._wled.render(region_gradients),
+                self._hue.render(hue_gradients),
+                _wled_pipeline(),
                 return_exceptions=True,
             )
             hue_exc, wled_exc = results
