@@ -30,7 +30,6 @@ from services.capture_service import CAPTURE_DEVICE
 from services.color_math import (
     boost_saturation_rgb,
     build_polygon_mask,
-    hdr10_to_srgb,
     sub_sample_gradient,
 )
 from services.streaming_service import HueStreamer
@@ -632,23 +631,15 @@ class StreamingCoordinator:
             # n=N_region gradient built INSIDE ``asyncio.to_thread`` below
             # so the cv2.mean loop never blocks the event loop.
             #
-            # quick-task 260704-w88: hdr10_to_srgb runs BETWEEN
-            # sub_sample_gradient and boost_saturation_rgb, on the sampled
-            # (N,3) gradient only -- never the full frame -- so an HDR10
-            # source no longer reads hue-rotated (e.g. orange as green)
-            # under saturation boost.
+            # quick-task 260704-wy5 (HDR v2): HDR expansion + linear-light
+            # averaging happens INSIDE sub_sample_gradient via hdr=, so a
+            # bright area dominates the region mean the way it dominates
+            # perceptually (no more post-hoc convert-after-average).
+            # boost_saturation_rgb is still applied after, unchanged.
             hue_gradients: dict[str, np.ndarray] = {
                 rid: boost_saturation_rgb(
-                    (
-                        hdr10_to_srgb(
-                            sub_sample_gradient(
-                                frame, mask, 1, orientation=orientation, vibrancy=vibrancy
-                            )
-                        )
-                        if hdr
-                        else sub_sample_gradient(
-                            frame, mask, 1, orientation=orientation, vibrancy=vibrancy
-                        )
+                    sub_sample_gradient(
+                        frame, mask, 1, orientation=orientation, vibrancy=vibrancy, hdr=hdr
                     ),
                     boost,
                 )
@@ -668,10 +659,8 @@ class StreamingCoordinator:
                     for rid, (mask, n_region, orientation) in plan.items():
                         g = sub_sample_gradient(
                             current_frame, mask, n_region,
-                            orientation=orientation, vibrancy=vib,
+                            orientation=orientation, vibrancy=vib, hdr=hdr_on,
                         )
-                        if hdr_on:
-                            g = hdr10_to_srgb(g)
                         result[rid] = boost_saturation_rgb(g, bst)
                     return result
                 wled_gradients = await asyncio.to_thread(_compute)
