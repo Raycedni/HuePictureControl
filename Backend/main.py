@@ -56,12 +56,14 @@ async def lifespan(app: FastAPI):
     # coordinator's per-frame getattr(app_state, ...) reads pick them up on
     # first frame after startup. Defaults 0.0 (disabled -> byte-identical to
     # pre-feature behavior).
+    # quick-task 260704-w88: hdr_input extends the same hydration block.
     app.state.color_vibrancy = 0.0
     app.state.saturation_boost = 0.0
+    app.state.hdr_input = 0.0
     try:
         async with db.execute(
-            "SELECT key, value FROM settings WHERE key IN (?, ?)",
-            ("color_vibrancy", "saturation_boost"),
+            "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
+            ("color_vibrancy", "saturation_boost", "hdr_input"),
         ) as cur:
             rows = await cur.fetchall()
         for row in rows:

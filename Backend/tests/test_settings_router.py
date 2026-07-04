@@ -153,14 +153,16 @@ def test_put_overwrites_previous_value():
 
 
 # ---------------------------------------------------------------------------
-# color_vibrancy + saturation_boost (quick-task 260704-iss)
+# color_vibrancy + saturation_boost (quick-task 260704-iss); hdr_input
+# (quick-task 260704-w88)
 # ---------------------------------------------------------------------------
 # Same contract as brightness_cutoff_threshold above, parameterized over the
-# two new keys so both endpoints get full coverage without duplicating each
-# test body twice.
+# three keys so every endpoint gets full coverage without duplicating each
+# test body per key. hdr_input reuses the [0.0, 1.0] validation unchanged
+# (boolean-as-float, same as the other two).
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_get_returns_default_zero_on_fresh_db(key):
     with _make_client() as client:
         r = client.get(f"/api/settings/{key}")
@@ -168,7 +170,7 @@ def test_new_setting_get_returns_default_zero_on_fresh_db(key):
     assert r.json() == {"value": 0.0}
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_round_trip(key):
     with _make_client() as client:
         r1 = client.put(f"/api/settings/{key}", json={"value": 0.7})
@@ -180,7 +182,7 @@ def test_new_setting_put_round_trip(key):
     assert r2.json() == {"value": 0.7}
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_accepts_boundary_zero(key):
     with _make_client() as client:
         r = client.put(f"/api/settings/{key}", json={"value": 0.0})
@@ -188,7 +190,7 @@ def test_new_setting_put_accepts_boundary_zero(key):
     assert r.json() == {"value": 0.0}
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_accepts_boundary_one(key):
     with _make_client() as client:
         r = client.put(f"/api/settings/{key}", json={"value": 1.0})
@@ -196,21 +198,21 @@ def test_new_setting_put_accepts_boundary_one(key):
     assert r.json() == {"value": 1.0}
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_rejects_above_one(key):
     with _make_client() as client:
         r = client.put(f"/api/settings/{key}", json={"value": 1.5})
     assert r.status_code == 422
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_rejects_below_zero(key):
     with _make_client() as client:
         r = client.put(f"/api/settings/{key}", json={"value": -0.01})
     assert r.status_code == 422
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_rejects_nan(key):
     with _make_client() as client:
         r = client.put(
@@ -221,7 +223,7 @@ def test_new_setting_put_rejects_nan(key):
     assert r.status_code == 422
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_updates_app_state(key):
     app = FastAPI(lifespan=_lifespan_with_db)
     app.include_router(settings_router)
@@ -231,7 +233,7 @@ def test_new_setting_put_updates_app_state(key):
         assert math.isclose(getattr(app.state, key), 0.4, rel_tol=1e-9)
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
 def test_new_setting_put_overwrites_previous_value(key):
     with _make_client() as client:
         client.put(f"/api/settings/{key}", json={"value": 0.2})
