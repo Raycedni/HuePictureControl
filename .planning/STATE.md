@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-04 - Completed quick task 260704-w88: HDR input toggle (HDR10 → sRGB conversion for sampled colors)
+Last activity: 2026-07-04 - Completed quick task 260704-wy5: HDR pipeline v2 (linear-light averaging + limited-range expansion)
 
 ## Performance Metrics
 
@@ -132,6 +132,7 @@ None yet.
 | 260516-kra | Add global brightness threshold (Hue+WLED) — per-region luma cutoff, default 0.0 disabled | 2026-05-16 | d550877 | [260516-kra-add-global-brightness-threshold-hue-wled](./quick/260516-kra-add-global-brightness-threshold-hue-wled/) |
 | 260704-iss | Color vibrancy + saturation boost sliders — saturation-weighted sampling fixes white pollution, brightness-preserving | 2026-07-04 | 5984d66 | [260704-iss-color-vibrancy-sliders](./quick/260704-iss-color-vibrancy-sliders/) |
 | 260704-w88 | HDR input toggle — HDR10 (BT.2020+PQ) → sRGB conversion on sampled region colors before saturation boost and rgb_to_xy | 2026-07-04 | ea5ce0f | [260704-w88-add-hdr-input-toggle-convert-sampled-reg](./quick/260704-w88-add-hdr-input-toggle-convert-sampled-reg/) |
+| 260704-wy5 | HDR pipeline v2 — limited-range expansion + PQ→linear LUT per-pixel BEFORE averaging (linear-light region means, MS2130 fix) | 2026-07-04 | 4fde109 | [260704-wy5-hdr-pipeline-v2-linear-light-averaging-l](./quick/260704-wy5-hdr-pipeline-v2-linear-light-averaging-l/) |
 
 ## Session Continuity
 
