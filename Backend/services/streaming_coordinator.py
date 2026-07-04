@@ -27,7 +27,12 @@ import time
 import numpy as np
 
 from services.capture_service import CAPTURE_DEVICE
-from services.color_math import boost_saturation_rgb, build_polygon_mask, sub_sample_gradient
+from services.color_math import (
+    boost_saturation_rgb,
+    build_polygon_mask,
+    hdr10_to_srgb,
+    sub_sample_gradient,
+)
 from services.streaming_service import HueStreamer
 from services.wled_streamer import WledStreamer
 
@@ -611,6 +616,12 @@ class StreamingCoordinator:
             # behavior).
             vibrancy = self._read_live_setting("color_vibrancy")
             boost = self._read_live_setting("saturation_boost")
+            # quick-task 260704-w88: read the live hdr_input toggle ONCE per
+            # frame so PUT /api/settings/hdr_input takes effect on the NEXT
+            # frame without a stream restart. hdr=False is a true identity
+            # pass-through (zero cost, byte-identical to pre-feature
+            # behavior).
+            hdr = self._read_live_setting("hdr_input") >= 0.5
 
             # Phase 19 D-22 (per-region narrowing): orientation comes from
             # the region's resolved value in region_plan. The Hue sink
@@ -620,10 +631,24 @@ class StreamingCoordinator:
             # HueStreamer.render (D-05). The WLED sink gets the full
             # n=N_region gradient built INSIDE ``asyncio.to_thread`` below
             # so the cv2.mean loop never blocks the event loop.
+            #
+            # quick-task 260704-w88: hdr10_to_srgb runs BETWEEN
+            # sub_sample_gradient and boost_saturation_rgb, on the sampled
+            # (N,3) gradient only -- never the full frame -- so an HDR10
+            # source no longer reads hue-rotated (e.g. orange as green)
+            # under saturation boost.
             hue_gradients: dict[str, np.ndarray] = {
                 rid: boost_saturation_rgb(
-                    sub_sample_gradient(
-                        frame, mask, 1, orientation=orientation, vibrancy=vibrancy
+                    (
+                        hdr10_to_srgb(
+                            sub_sample_gradient(
+                                frame, mask, 1, orientation=orientation, vibrancy=vibrancy
+                            )
+                        )
+                        if hdr
+                        else sub_sample_gradient(
+                            frame, mask, 1, orientation=orientation, vibrancy=vibrancy
+                        )
                     ),
                     boost,
                 )
@@ -631,23 +656,24 @@ class StreamingCoordinator:
             }
 
             async def _wled_pipeline(
-                plan=region_plan, current_frame=frame, vib=vibrancy, bst=boost
+                plan=region_plan, current_frame=frame, vib=vibrancy, bst=boost,
+                hdr_on=hdr,
             ):
                 # Build the WLED-sized gradients in a worker thread so the
                 # event loop stays free for the Hue DTLS pack/send. The
                 # per-LED cv2.mean loop is ~0.6 ms per region at n=300 --
                 # well worth the to_thread hop.
                 def _compute() -> dict[str, np.ndarray]:
-                    return {
-                        rid: boost_saturation_rgb(
-                            sub_sample_gradient(
-                                current_frame, mask, n_region,
-                                orientation=orientation, vibrancy=vib,
-                            ),
-                            bst,
+                    result: dict[str, np.ndarray] = {}
+                    for rid, (mask, n_region, orientation) in plan.items():
+                        g = sub_sample_gradient(
+                            current_frame, mask, n_region,
+                            orientation=orientation, vibrancy=vib,
                         )
-                        for rid, (mask, n_region, orientation) in plan.items()
-                    }
+                        if hdr_on:
+                            g = hdr10_to_srgb(g)
+                        result[rid] = boost_saturation_rgb(g, bst)
+                    return result
                 wled_gradients = await asyncio.to_thread(_compute)
                 await self._wled.render(wled_gradients)
 

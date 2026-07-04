@@ -1,7 +1,9 @@
-"""Global app-settings KV router (quick-task 260516-kra; extended 260704-iss).
+"""Global app-settings KV router (quick-task 260516-kra; extended 260704-iss,
+260704-w88).
 
-Exposes GET/PUT for ``brightness_cutoff_threshold``, ``color_vibrancy``, and
-``saturation_boost``. Each PUT handler updates BOTH the persistent SQLite row
+Exposes GET/PUT for ``brightness_cutoff_threshold``, ``color_vibrancy``,
+``saturation_boost``, and ``hdr_input``. Each PUT handler updates BOTH the
+persistent SQLite row
 AND the matching ``request.app.state.<key>`` attribute so the live streaming
 coordinator/sinks see the new value on the NEXT frame without a stream
 restart.
@@ -135,3 +137,19 @@ async def get_saturation_boost(request: Request) -> SettingValueResponse:
 )
 async def put_saturation_boost(request: Request) -> SettingValueResponse:
     return await _put_setting(request, "saturation_boost")
+
+
+@router.get(
+    "/hdr_input",
+    response_model=SettingValueResponse,
+)
+async def get_hdr_input(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "hdr_input")
+
+
+@router.put(
+    "/hdr_input",
+    response_model=SettingValueResponse,
+)
+async def put_hdr_input(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "hdr_input")
