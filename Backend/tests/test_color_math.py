@@ -7,6 +7,7 @@ from services.color_math import (
     RegionMask,
     _clamp_to_gamut,
     _in_gamut,
+    boost_saturation_rgb,
     build_polygon_mask,
     extract_region_color,
     rgb_to_xy,
@@ -388,3 +389,164 @@ def test_sub_sample_orientation_invalid_raises_value_error():
     frame, mask = _make_horizontal_red_blue_fixture()
     with pytest.raises(ValueError):
         sub_sample_gradient(frame, mask, 10, orientation="bogus")
+
+
+# ---------------------------------------------------------------------------
+# Vibrancy-weighted sampling (quick-task 260704-iss D-1)
+# ---------------------------------------------------------------------------
+
+
+def _rec709_luma(r: float, g: float, b: float) -> float:
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _red_with_white_stripe_frame(h=100, w=100, stripe_rows=(49, 51)):
+    """Mostly-red (RGB 200,0,0) frame with a thin white stripe (subtitle-like).
+
+    NON-max red (200,0,0) so the vibrancy=1.0 luma-match scale-up does not
+    hit the 255 per-channel cap (a 255,0,0 region can't brighten further).
+    """
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    frame[:, :] = (0, 0, 200)  # BGR -> RGB (200, 0, 0)
+    r0, r1 = stripe_rows
+    frame[r0:r1, :] = (255, 255, 255)  # thin white stripe
+    return frame
+
+
+class TestVibrancy:
+    def test_vibrancy_zero_is_byte_identical_to_plain_mean(self):
+        """extract_region_color with vibrancy=0.0 (default) is the unmodified cv2.mean path."""
+        frame = _red_with_white_stripe_frame()
+        region = _full_mask(h=100, w=100)
+        default_result = extract_region_color(frame, region)
+        explicit_zero_result = extract_region_color(frame, region, vibrancy=0.0)
+        assert default_result == explicit_zero_result
+
+    def test_vibrancy_suppresses_white_stripe_preserving_luma(self):
+        """High vibrancy suppresses the white stripe's desaturating effect
+        while rescaling to preserve the region's unweighted-mean luma."""
+        frame = _red_with_white_stripe_frame()
+        region = _full_mask(h=100, w=100)
+
+        r0, g0, b0 = extract_region_color(frame, region, vibrancy=0.0)
+        # Current (desaturated) behavior: white admixture lifts g/b above 0.
+        assert g0 > 0 and b0 > 0
+
+        r1, g1, b1 = extract_region_color(frame, region, vibrancy=1.0)
+        # Near-pure red hue: green/blue contribution is now negligible.
+        assert r1 > g0 + b0 + g1 + b1 or (g1 <= 2 and b1 <= 2)
+        assert g1 <= 2 and b1 <= 2
+
+        # Luma preservation: vibrancy=1.0 result's luma matches the plain
+        # unweighted-mean luma of the whole region (brightness unchanged).
+        mask_bool = region.roi_mask > 0
+        roi = frame[region.y1:region.y2, region.x1:region.x2]
+        unweighted_bgr = roi[mask_bool].astype(np.float64).mean(axis=0)
+        luma_unweighted = _rec709_luma(unweighted_bgr[2], unweighted_bgr[1], unweighted_bgr[0])
+        luma_vibrant = _rec709_luma(r1, g1, b1)
+        assert luma_vibrant == pytest.approx(luma_unweighted, abs=2.0)
+
+    def test_vibrancy_uniform_saturated_frame_unchanged_at_any_alpha(self):
+        """A single fully-saturated color has uniform per-pixel weights, so the
+        weighted mean == unweighted mean and brightness is unchanged regardless
+        of vibrancy."""
+        frame = np.zeros((60, 60, 3), dtype=np.uint8)
+        frame[:, :] = (0, 255, 0)  # BGR -> RGB (0, 255, 0), fully saturated green
+        region = _full_mask(h=60, w=60)
+
+        result_0 = extract_region_color(frame, region, vibrancy=0.0)
+        result_half = extract_region_color(frame, region, vibrancy=0.5)
+        result_1 = extract_region_color(frame, region, vibrancy=1.0)
+        assert result_0 == result_half == result_1 == (0, 255, 0)
+
+    def test_vibrancy_total_weight_zero_falls_back_to_unweighted_mean(self):
+        """An all-gray region at vibrancy=1.0 has every pixel S=0 -> every
+        weight=0 -> the total-weight-zero guard falls back to the plain
+        unweighted mean instead of dividing by zero."""
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        frame[:, :] = (128, 128, 128)  # gray: R==G==B, S=0 everywhere
+        region = _full_mask(h=40, w=40)
+
+        result_default = extract_region_color(frame, region, vibrancy=0.0)
+        result_vibrant = extract_region_color(frame, region, vibrancy=1.0)
+        assert result_vibrant == result_default == (128, 128, 128)
+
+    def test_sub_sample_gradient_vibrancy_zero_matches_current_path(self):
+        """sub_sample_gradient(..., vibrancy=0.0) is byte-identical to the
+        pre-260704-iss cv2.mean slab loop (n > 1 branch)."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            width=640, height=480,
+        )
+        default_result = sub_sample_gradient(frame, region, 5)
+        explicit_zero = sub_sample_gradient(frame, region, 5, vibrancy=0.0)
+        assert (default_result == explicit_zero).all()
+
+    def test_sub_sample_gradient_vibrancy_forwarded_at_n1(self):
+        """n<=1 branch forwards vibrancy into extract_region_color."""
+        frame = _red_with_white_stripe_frame()
+        region = _full_mask(h=100, w=100)
+        gradient = sub_sample_gradient(frame, region, 1, vibrancy=1.0)
+        r, g, b = extract_region_color(frame, region, vibrancy=1.0)
+        assert tuple(gradient[0]) == (r, g, b)
+
+    def test_sub_sample_gradient_vibrancy_suppresses_white_per_slab(self):
+        """n>1 branch with vibrancy>0 suppresses a white stripe per-slab too."""
+        frame = _red_with_white_stripe_frame(h=100, w=100)
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            width=100, height=100,
+        )
+        gradient_plain = sub_sample_gradient(frame, region, 5, vibrancy=0.0)
+        gradient_vibrant = sub_sample_gradient(frame, region, 5, vibrancy=1.0)
+        # Every sample should stay strongly red-dominant, and vibrancy=1.0
+        # should suppress the green/blue channels more than the plain path.
+        for i in range(gradient_plain.shape[0]):
+            assert int(gradient_vibrant[i][1]) <= int(gradient_plain[i][1])
+            assert int(gradient_vibrant[i][2]) <= int(gradient_plain[i][2])
+
+
+# ---------------------------------------------------------------------------
+# Saturation boost (quick-task 260704-iss D-2)
+# ---------------------------------------------------------------------------
+
+
+class TestSaturationBoost:
+    def test_boost_zero_is_identity(self):
+        """boost_saturation_rgb(arr, 0.0) returns the input unchanged (same object)."""
+        arr = np.array([[200, 100, 50], [128, 128, 128]], dtype=np.uint8)
+        result = boost_saturation_rgb(arr, 0.0)
+        assert result is arr
+
+    def test_boost_raises_saturation_leaves_value_unchanged(self):
+        """boost > 0 raises HSV S while HSV V (max channel) stays identical."""
+        arr = np.array([[200, 100, 50], [10, 10, 200]], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, 0.5)
+
+        assert boosted.dtype == np.uint8
+        assert boosted.shape == arr.shape
+
+        v_before = arr.max(axis=-1)
+        v_after = boosted.max(axis=-1)
+        assert (v_after == v_before).all()
+
+        def _saturation(px):
+            mx, mn = float(px.max()), float(px.min())
+            return 0.0 if mx == 0 else (mx - mn) / mx
+
+        for i in range(arr.shape[0]):
+            assert _saturation(boosted[i]) >= _saturation(arr[i])
+
+    def test_boost_gray_pixels_stay_gray(self):
+        """Pure-gray (chroma 0) pixels are unaffected by any boost value."""
+        arr = np.array([[128, 128, 128], [0, 0, 0], [255, 255, 255]], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, 1.0)
+        assert (boosted == arr).all()
+
+    def test_boost_works_on_single_pixel_shape(self):
+        """boost_saturation_rgb also accepts a (3,) single-pixel shape."""
+        px = np.array([200, 50, 50], dtype=np.uint8)
+        boosted = boost_saturation_rgb(px, 0.5)
+        assert boosted.shape == (3,)
+        assert int(boosted.max()) == int(px.max())

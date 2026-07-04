@@ -150,3 +150,92 @@ def test_put_overwrites_previous_value():
         r = client.get("/api/settings/brightness_cutoff_threshold")
     assert r.status_code == 200
     assert r.json() == {"value": 0.6}
+
+
+# ---------------------------------------------------------------------------
+# color_vibrancy + saturation_boost (quick-task 260704-iss)
+# ---------------------------------------------------------------------------
+# Same contract as brightness_cutoff_threshold above, parameterized over the
+# two new keys so both endpoints get full coverage without duplicating each
+# test body twice.
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_get_returns_default_zero_on_fresh_db(key):
+    with _make_client() as client:
+        r = client.get(f"/api/settings/{key}")
+    assert r.status_code == 200
+    assert r.json() == {"value": 0.0}
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_round_trip(key):
+    with _make_client() as client:
+        r1 = client.put(f"/api/settings/{key}", json={"value": 0.7})
+        assert r1.status_code == 200
+        assert r1.json() == {"value": 0.7}
+
+        r2 = client.get(f"/api/settings/{key}")
+    assert r2.status_code == 200
+    assert r2.json() == {"value": 0.7}
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_accepts_boundary_zero(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 0.0})
+    assert r.status_code == 200
+    assert r.json() == {"value": 0.0}
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_accepts_boundary_one(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 1.0})
+    assert r.status_code == 200
+    assert r.json() == {"value": 1.0}
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_rejects_above_one(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 1.5})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_rejects_below_zero(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": -0.01})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_rejects_nan(key):
+    with _make_client() as client:
+        r = client.put(
+            f"/api/settings/{key}",
+            content=b'{"value": NaN}',
+            headers={"Content-Type": "application/json"},
+        )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_updates_app_state(key):
+    app = FastAPI(lifespan=_lifespan_with_db)
+    app.include_router(settings_router)
+    with TestClient(app) as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 0.4})
+        assert r.status_code == 200
+        assert math.isclose(getattr(app.state, key), 0.4, rel_tol=1e-9)
+
+
+@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost"])
+def test_new_setting_put_overwrites_previous_value(key):
+    with _make_client() as client:
+        client.put(f"/api/settings/{key}", json={"value": 0.2})
+        client.put(f"/api/settings/{key}", json={"value": 0.6})
+        r = client.get(f"/api/settings/{key}")
+    assert r.status_code == 200
+    assert r.json() == {"value": 0.6}

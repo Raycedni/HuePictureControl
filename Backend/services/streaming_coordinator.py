@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from services.capture_service import CAPTURE_DEVICE
-from services.color_math import build_polygon_mask, sub_sample_gradient
+from services.color_math import boost_saturation_rgb, build_polygon_mask, sub_sample_gradient
 from services.streaming_service import HueStreamer
 from services.wled_streamer import WledStreamer
 
@@ -524,6 +524,22 @@ class StreamingCoordinator:
             if self._state not in ("error",):
                 self._state = "idle"
 
+    def _read_live_setting(self, key: str, default: float = 0.0) -> float:
+        """Defensively read a live float setting off ``self._app_state``.
+
+        Mirrors the sinks' ``getattr(app_state, key, default)`` + try/except
+        pattern (quick-task 260516-kra) — ``self._app_state`` may be None in
+        tests, and a stale/malformed attribute value should never crash the
+        frame loop, so any lookup or coercion failure falls back to
+        ``default``.
+        """
+        if self._app_state is None:
+            return default
+        try:
+            return float(getattr(self._app_state, key, default))
+        except (TypeError, ValueError):
+            return default
+
     async def _frame_loop(self, region_plan: dict) -> None:
         """60 Hz frame loop: extract per-region gradients and fan out to sinks.
 
@@ -587,6 +603,15 @@ class StreamingCoordinator:
                 )
                 return
 
+            # quick-task 260704-iss: read the live vibrancy + boost settings
+            # ONCE per frame so PUT /api/settings/{color_vibrancy,
+            # saturation_boost} takes effect on the NEXT frame without a
+            # stream restart. self._app_state may be None in tests -> both
+            # default to 0.0 (identity — byte-identical to pre-feature
+            # behavior).
+            vibrancy = self._read_live_setting("color_vibrancy")
+            boost = self._read_live_setting("saturation_boost")
+
             # Phase 19 D-22 (per-region narrowing): orientation comes from
             # the region's resolved value in region_plan. The Hue sink
             # gets n=1 (full-region mean via extract_region_color) -- cheap
@@ -596,19 +621,30 @@ class StreamingCoordinator:
             # n=N_region gradient built INSIDE ``asyncio.to_thread`` below
             # so the cv2.mean loop never blocks the event loop.
             hue_gradients: dict[str, np.ndarray] = {
-                rid: sub_sample_gradient(frame, mask, 1, orientation=orientation)
+                rid: boost_saturation_rgb(
+                    sub_sample_gradient(
+                        frame, mask, 1, orientation=orientation, vibrancy=vibrancy
+                    ),
+                    boost,
+                )
                 for rid, (mask, n_region, orientation) in region_plan.items()
             }
 
-            async def _wled_pipeline(plan=region_plan, current_frame=frame):
+            async def _wled_pipeline(
+                plan=region_plan, current_frame=frame, vib=vibrancy, bst=boost
+            ):
                 # Build the WLED-sized gradients in a worker thread so the
                 # event loop stays free for the Hue DTLS pack/send. The
                 # per-LED cv2.mean loop is ~0.6 ms per region at n=300 --
                 # well worth the to_thread hop.
                 def _compute() -> dict[str, np.ndarray]:
                     return {
-                        rid: sub_sample_gradient(
-                            current_frame, mask, n_region, orientation=orientation
+                        rid: boost_saturation_rgb(
+                            sub_sample_gradient(
+                                current_frame, mask, n_region,
+                                orientation=orientation, vibrancy=vib,
+                            ),
+                            bst,
                         )
                         for rid, (mask, n_region, orientation) in plan.items()
                     }

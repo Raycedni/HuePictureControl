@@ -14,6 +14,7 @@
 
 import { useState } from 'react'
 import { BrightnessCutoffControl } from './BrightnessCutoffControl'
+import { SettingSlider } from './SettingSlider'
 import { WledDevicesPanel } from './WledDevicesPanel'
 import { WledStripPainter } from './WledStripPainter'
 import { WledChannelSidebar } from './WledChannelSidebar'
@@ -26,9 +27,22 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col flex-1 min-h-0 p-4 text-left" data-testid="settings-page">
       <h2 className="text-sm font-semibold mb-3">Settings</h2>
-      {/* quick-task 260516-kra: global brightness cutoff slider. */}
-      <div className="mb-3">
+      {/* quick-task 260516-kra: global brightness cutoff slider.
+          quick-task 260704-iss: color vibrancy + saturation boost sliders,
+          mounted immediately adjacent so all three global color-tuning
+          controls stay together. */}
+      <div className="mb-3 flex flex-col gap-2">
         <BrightnessCutoffControl />
+        <SettingSlider
+          settingKey="color_vibrancy"
+          label="Color vibrancy (white suppression)"
+          description="Suppresses bright white pixels (subtitles, HUD) so region colors stay vivid."
+        />
+        <SettingSlider
+          settingKey="saturation_boost"
+          label="Saturation boost"
+          description="Increases output color saturation. Brightness is unchanged."
+        />
       </div>
       <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
         {/* Phase 19.1: paint canvas slot now hosts the read-only strip view + metadata sidebar. */}

@@ -104,6 +104,16 @@ async def init_db(db_path: str = DATABASE_PATH) -> aiosqlite.Connection:
         "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
         ("brightness_cutoff_threshold", "0.0"),
     )
+    # quick-task 260704-iss: color vibrancy + saturation boost settings,
+    # same idempotent seed pattern as brightness_cutoff_threshold above.
+    await db.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ("color_vibrancy", "0.0"),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ("saturation_boost", "0.0"),
+    )
     # Phase 17 D-07: WLED device table. wled_devices stays (Phase 19.1 keeps it
     # unchanged). The Phase 17 wled_channels + Phase 17/19 wled_light_assignments
     # are dropped + rewritten below under the PRAGMA user_version guard (D-20).
