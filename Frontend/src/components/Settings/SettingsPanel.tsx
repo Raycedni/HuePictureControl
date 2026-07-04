@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { BrightnessCutoffControl } from './BrightnessCutoffControl'
 import { SettingSlider } from './SettingSlider'
+import { SettingToggle } from './SettingToggle'
 import { WledDevicesPanel } from './WledDevicesPanel'
 import { WledStripPainter } from './WledStripPainter'
 import { WledChannelSidebar } from './WledChannelSidebar'
@@ -47,7 +48,9 @@ export function SettingsPanel({ onClose }: Props) {
             to the same DB row + app.state field.
             quick-task 260704-iss: color vibrancy + saturation boost sliders
             mounted alongside, per RESEARCH.md Pitfall 6 (both surfaces stay
-            in sync). */}
+            in sync).
+            quick-task 260704-w88: HDR input toggle, mounted alongside for
+            the same reason. */}
         <div className="px-4 pt-3 flex flex-col gap-2">
           <BrightnessCutoffControl />
           <SettingSlider
@@ -59,6 +62,11 @@ export function SettingsPanel({ onClose }: Props) {
             settingKey="saturation_boost"
             label="Saturation boost"
             description="Increases output color saturation. Brightness is unchanged."
+          />
+          <SettingToggle
+            settingKey="hdr_input"
+            label="HDR input (HDR10 → sRGB)"
+            description="Convert HDR10 (BT.2020 + PQ) source colors to sRGB. Enable when your source outputs HDR and colors look washed out or hue-shifted."
           />
         </div>
         <div className="flex-1 overflow-auto p-4 flex flex-col md:flex-row gap-4">
