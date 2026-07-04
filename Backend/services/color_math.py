@@ -389,6 +389,53 @@ def _weighted_region_mean(
     return r_val, g, b
 
 
+def _weighted_region_mean_linear(
+    roi_linear: np.ndarray, mask: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    """Saturation-weighted LINEAR-light region mean with luma preservation.
+
+    Quick-task 260704-wy5 (HDR v2): mirrors ``_weighted_region_mean``'s
+    saturation-weighting + Rec.709 luma-preservation algorithm, but operates
+    entirely in linear float space (BGR order) so a bright pixel dominates
+    the mean the way it dominates perceptually. Unlike the byte-space
+    version, this does NOT clip/round to uint8 and does NOT cap the
+    luma-rescale at a 255/max_channel ceiling -- there is no uint8 range to
+    protect in linear space; the downstream tone-map
+    (``_finish_linear_bt2020_to_srgb``) handles range compression. Falls
+    back to the unweighted linear mean when the mask is empty or every
+    pixel's weight collapses to ~0.
+
+    Returns:
+        (3,) float32 array, BGR order, unclipped linear light.
+    """
+    mask_bool = mask > 0
+    masked_px = roi_linear[mask_bool].astype(np.float32)  # (N, 3) BGR linear
+    if masked_px.shape[0] == 0:
+        return np.zeros(3, dtype=np.float32)
+
+    unweighted_bgr = masked_px.mean(axis=0)
+
+    w = weights[mask_bool].astype(np.float32)
+    w_sum = float(w.sum())
+    if w_sum < 1e-6:
+        weighted_bgr = unweighted_bgr
+    else:
+        weighted_bgr = (masked_px * w[:, np.newaxis]).sum(axis=0) / w_sum
+
+    def _luma(bgr: np.ndarray) -> float:
+        # bgr = [B, G, R]; Rec.709 luma on RGB order.
+        return 0.2126 * bgr[2] + 0.7152 * bgr[1] + 0.0722 * bgr[0]
+
+    luma_unweighted = _luma(unweighted_bgr)
+    luma_weighted = _luma(weighted_bgr)
+
+    if luma_weighted > 1e-6:
+        scale = luma_unweighted / luma_weighted
+        weighted_bgr = weighted_bgr * scale
+
+    return weighted_bgr.astype(np.float32)
+
+
 def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
     """Boost HSV saturation of an RGB array while leaving HSV V untouched.
 
@@ -418,7 +465,7 @@ def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
 
 
 def extract_region_color(
-    frame: np.ndarray, region: RegionMask, vibrancy: float = 0.0
+    frame: np.ndarray, region: RegionMask, vibrancy: float = 0.0, hdr: bool = False
 ) -> tuple[int, int, int]:
     """Extract mean BGR color from a frame within a polygon mask region.
 
@@ -431,12 +478,33 @@ def extract_region_color(
             byte-identical to pre-260704-iss behavior. > 0.0 uses a
             saturation-weighted mean that suppresses white pixels'
             chromaticity contribution while preserving region luma.
+        hdr: False (default) keeps the byte-space mean above, unchanged.
+            True (quick-task 260704-wy5, HDR v2) expands the ROI through
+            the limited-range PQ->linear LUT BEFORE averaging, so a bright
+            area dominates the region mean in linear light instead of
+            collapsing to a warm-gray byte-space average. The linear mean
+            is finished with roll-off -> BT.2020->BT.709 -> sRGB encode.
 
     Returns:
         (r, g, b) tuple of mean color in [0..255] range
     """
     # Crop frame and mask to bounding box — scans only the ROI pixels
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
+
+    if hdr:
+        mask_bool = region.roi_mask > 0
+        if not mask_bool.any():
+            return (0, 0, 0)
+        roi_linear = _LINEAR_LUT[roi_frame]  # (H, W, 3) BGR linear
+        if vibrancy <= 0.0:
+            lin_bgr = roi_linear[mask_bool].mean(axis=0)
+        else:
+            weights = _saturation_weights(roi_linear, vibrancy)
+            lin_bgr = _weighted_region_mean_linear(roi_linear, region.roi_mask, weights)
+        lin_rgb = lin_bgr[::-1]  # BGR -> RGB (matrix below is RGB-order)
+        out = _finish_linear_bt2020_to_srgb(lin_rgb)
+        return int(out[0]), int(out[1]), int(out[2])
+
     if vibrancy <= 0.0:
         mean_bgr = cv2.mean(roi_frame, mask=region.roi_mask)
         b, g, r_val = int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
@@ -463,6 +531,7 @@ def sub_sample_gradient(
     n: int,
     orientation: Orientation = "auto",
     vibrancy: float = 0.0,
+    hdr: bool = False,
 ) -> np.ndarray:
     """Return an (n, 3) array of RGB means sampled along the region's longest bbox axis.
 
@@ -491,13 +560,19 @@ def sub_sample_gradient(
             saturation-weighted per-slab mean (quick-task 260704-iss); the
             weight array is computed ONCE over the full ROI and sliced per
             slab (perf constraint — see below).
+        hdr: False (default) keeps the byte-space per-slab cv2.mean loop,
+            unchanged. True (quick-task 260704-wy5, HDR v2) computes each
+            slab's mean in LINEAR light (via the limited-range PQ->linear
+            LUT, applied ONCE over the full ROI) and finishes the whole
+            (n,3) buffer through the BT.2020->BT.709->sRGB tone-map in a
+            single vectorized call after the per-slab loop.
 
     Returns:
         uint8 ndarray of shape (n_effective, 3) in RGB order, where
         n_effective = max(1, min(n, longest_axis_length)).
     """
     if n <= 1:
-        r, g, b = extract_region_color(frame, region, vibrancy=vibrancy)
+        r, g, b = extract_region_color(frame, region, vibrancy=vibrancy, hdr=hdr)
         return np.array([[r, g, b]], dtype=np.uint8)
 
     width = region.x2 - region.x1
@@ -532,6 +607,46 @@ def sub_sample_gradient(
     # (full DRGB strip). The cv2.mean loop is kept because it wins for
     # every realistic N (≤300 LEDs typical).
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
+
+    if hdr:
+        # 260704-wy5 (HDR v2): expand the ROI to LINEAR light ONCE, average
+        # each slab in linear space (bright pixels dominate the way they
+        # dominate perceptually), then finish the whole buffer through the
+        # BT.2020->BT.709->sRGB tone-map in a single vectorized call AFTER
+        # the loop -- never per-slab (perf + numerical parity with the
+        # single-call finish extract_region_color uses).
+        roi_linear = _LINEAR_LUT[roi_frame]  # (roi_h, roi_w, 3) BGR linear
+        roi_weights_lin = _saturation_weights(roi_linear, vibrancy) if vibrancy > 0.0 else None
+        lin_means = np.empty((n_effective, 3), dtype=np.float32)
+        for i in range(n_effective):
+            t = i / (n_effective - 1) if n_effective > 1 else 0.0
+            if axis_x:
+                col_center = int(round(t * (width - 1)))
+                slab_x1 = max(col_center - 1, 0)
+                slab_x2 = min(col_center + 2, width)
+                slab_lin = roi_linear[:, slab_x1:slab_x2]
+                slab_mask = region.roi_mask[:, slab_x1:slab_x2]
+                slab_weights = roi_weights_lin[:, slab_x1:slab_x2] if roi_weights_lin is not None else None
+            else:
+                row_center = int(round(t * (height - 1)))
+                slab_y1 = max(row_center - 1, 0)
+                slab_y2 = min(row_center + 2, height)
+                slab_lin = roi_linear[slab_y1:slab_y2, :]
+                slab_mask = region.roi_mask[slab_y1:slab_y2, :]
+                slab_weights = roi_weights_lin[slab_y1:slab_y2, :] if roi_weights_lin is not None else None
+            if slab_weights is None:
+                slab_mask_bool = slab_mask > 0
+                if slab_mask_bool.any():
+                    lin_bgr = slab_lin[slab_mask_bool].mean(axis=0)
+                else:
+                    lin_bgr = np.zeros(3, dtype=np.float32)
+            else:
+                lin_bgr = _weighted_region_mean_linear(slab_lin, slab_mask, slab_weights)
+            lin_means[i] = lin_bgr[::-1]  # BGR -> RGB
+        out = _finish_linear_bt2020_to_srgb(lin_means)
+        if reverse:
+            out = out[::-1]
+        return out
 
     # 260704-iss: compute the saturation-weight array ONCE over the full ROI
     # (perf constraint) when vibrancy > 0, then slice it per slab below
@@ -568,15 +683,39 @@ def sub_sample_gradient(
 
 
 # ---------------------------------------------------------------------------
-# HDR10 -> sRGB conversion (quick-task 260704-w88)
+# HDR10 -> sRGB conversion (quick-task 260704-w88, v2 260704-wy5)
 # ---------------------------------------------------------------------------
 # Some capture cards pass HDR10 (BT.2020 primaries + PQ/ST-2084 transfer)
-# through unconverted. The pipeline downstream (boost_saturation_rgb,
-# rgb_to_xy_batch) assumes sRGB, so HDR10 source content reads washed-out
-# and hue-rotated (e.g. orange -> green) under saturation boost. This
-# function converts the small (N,3) SAMPLED gradient arrays -- never the
-# full frame -- from HDR10 to sRGB: PQ EOTF decode -> reference-white scale
-# -> BT.2020->BT.709 matrix -> highlight roll-off -> sRGB OETF encode.
+# through unconverted, in LIMITED range (blacks ~16, whites ~235-255 per
+# CTA-861 / typical HDMI HDR signaling). The pipeline downstream
+# (boost_saturation_rgb, rgb_to_xy_batch) assumes full-range sRGB, so HDR10
+# source content reads washed-out, hue-rotated (e.g. orange -> green) under
+# saturation boost, and -- pre-v2 -- murky warm-gray in high-dynamic-range
+# scenes.
+#
+# v1 (260704-w88) converted the ALREADY-BYTE-AVERAGED (N,3) sampled gradient
+# from HDR10 to sRGB, post-hoc, after extract_region_color/sub_sample_gradient
+# had already averaged in PQ-encoded byte space. That let a bright highlight
+# (e.g. a fire) barely outweigh a dull midtone (e.g. a sail) in the byte-space
+# mean (~1.7x), collapsing the result to warm gray -- because PQ compresses
+# highlights logarithmically, a byte-space average badly under-weights how
+# much brighter a highlight actually is in linear light (~10x).
+#
+# v2 (260704-wy5) DECOMPOSES the pipeline into two composable halves so
+# HDR-aware sampling can average in LINEAR light BEFORE the mean is taken,
+# letting a bright area dominate the region mean the way it dominates
+# perceptually:
+#   - `_LINEAR_LUT`: a 256-entry table (limited-range expand -> PQ EOTF ->
+#     linear, built ONCE at import) applied per-pixel via numpy fancy
+#     indexing on a uint8 ROI.
+#   - `_finish_linear_bt2020_to_srgb`: highlight roll-off (in BT.2020 gamut,
+#     BEFORE the primaries matrix -- see rationale below) -> BT.2020->BT.709
+#     matrix -> clip -> sRGB OETF encode -> uint8.
+# `hdr10_to_srgb` is now the composition of both halves (LUT then finish),
+# preserving its original (3,)/(N,3) uint8-in/uint8-out contract for any
+# remaining direct callers. `extract_region_color`/`sub_sample_gradient`'s
+# new `hdr=True` path calls the LUT once over the whole ROI and averages in
+# linear light BEFORE calling the finishing half, which is the actual v2 fix.
 
 HDR_REF_WHITE_NITS = 203.0  # SDR reference white per ITU-R BT.2408
 
@@ -598,68 +737,63 @@ _BT2020_TO_BT709 = np.array(
 )
 
 
-def hdr10_to_srgb(rgb: np.ndarray) -> np.ndarray:
-    """Convert an HDR10 (BT.2020 + PQ) sample array to sRGB, vectorized.
+def _build_linear_lut() -> np.ndarray:
+    """Build the 256-entry limited-range-PQ-byte -> linear-light LUT.
 
-    Applies ONLY to the handful of sampled colors per region per frame
-    (the (N,3) gradient arrays produced by ``sub_sample_gradient``) --
-    never the full frame -- to stay within the streaming latency budget.
-
-    Pipeline (all float32, RGB order):
-        1. Normalize uint8 -> [0,1]
-        2. PQ EOTF (ST 2084 inverse) -> linear light in [0,1] (0..10000 nits)
-        3. Scale to SDR reference white (203 nits -> ~1.0 at diffuse white)
-        4. Extended-Reinhard highlight roll-off, applied in the native
-           BT.2020 gamut BEFORE the primaries matrix (keeps mid-tones
-           near-linear, compresses only highlights > 1.0). Doing this
-           before the matrix -- rather than after -- avoids a hue-rotation
-           bug: a highly saturated, highlight-bright BT.2020 sample (e.g.
-           a specular orange many multiples of reference white) produces a
-           dominant channel so large that the BT.2020->BT.709 matrix's
-           negative off-diagonal terms drive the other two channels
-           negative; clipping those to zero post-matrix collapses the
-           color to a near-primary instead of the intended hue. Tone
-           mapping first compresses the dominant channel into a
-           comparable range before the matrix runs, preserving hue.
-        5. BT.2020 -> BT.709 primaries matrix
-        6. Clip negative excursions from the matrix
-        7. sRGB OETF encode (inverse of ``_gamma_expand``)
-
-    Args:
-        rgb: (N, 3) or (3,) array, RGB order, uint8 (or castable to it).
-
-    Returns:
-        uint8 array of the same shape as ``rgb``.
+    b in [0,255] -> limited-range expansion (16 -> 0.0, >=235 -> 1.0,
+    clipped) -> PQ EOTF (ST 2084 inverse) -> nits-scaled relative light
+    (same 10000/HDR_REF_WHITE_NITS scaling v1 used). Built ONCE at import;
+    monotonic non-decreasing across the full byte range.
     """
-    arr = np.asarray(rgb, dtype=np.float32)
-    single = arr.ndim == 1
-    if single:
-        arr = arr[np.newaxis, :]
-
-    # Step 1: normalize uint8 -> [0,1].
-    e = arr / np.float32(255.0)
-
-    # Step 2: PQ EOTF (ST 2084 inverse) -> linear light in [0,1].
+    b = np.arange(256, dtype=np.float32)
+    e = np.clip((b - 16.0) / 219.0, 0.0, 1.0)
     ep = e ** (1.0 / _PQ_M2)
     linear = (
         np.maximum(ep - _PQ_C1, 0.0) / (_PQ_C2 - _PQ_C3 * ep)
     ) ** (1.0 / _PQ_M1)
-
-    # Step 3: scale to SDR reference white.
     rel = linear * np.float32(10000.0 / HDR_REF_WHITE_NITS)
+    return rel.astype(np.float32)
 
-    # Step 4: extended-Reinhard highlight roll-off in native BT.2020 gamut;
-    # maps HDR white -> 1.0.
+
+# Module-level LUT: index with a uint8 array (any shape) to get linear light
+# in the same units `hdr10_to_srgb`'s old step 3 produced. Per-byte (channel
+# agnostic) -- `_LINEAR_LUT[bgr_roi]` yields linear values still in BGR order.
+_LINEAR_LUT = _build_linear_lut()
+
+
+def _finish_linear_bt2020_to_srgb(rel: np.ndarray) -> np.ndarray:
+    """Finish a linear-light BT.2020 (N,3)/(3,) array into sRGB uint8.
+
+    Implements v1 hdr10_to_srgb's steps 4-7: extended-Reinhard highlight
+    roll-off (in the native BT.2020 gamut, BEFORE the primaries matrix --
+    see module docstring above for the hue-rotation rationale) ->
+    BT.2020->BT.709 matrix -> clip negative excursions -> sRGB OETF encode.
+
+    Args:
+        rel: (N, 3) or (3,) float32 array, RGB order, linear light relative
+            to SDR reference white (i.e. already scaled so ~1.0 == diffuse
+            white, matching `_LINEAR_LUT`'s output units).
+
+    Returns:
+        uint8 array of the same shape as ``rel``.
+    """
+    arr = np.asarray(rel, dtype=np.float32)
+    single = arr.ndim == 1
+    if single:
+        arr = arr[np.newaxis, :]
+
+    # Extended-Reinhard highlight roll-off in native BT.2020 gamut; maps
+    # HDR white -> 1.0.
     white = np.float32(10000.0 / HDR_REF_WHITE_NITS)
-    toned = rel * (1.0 + rel / (white * white)) / (1.0 + rel)
+    toned = arr * (1.0 + arr / (white * white)) / (1.0 + arr)
 
-    # Step 5: BT.2020 -> BT.709 primaries matrix.
+    # BT.2020 -> BT.709 primaries matrix.
     rel709 = toned @ _BT2020_TO_BT709.T
 
-    # Step 6: clip negative excursions introduced by the matrix.
+    # Clip negative excursions introduced by the matrix.
     rel709 = np.maximum(rel709, 0.0)
 
-    # Step 7: sRGB OETF encode (inverse of _gamma_expand).
+    # sRGB OETF encode (inverse of _gamma_expand).
     srgb = np.where(
         rel709 > 0.0031308,
         1.055 * (rel709 ** (1.0 / 2.4)) - 0.055,
@@ -671,3 +805,29 @@ def hdr10_to_srgb(rgb: np.ndarray) -> np.ndarray:
     if single:
         out = out[0]
     return out
+
+
+def hdr10_to_srgb(rgb: np.ndarray) -> np.ndarray:
+    """Convert an HDR10 (BT.2020 + PQ, limited-range) sample array to sRGB.
+
+    Applies ONLY to the handful of sampled colors per region per frame
+    (the (N,3) gradient arrays produced by ``sub_sample_gradient``) --
+    never the full frame -- to stay within the streaming latency budget.
+
+    v2 (260704-wy5): this is now the composition of the two halves used by
+    the linear-averaging hdr paths -- ``_LINEAR_LUT`` (limited-range expand
+    -> PQ EOTF -> linear) followed by ``_finish_linear_bt2020_to_srgb``
+    (roll-off -> matrix -> sRGB encode). Kept as a single entry point for
+    any caller converting an already-computed sample array (e.g. legacy
+    callers); the actual HDR v2 fix -- averaging BEFORE conversion -- lives
+    in ``extract_region_color``/``sub_sample_gradient``'s ``hdr=True`` path.
+
+    Args:
+        rgb: (N, 3) or (3,) array, RGB order, uint8 (or castable to it).
+
+    Returns:
+        uint8 array of the same shape as ``rgb``.
+    """
+    arr = np.asarray(rgb, dtype=np.uint8)
+    rel = _LINEAR_LUT[arr]
+    return _finish_linear_bt2020_to_srgb(rel)

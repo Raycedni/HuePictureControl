@@ -5,6 +5,7 @@ import pytest
 from services.color_math import (
     GAMUT_C,
     RegionMask,
+    _LINEAR_LUT,
     _clamp_to_gamut,
     _in_gamut,
     boost_saturation_rgb,
@@ -614,3 +615,121 @@ class TestHdr10ToSrgb:
         out = hdr10_to_srgb(arr)
         assert out.shape == (5, 3)
         assert out.dtype == np.uint8
+
+
+# ---------------------------------------------------------------------------
+# HDR pipeline v2: linear-light region averaging (quick-task 260704-wy5)
+# ---------------------------------------------------------------------------
+
+
+class TestLinearLut:
+    def test_black_floor_at_byte_16(self):
+        """Limited-range black floor: byte 16 -> exactly 0.0 linear light."""
+        assert _LINEAR_LUT[16] == 0.0
+
+    def test_below_floor_also_clips_to_zero(self):
+        """Bytes below the limited-range floor (16) also clip to 0.0."""
+        assert _LINEAR_LUT[0] == 0.0
+        assert _LINEAR_LUT[10] == 0.0
+
+    def test_saturation_at_byte_235_matches_255(self):
+        """235 and 255 both saturate to the same max value (limited-range white)."""
+        assert _LINEAR_LUT[235] == _LINEAR_LUT[255]
+
+    def test_monotonic_non_decreasing(self):
+        """The LUT never decreases across the full byte range."""
+        assert np.all(np.diff(_LINEAR_LUT) >= 0)
+
+
+def _hdr_orange_gray_fixture(h=100, w=100):
+    """Half bright-PQ-orange, half dull-gray BGR frame + full-region mask.
+
+    Bright PQ orange ~ RGB (176, 144, 60) -> BGR (60, 144, 176).
+    Dull gray ~ RGB (105, 92, 87) -> BGR (87, 92, 105).
+    """
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    frame[:, : w // 2] = (60, 144, 176)   # BGR for bright orange
+    frame[:, w // 2 :] = (87, 92, 105)    # BGR for dull gray
+    region = build_polygon_mask(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], width=w, height=h,
+    )
+    return frame, region
+
+
+class TestHdrLinearAveraging:
+    def test_extract_region_color_hdr_true_is_orange_dominant(self):
+        """hdr=True averages in linear light: the bright orange half
+        dominates the mean far more than a byte-space average would let it,
+        producing a clearly orange-dominant (r > b) result."""
+        frame, region = _hdr_orange_gray_fixture()
+        r, g, b = extract_region_color(frame, region, hdr=True)
+        assert r > b, f"expected orange-dominant mean, got {(r, g, b)}"
+
+    def test_hdr_true_beats_convert_after_average(self):
+        """Linear-before-average (hdr=True) produces a markedly larger R-B
+        spread than convert-after-average (byte-space mean piped through
+        hdr10_to_srgb) -- proving the v2 fix for the v1 warm-gray defect."""
+        frame, region = _hdr_orange_gray_fixture()
+
+        r_lin, g_lin, b_lin = extract_region_color(frame, region, hdr=True)
+        spread_linear = r_lin - b_lin
+
+        r_byte, g_byte, b_byte = extract_region_color(frame, region, hdr=False)
+        converted = hdr10_to_srgb(
+            np.array([r_byte, g_byte, b_byte], dtype=np.uint8)
+        )
+        spread_byte = int(converted[0]) - int(converted[2])
+
+        assert spread_linear > spread_byte, (
+            f"linear-before-average spread {spread_linear} should exceed "
+            f"convert-after-average spread {spread_byte}"
+        )
+
+    def test_extract_region_color_hdr_empty_mask_returns_black(self):
+        """An empty mask under hdr=True returns (0, 0, 0), no NaN/divide crash."""
+        empty_mask = np.zeros((10, 10), dtype=np.uint8)
+        region = RegionMask(mask=empty_mask, roi_mask=empty_mask, x1=0, y1=0, x2=10, y2=10)
+        frame = np.zeros((10, 10, 3), dtype=np.uint8)
+        assert extract_region_color(frame, region, hdr=True) == (0, 0, 0)
+
+    def test_extract_region_color_hdr_false_matches_default(self):
+        """hdr=False (default) is byte-identical to the pre-260704-wy5 output."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], width=640, height=480,
+        )
+        assert extract_region_color(frame, region, hdr=False) == extract_region_color(frame, region)
+        assert (
+            extract_region_color(frame, region, vibrancy=0.5, hdr=False)
+            == extract_region_color(frame, region, vibrancy=0.5)
+        )
+
+    def test_sub_sample_gradient_hdr_false_matches_default(self):
+        """sub_sample_gradient(..., hdr=False) is byte-identical to the
+        pre-260704-wy5 output, for both vibrancy=0 and vibrancy>0."""
+        frame = _default_frame()
+        region = build_polygon_mask(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], width=640, height=480,
+        )
+        a = sub_sample_gradient(frame, region, 5)
+        b = sub_sample_gradient(frame, region, 5, hdr=False)
+        assert (a == b).all()
+
+        a2 = sub_sample_gradient(frame, region, 5, vibrancy=0.5)
+        b2 = sub_sample_gradient(frame, region, 5, vibrancy=0.5, hdr=False)
+        assert (a2 == b2).all()
+
+    def test_sub_sample_gradient_hdr_true_n1_delegates_to_extract_region_color(self):
+        """n<=1 with hdr=True forwards hdr into extract_region_color."""
+        frame, region = _hdr_orange_gray_fixture()
+        gradient = sub_sample_gradient(frame, region, 1, hdr=True)
+        r, g, b = extract_region_color(frame, region, hdr=True)
+        assert tuple(gradient[0]) == (r, g, b)
+
+    def test_sub_sample_gradient_hdr_true_multi_sample_dtype_and_range(self):
+        """hdr=True with n>1 returns a valid uint8 (n,3) array."""
+        frame, region = _hdr_orange_gray_fixture()
+        gradient = sub_sample_gradient(frame, region, 5, hdr=True)
+        assert gradient.shape == (5, 3)
+        assert gradient.dtype == np.uint8
+        assert gradient.min() >= 0 and gradient.max() <= 255
