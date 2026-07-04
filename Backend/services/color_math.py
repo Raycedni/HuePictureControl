@@ -565,3 +565,109 @@ def sub_sample_gradient(
     if reverse:
         means = means[::-1]
     return means
+
+
+# ---------------------------------------------------------------------------
+# HDR10 -> sRGB conversion (quick-task 260704-w88)
+# ---------------------------------------------------------------------------
+# Some capture cards pass HDR10 (BT.2020 primaries + PQ/ST-2084 transfer)
+# through unconverted. The pipeline downstream (boost_saturation_rgb,
+# rgb_to_xy_batch) assumes sRGB, so HDR10 source content reads washed-out
+# and hue-rotated (e.g. orange -> green) under saturation boost. This
+# function converts the small (N,3) SAMPLED gradient arrays -- never the
+# full frame -- from HDR10 to sRGB: PQ EOTF decode -> reference-white scale
+# -> BT.2020->BT.709 matrix -> highlight roll-off -> sRGB OETF encode.
+
+HDR_REF_WHITE_NITS = 203.0  # SDR reference white per ITU-R BT.2408
+
+# ST 2084 (PQ) EOTF constants.
+_PQ_M1 = 0.1593017578125
+_PQ_M2 = 78.84375
+_PQ_C1 = 0.8359375
+_PQ_C2 = 18.8515625
+_PQ_C3 = 18.6875
+
+# BT.2020 -> BT.709 primaries matrix (RGB order), applied as rel @ M.T.
+_BT2020_TO_BT709 = np.array(
+    [
+        [1.6605, -0.5876, -0.0728],
+        [-0.1246, 1.1329, -0.0083],
+        [-0.0182, -0.1006, 1.1187],
+    ],
+    dtype=np.float32,
+)
+
+
+def hdr10_to_srgb(rgb: np.ndarray) -> np.ndarray:
+    """Convert an HDR10 (BT.2020 + PQ) sample array to sRGB, vectorized.
+
+    Applies ONLY to the handful of sampled colors per region per frame
+    (the (N,3) gradient arrays produced by ``sub_sample_gradient``) --
+    never the full frame -- to stay within the streaming latency budget.
+
+    Pipeline (all float32, RGB order):
+        1. Normalize uint8 -> [0,1]
+        2. PQ EOTF (ST 2084 inverse) -> linear light in [0,1] (0..10000 nits)
+        3. Scale to SDR reference white (203 nits -> ~1.0 at diffuse white)
+        4. Extended-Reinhard highlight roll-off, applied in the native
+           BT.2020 gamut BEFORE the primaries matrix (keeps mid-tones
+           near-linear, compresses only highlights > 1.0). Doing this
+           before the matrix -- rather than after -- avoids a hue-rotation
+           bug: a highly saturated, highlight-bright BT.2020 sample (e.g.
+           a specular orange many multiples of reference white) produces a
+           dominant channel so large that the BT.2020->BT.709 matrix's
+           negative off-diagonal terms drive the other two channels
+           negative; clipping those to zero post-matrix collapses the
+           color to a near-primary instead of the intended hue. Tone
+           mapping first compresses the dominant channel into a
+           comparable range before the matrix runs, preserving hue.
+        5. BT.2020 -> BT.709 primaries matrix
+        6. Clip negative excursions from the matrix
+        7. sRGB OETF encode (inverse of ``_gamma_expand``)
+
+    Args:
+        rgb: (N, 3) or (3,) array, RGB order, uint8 (or castable to it).
+
+    Returns:
+        uint8 array of the same shape as ``rgb``.
+    """
+    arr = np.asarray(rgb, dtype=np.float32)
+    single = arr.ndim == 1
+    if single:
+        arr = arr[np.newaxis, :]
+
+    # Step 1: normalize uint8 -> [0,1].
+    e = arr / np.float32(255.0)
+
+    # Step 2: PQ EOTF (ST 2084 inverse) -> linear light in [0,1].
+    ep = e ** (1.0 / _PQ_M2)
+    linear = (
+        np.maximum(ep - _PQ_C1, 0.0) / (_PQ_C2 - _PQ_C3 * ep)
+    ) ** (1.0 / _PQ_M1)
+
+    # Step 3: scale to SDR reference white.
+    rel = linear * np.float32(10000.0 / HDR_REF_WHITE_NITS)
+
+    # Step 4: extended-Reinhard highlight roll-off in native BT.2020 gamut;
+    # maps HDR white -> 1.0.
+    white = np.float32(10000.0 / HDR_REF_WHITE_NITS)
+    toned = rel * (1.0 + rel / (white * white)) / (1.0 + rel)
+
+    # Step 5: BT.2020 -> BT.709 primaries matrix.
+    rel709 = toned @ _BT2020_TO_BT709.T
+
+    # Step 6: clip negative excursions introduced by the matrix.
+    rel709 = np.maximum(rel709, 0.0)
+
+    # Step 7: sRGB OETF encode (inverse of _gamma_expand).
+    srgb = np.where(
+        rel709 > 0.0031308,
+        1.055 * (rel709 ** (1.0 / 2.4)) - 0.055,
+        12.92 * rel709,
+    )
+
+    out = np.clip(srgb, 0.0, 1.0) * 255.0
+    out = np.round(out).astype(np.uint8)
+    if single:
+        out = out[0]
+    return out

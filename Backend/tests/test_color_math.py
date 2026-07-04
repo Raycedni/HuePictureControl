@@ -10,6 +10,7 @@ from services.color_math import (
     boost_saturation_rgb,
     build_polygon_mask,
     extract_region_color,
+    hdr10_to_srgb,
     rgb_to_xy,
     sub_sample_gradient,
 )
@@ -550,3 +551,66 @@ class TestSaturationBoost:
         boosted = boost_saturation_rgb(px, 0.5)
         assert boosted.shape == (3,)
         assert int(boosted.max()) == int(px.max())
+
+
+# ---------------------------------------------------------------------------
+# hdr10_to_srgb (quick-task 260704-w88)
+# ---------------------------------------------------------------------------
+
+
+class TestHdr10ToSrgb:
+    def test_neutral_gray_stays_neutral(self):
+        """A PQ-encoded mid gray (R=G=B) stays neutral after conversion."""
+        px = np.array([128, 128, 128], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert abs(r - g) <= 2
+        assert abs(g - b) <= 2
+
+    def test_saturated_orange_maps_to_orange_hue_not_green(self):
+        """A BT.2020-encoded saturated orange stays orange-ish (R > G > B)."""
+        px = np.array([220, 130, 40], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert r > g > b
+
+    def test_black_stays_black(self):
+        """[0,0,0] -> [0,0,0], no NaN/negative artifacts from the PQ/matrix path."""
+        px = np.array([0, 0, 0], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        assert out.tolist() == [0, 0, 0]
+
+    def test_bright_input_produces_valid_uint8_near_neutral(self):
+        """A very bright PQ input clips to a valid uint8, no channel < 0 or > 255."""
+        px = np.array([255, 255, 255], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        assert out.dtype == np.uint8
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert 0 <= r <= 255
+        assert 0 <= g <= 255
+        assert 0 <= b <= 255
+        assert abs(r - g) <= 2
+        assert abs(g - b) <= 2
+
+    def test_single_row_shape_preserved(self):
+        """A (3,) input returns a (3,) output (matches uint8 dtype)."""
+        px = np.array([200, 100, 50], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        assert out.shape == (3,)
+        assert out.dtype == np.uint8
+
+    def test_vectorized_over_n_rows(self):
+        """A (5,3) input returns a (5,3) output in one call."""
+        arr = np.array(
+            [
+                [128, 128, 128],
+                [220, 130, 40],
+                [0, 0, 0],
+                [255, 255, 255],
+                [10, 200, 30],
+            ],
+            dtype=np.uint8,
+        )
+        out = hdr10_to_srgb(arr)
+        assert out.shape == (5, 3)
+        assert out.dtype == np.uint8
