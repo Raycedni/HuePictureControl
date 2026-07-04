@@ -1,13 +1,14 @@
-"""Global app-settings KV router (quick-task 260516-kra).
+"""Global app-settings KV router (quick-task 260516-kra; extended 260704-iss).
 
-Exposes GET/PUT for ``brightness_cutoff_threshold``. The PUT handler updates
-BOTH the persistent SQLite row AND ``request.app.state.brightness_cutoff_threshold``
-so the live streaming sinks see the new value on the NEXT frame without a
-stream restart.
+Exposes GET/PUT for ``brightness_cutoff_threshold``, ``color_vibrancy``, and
+``saturation_boost``. Each PUT handler updates BOTH the persistent SQLite row
+AND the matching ``request.app.state.<key>`` attribute so the live streaming
+coordinator/sinks see the new value on the NEXT frame without a stream
+restart.
 
 Schema: ``settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)``. Values are
 stored as TEXT (``str(float)``) for forward-compat with future non-numeric
-settings; the brightness handler parses to float on read.
+settings; each handler parses to float on read.
 
 PUT validation path: the body is parsed manually instead of via a Pydantic
 body-model parameter so that NaN/Infinity rejection produces a clean 422
@@ -26,34 +27,31 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
-class BrightnessCutoffResponse(BaseModel):
+class SettingValueResponse(BaseModel):
     value: float
 
 
-@router.get(
-    "/brightness_cutoff_threshold",
-    response_model=BrightnessCutoffResponse,
-)
-async def get_brightness_cutoff(request: Request) -> BrightnessCutoffResponse:
+# Backward-compat alias — brightness_cutoff_threshold's original response
+# model name, kept so any external import of this symbol keeps working.
+BrightnessCutoffResponse = SettingValueResponse
+
+
+async def _get_setting(request: Request, key: str) -> SettingValueResponse:
     db = request.app.state.db
     async with await db.execute(
         "SELECT value FROM settings WHERE key = ?",
-        ("brightness_cutoff_threshold",),
+        (key,),
     ) as cur:
         row = await cur.fetchone()
     if row is None:
-        return BrightnessCutoffResponse(value=0.0)
+        return SettingValueResponse(value=0.0)
     try:
-        return BrightnessCutoffResponse(value=float(row["value"]))
+        return SettingValueResponse(value=float(row["value"]))
     except (TypeError, ValueError):
-        return BrightnessCutoffResponse(value=0.0)
+        return SettingValueResponse(value=0.0)
 
 
-@router.put(
-    "/brightness_cutoff_threshold",
-    response_model=BrightnessCutoffResponse,
-)
-async def put_brightness_cutoff(request: Request) -> BrightnessCutoffResponse:
+async def _put_setting(request: Request, key: str) -> SettingValueResponse:
     # Manual body parsing — see module docstring for the NaN-in-422 rationale.
     raw = await request.body()
     try:
@@ -83,9 +81,57 @@ async def put_brightness_cutoff(request: Request) -> BrightnessCutoffResponse:
     await db.execute(
         "INSERT INTO settings (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        ("brightness_cutoff_threshold", str(v)),
+        (key, str(v)),
     )
     await db.commit()
-    # Live update — the streamers read this on every render() call.
-    request.app.state.brightness_cutoff_threshold = v
-    return BrightnessCutoffResponse(value=v)
+    # Live update — the coordinator/streamers read this on every frame.
+    setattr(request.app.state, key, v)
+    return SettingValueResponse(value=v)
+
+
+@router.get(
+    "/brightness_cutoff_threshold",
+    response_model=SettingValueResponse,
+)
+async def get_brightness_cutoff(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "brightness_cutoff_threshold")
+
+
+@router.put(
+    "/brightness_cutoff_threshold",
+    response_model=SettingValueResponse,
+)
+async def put_brightness_cutoff(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "brightness_cutoff_threshold")
+
+
+@router.get(
+    "/color_vibrancy",
+    response_model=SettingValueResponse,
+)
+async def get_color_vibrancy(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "color_vibrancy")
+
+
+@router.put(
+    "/color_vibrancy",
+    response_model=SettingValueResponse,
+)
+async def put_color_vibrancy(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "color_vibrancy")
+
+
+@router.get(
+    "/saturation_boost",
+    response_model=SettingValueResponse,
+)
+async def get_saturation_boost(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "saturation_boost")
+
+
+@router.put(
+    "/saturation_boost",
+    response_model=SettingValueResponse,
+)
+async def put_saturation_boost(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "saturation_boost")

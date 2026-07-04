@@ -51,6 +51,29 @@ async def lifespan(app: FastAPI):
         # safe default already set above.
         pass
 
+    # quick-task 260704-iss: hydrate color_vibrancy + saturation_boost live
+    # settings, mirroring the brightness_cutoff_threshold block above so the
+    # coordinator's per-frame getattr(app_state, ...) reads pick them up on
+    # first frame after startup. Defaults 0.0 (disabled -> byte-identical to
+    # pre-feature behavior).
+    app.state.color_vibrancy = 0.0
+    app.state.saturation_boost = 0.0
+    try:
+        async with db.execute(
+            "SELECT key, value FROM settings WHERE key IN (?, ?)",
+            ("color_vibrancy", "saturation_boost"),
+        ) as cur:
+            rows = await cur.fetchall()
+        for row in rows:
+            try:
+                setattr(app.state, row["key"], float(row["value"]))
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        # settings table may not exist if init_db ran against a stale DB image —
+        # safe defaults already set above.
+        pass
+
     # Startup: purge regions smaller than MIN_REGION_AREA
     from routers.regions import MIN_REGION_AREA, polygon_area
     async with db.execute("SELECT id, polygon FROM regions") as cursor:
