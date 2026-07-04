@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-05-16 - Completed quick task 260516-kra: Add global brightness threshold (Hue+WLED)
+Last activity: 2026-07-04 - Completed quick task 260704-iss: Color vibrancy + saturation boost sliders (white-pollution fix)
 
 ## Performance Metrics
 
@@ -130,6 +130,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260516-iqp | Tier 1 real-time light sync performance pass: batched DTLS, vectorized WLED build, parallel sink render | 2026-05-16 | 48f6482 | [260516-iqp-tier-1-real-time-light-sync-performance-](./quick/260516-iqp-tier-1-real-time-light-sync-performance-/) |
 | 260516-kra | Add global brightness threshold (Hue+WLED) — per-region luma cutoff, default 0.0 disabled | 2026-05-16 | d550877 | [260516-kra-add-global-brightness-threshold-hue-wled](./quick/260516-kra-add-global-brightness-threshold-hue-wled/) |
+| 260704-iss | Color vibrancy + saturation boost sliders — saturation-weighted sampling fixes white pollution, brightness-preserving | 2026-07-04 | 5984d66 | [260704-iss-color-vibrancy-sliders](./quick/260704-iss-color-vibrancy-sliders/) |
 
 ## Session Continuity
 
