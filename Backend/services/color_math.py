@@ -315,8 +315,110 @@ def build_polygon_mask(
     return RegionMask(mask=mask, roi_mask=roi_mask, x1=x1, y1=y1, x2=x2, y2=y2)
 
 
+# ---------------------------------------------------------------------------
+# Vibrancy-weighted sampling + saturation boost (quick-task 260704-iss)
+# ---------------------------------------------------------------------------
+# Fixes "white pollution": small bright-white UI elements (subtitles, HUD
+# lines) inside a region desaturate the plain cv2.mean color sent to the
+# LEDs. `color_vibrancy` re-weights the region mean toward saturated pixels
+# while rescaling to preserve the region's unweighted luma (brightness).
+# `saturation_boost` is an independent post-hoc HSV-S boost applied to the
+# final per-region/per-LED RGB, leaving HSV V (brightness) untouched.
+
+
+def _saturation_weights(roi_bgr: np.ndarray, alpha: float) -> np.ndarray:
+    """Per-pixel sampling weight from HSV-style saturation S = (max-min)/max.
+
+    Computed ONCE per region ROI (perf constraint: reused across all slabs
+    in sub_sample_gradient's n>1 path). Returns an (H, W) float32 array;
+    w = (1-alpha) + alpha*(S*S) so alpha=0 -> uniform weights (== unweighted
+    mean) and alpha=1 -> pure S^2 weighting (near-white pixels contribute
+    almost nothing).
+    """
+    roi_f = roi_bgr.astype(np.float32)
+    mx = roi_f.max(axis=2)
+    mn = roi_f.min(axis=2)
+    s = np.where(mx > 0, (mx - mn) / mx, 0.0).astype(np.float32)
+    return ((1.0 - alpha) + alpha * (s * s)).astype(np.float32)
+
+
+def _weighted_region_mean(
+    roi_bgr: np.ndarray, mask: np.ndarray, weights: np.ndarray
+) -> tuple[int, int, int]:
+    """Saturation-weighted region mean with brightness (luma) preservation.
+
+    Rescales the weighted-mean color so its Rec.709 luma matches the
+    region's plain unweighted-mean luma — this is what suppresses white
+    pixels' chromaticity contribution WITHOUT dimming the result. Falls
+    back to the unweighted mean when the mask is empty or every pixel's
+    weight collapses to ~0 (e.g. an all-white/all-gray region at alpha=1.0,
+    where every S=0).
+    """
+    mask_bool = mask > 0
+    masked_px = roi_bgr[mask_bool].astype(np.float32)  # (N, 3) BGR
+    if masked_px.shape[0] == 0:
+        return (0, 0, 0)
+
+    unweighted_bgr = masked_px.mean(axis=0)
+
+    w = weights[mask_bool].astype(np.float32)
+    w_sum = float(w.sum())
+    if w_sum < 1e-6:
+        weighted_bgr = unweighted_bgr
+    else:
+        weighted_bgr = (masked_px * w[:, np.newaxis]).sum(axis=0) / w_sum
+
+    def _luma(bgr: np.ndarray) -> float:
+        # bgr = [B, G, R]; Rec.709 luma on RGB order.
+        return 0.2126 * bgr[2] + 0.7152 * bgr[1] + 0.0722 * bgr[0]
+
+    luma_unweighted = _luma(unweighted_bgr)
+    luma_weighted = _luma(weighted_bgr)
+
+    if luma_weighted > 1e-6:
+        scale = luma_unweighted / luma_weighted
+        max_channel = float(weighted_bgr.max())
+        if max_channel > 1e-6:
+            # Cap the scale so no channel overflows 255 — uniform per-channel
+            # scaling preserves hue while guaranteeing no clipping artifact.
+            scale = min(scale, 255.0 / max_channel)
+        weighted_bgr = weighted_bgr * scale
+
+    weighted_bgr = np.clip(weighted_bgr, 0.0, 255.0)
+    b, g, r_val = int(round(weighted_bgr[0])), int(round(weighted_bgr[1])), int(round(weighted_bgr[2]))
+    return r_val, g, b
+
+
+def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
+    """Boost HSV saturation of an RGB array while leaving HSV V untouched.
+
+    Args:
+        rgb: (N, 3) or (3,) array, RGB order, any numeric dtype.
+        boost: 0.0 = identity (returns ``rgb`` unchanged, zero cost).
+            > 0.0 raises saturation; 1.0 fully saturates (S -> 1.0).
+
+    Returns:
+        uint8 array of the same shape as ``rgb``. The max channel per pixel
+        (== HSV V) is numerically unchanged because ``mx - (mx - mx)*ratio
+        == mx``; only the non-max channels are pulled toward 0.
+    """
+    if boost <= 0.0:
+        return rgb
+
+    arr = np.asarray(rgb, dtype=np.float32)
+    mx = arr.max(axis=-1, keepdims=True)
+    mn = arr.min(axis=-1, keepdims=True)
+    chroma = mx - mn
+    with np.errstate(invalid="ignore", divide="ignore"):
+        s = np.where(mx > 0, chroma / mx, 0.0)
+        s_new = s + boost * (1.0 - s)
+        ratio = np.where(s > 1e-6, s_new / s, 1.0)
+    out = mx - (mx - arr) * ratio
+    return np.clip(out, 0.0, 255.0).astype(np.uint8)
+
+
 def extract_region_color(
-    frame: np.ndarray, region: RegionMask
+    frame: np.ndarray, region: RegionMask, vibrancy: float = 0.0
 ) -> tuple[int, int, int]:
     """Extract mean BGR color from a frame within a polygon mask region.
 
@@ -325,15 +427,23 @@ def extract_region_color(
     Args:
         frame: BGR uint8 numpy array from capture
         region: RegionMask from build_polygon_mask()
+        vibrancy: 0.0 (default) keeps the exact original cv2.mean fast path,
+            byte-identical to pre-260704-iss behavior. > 0.0 uses a
+            saturation-weighted mean that suppresses white pixels'
+            chromaticity contribution while preserving region luma.
 
     Returns:
         (r, g, b) tuple of mean color in [0..255] range
     """
     # Crop frame and mask to bounding box — scans only the ROI pixels
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
-    mean_bgr = cv2.mean(roi_frame, mask=region.roi_mask)
-    b, g, r_val = int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
-    return r_val, g, b
+    if vibrancy <= 0.0:
+        mean_bgr = cv2.mean(roi_frame, mask=region.roi_mask)
+        b, g, r_val = int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
+        return r_val, g, b
+
+    weights = _saturation_weights(roi_frame, vibrancy)
+    return _weighted_region_mean(roi_frame, region.roi_mask, weights)
 
 
 # Phase 19 D-17: per-region orientation enum for sub-sample axis + direction.
@@ -352,6 +462,7 @@ def sub_sample_gradient(
     region: RegionMask,
     n: int,
     orientation: Orientation = "auto",
+    vibrancy: float = 0.0,
 ) -> np.ndarray:
     """Return an (n, 3) array of RGB means sampled along the region's longest bbox axis.
 
@@ -375,13 +486,18 @@ def sub_sample_gradient(
             assignments stay bit-for-bit identical (D-22 contract). The four
             explicit modes force both axis and indexing direction; 'RTL' and
             'BTT' reverse the output array (D-17).
+        vibrancy: 0.0 (default) keeps the exact current cv2.mean slab loop,
+            byte-identical to pre-260704-iss behavior. > 0.0 uses a
+            saturation-weighted per-slab mean (quick-task 260704-iss); the
+            weight array is computed ONCE over the full ROI and sliced per
+            slab (perf constraint — see below).
 
     Returns:
         uint8 ndarray of shape (n_effective, 3) in RGB order, where
         n_effective = max(1, min(n, longest_axis_length)).
     """
     if n <= 1:
-        r, g, b = extract_region_color(frame, region)
+        r, g, b = extract_region_color(frame, region, vibrancy=vibrancy)
         return np.array([[r, g, b]], dtype=np.uint8)
 
     width = region.x2 - region.x1
@@ -417,6 +533,11 @@ def sub_sample_gradient(
     # every realistic N (≤300 LEDs typical).
     roi_frame = frame[region.y1:region.y2, region.x1:region.x2]
 
+    # 260704-iss: compute the saturation-weight array ONCE over the full ROI
+    # (perf constraint) when vibrancy > 0, then slice it per slab below
+    # exactly like slab_frame/slab_mask are sliced from roi_frame/roi_mask.
+    roi_weights = _saturation_weights(roi_frame, vibrancy) if vibrancy > 0.0 else None
+
     means = np.empty((n_effective, 3), dtype=np.uint8)
     for i in range(n_effective):
         t = i / (n_effective - 1) if n_effective > 1 else 0.0
@@ -426,15 +547,21 @@ def sub_sample_gradient(
             slab_x2 = min(col_center + 2, width)
             slab_frame = roi_frame[:, slab_x1:slab_x2]
             slab_mask = region.roi_mask[:, slab_x1:slab_x2]
+            slab_weights = roi_weights[:, slab_x1:slab_x2] if roi_weights is not None else None
         else:
             row_center = int(round(t * (height - 1)))
             slab_y1 = max(row_center - 1, 0)
             slab_y2 = min(row_center + 2, height)
             slab_frame = roi_frame[slab_y1:slab_y2, :]
             slab_mask = region.roi_mask[slab_y1:slab_y2, :]
-        mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
-        # cv2.mean returns BGR; convert to RGB for output
-        means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
+            slab_weights = roi_weights[slab_y1:slab_y2, :] if roi_weights is not None else None
+        if slab_weights is None:
+            mean_bgr = cv2.mean(slab_frame, mask=slab_mask)
+            # cv2.mean returns BGR; convert to RGB for output
+            means[i] = [int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])]
+        else:
+            r, g, b = _weighted_region_mean(slab_frame, slab_mask, slab_weights)
+            means[i] = [r, g, b]
     if reverse:
         means = means[::-1]
     return means
