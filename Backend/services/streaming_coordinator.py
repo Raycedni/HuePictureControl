@@ -30,6 +30,7 @@ from services.capture_service import CAPTURE_DEVICE
 from services.color_math import (
     boost_saturation_rgb,
     build_polygon_mask,
+    correct_channels_rgb,
     sub_sample_gradient,
 )
 from services.streaming_service import HueStreamer
@@ -621,6 +622,12 @@ class StreamingCoordinator:
             # pass-through (zero cost, byte-identical to pre-feature
             # behavior).
             hdr = self._read_live_setting("hdr_input") >= 0.5
+            # quick-task 260714-txt: read the live color-correction gains
+            # ONCE per frame (default 1.0 = identity, NOT the usual 0.0 --
+            # a missing/None app_state must never zero out the output).
+            gain_r = self._read_live_setting("color_correction_r", 1.0)
+            gain_g = self._read_live_setting("color_correction_g", 1.0)
+            gain_b = self._read_live_setting("color_correction_b", 1.0)
 
             # Phase 19 D-22 (per-region narrowing): orientation comes from
             # the region's resolved value in region_plan. The Hue sink
@@ -636,19 +643,25 @@ class StreamingCoordinator:
             # bright area dominates the region mean the way it dominates
             # perceptually (no more post-hoc convert-after-average).
             # boost_saturation_rgb is still applied after, unchanged.
+            # quick-task 260714-txt: correct_channels_rgb is applied AFTER
+            # boost_saturation_rgb, on the same shared gradient -- identity
+            # at gain_r=gain_g=gain_b=1.0, zero cost.
             hue_gradients: dict[str, np.ndarray] = {
-                rid: boost_saturation_rgb(
-                    sub_sample_gradient(
-                        frame, mask, 1, orientation=orientation, vibrancy=vibrancy, hdr=hdr
+                rid: correct_channels_rgb(
+                    boost_saturation_rgb(
+                        sub_sample_gradient(
+                            frame, mask, 1, orientation=orientation, vibrancy=vibrancy, hdr=hdr
+                        ),
+                        boost,
                     ),
-                    boost,
+                    gain_r, gain_g, gain_b,
                 )
                 for rid, (mask, n_region, orientation) in region_plan.items()
             }
 
             async def _wled_pipeline(
                 plan=region_plan, current_frame=frame, vib=vibrancy, bst=boost,
-                hdr_on=hdr,
+                hdr_on=hdr, gr=gain_r, gg=gain_g, gb=gain_b,
             ):
                 # Build the WLED-sized gradients in a worker thread so the
                 # event loop stays free for the Hue DTLS pack/send. The
@@ -661,7 +674,9 @@ class StreamingCoordinator:
                             current_frame, mask, n_region,
                             orientation=orientation, vibrancy=vib, hdr=hdr_on,
                         )
-                        result[rid] = boost_saturation_rgb(g, bst)
+                        result[rid] = correct_channels_rgb(
+                            boost_saturation_rgb(g, bst), gr, gg, gb
+                        )
                     return result
                 wled_gradients = await asyncio.to_thread(_compute)
                 await self._wled.render(wled_gradients)

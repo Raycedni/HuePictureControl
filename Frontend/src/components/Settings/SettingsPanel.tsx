@@ -50,7 +50,10 @@ export function SettingsPanel({ onClose }: Props) {
             mounted alongside, per RESEARCH.md Pitfall 6 (both surfaces stay
             in sync).
             quick-task 260704-w88: HDR input toggle, mounted alongside for
-            the same reason. */}
+            the same reason.
+            quick-task 260714-txt: color correction (R/G/B) sliders — a
+            hardware-tint compensation knob, mounted alongside for the same
+            reason. */}
         <div className="px-4 pt-3 flex flex-col gap-2">
           <BrightnessCutoffControl />
           <SettingSlider
@@ -68,6 +71,27 @@ export function SettingsPanel({ onClose }: Props) {
             settingKey="hdr_input"
             label="HDR input (HDR10 → sRGB)"
             description="Convert HDR10 (BT.2020 + PQ) source colors to sRGB. Enable when your source outputs HDR and colors look washed out or hue-shifted."
+          />
+          <SettingSlider
+            settingKey="color_correction_r"
+            label="Color correction — Red"
+            description="Fine-tunes red output to compensate for your lights' color rendering. 1.00 = no change. Only affects non-dominant channels, so pure colors stay pure."
+            min={0.5}
+            max={1.5}
+          />
+          <SettingSlider
+            settingKey="color_correction_g"
+            label="Color correction — Green"
+            description="Fine-tunes green output to compensate for your lights' color rendering. 1.00 = no change. Only affects non-dominant channels, so pure colors stay pure."
+            min={0.5}
+            max={1.5}
+          />
+          <SettingSlider
+            settingKey="color_correction_b"
+            label="Color correction — Blue"
+            description="Fine-tunes blue output to compensate for your lights' color rendering. 1.00 = no change. Only affects non-dominant channels, so pure colors stay pure."
+            min={0.5}
+            max={1.5}
           />
         </div>
         <div className="flex-1 overflow-auto p-4 flex flex-col md:flex-row gap-4">

@@ -7,6 +7,7 @@ exercise coordinator behavior independently of pykit.
 """
 import asyncio
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -25,6 +26,20 @@ from tests.fixtures.mock_capture import make_mock_capture
 def _solid_blue_frame() -> np.ndarray:
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     frame[:, :, 0] = 255  # blue channel (BGR)
+    return frame
+
+
+def _solid_orange_frame() -> np.ndarray:
+    """BGR frame where green is present but NON-dominant (RGB 250,120,40).
+
+    Mirrors the color_math orange-ish fixture (quick-task 260714-txt): red
+    is the dominant channel, so a color_correction_g gain should measurably
+    reduce green here while leaving red untouched.
+    """
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:, :, 2] = 250  # red
+    frame[:, :, 1] = 120  # green
+    frame[:, :, 0] = 40   # blue
     return frame
 
 
@@ -299,6 +314,71 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
     assert grad.dtype == np.uint8
     assert grad.shape[1] == 3   # (N, 3) RGB
     assert grad.shape[0] >= 1   # at least one sample
+
+
+@pytest.mark.asyncio
+async def test_frame_loop_applies_color_correction_gain_to_hue_gradient():
+    """A non-identity color_correction_g gain reaches the shared gradient
+    handed to hue.render, applied AFTER boost_saturation_rgb (quick-task
+    260714-txt). Uses an orange-ish frame (red dominant, green non-dominant)
+    so gain_g measurably reduces green while red stays exactly unchanged.
+    """
+    polygon = json.dumps([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+
+    region_row = MagicMock()
+    region_row.__getitem__ = MagicMock(side_effect=lambda k: {
+        "region_id": "r1",
+        "polygon": polygon,
+        "n_region": 1,
+        "orientation": "auto",
+    }[k])
+
+    def _make_db():
+        db = MagicMock()
+
+        async def _exec(*args, **kwargs):
+            sql = args[0] if args else ""
+            if "wled_devices WHERE enabled" in sql:
+                return _empty_cursor()
+            if "FROM wled_seg_cache" in sql:
+                return _empty_cursor()
+            if "FROM regions r" in sql:
+                cur = MagicMock()
+                cur.__aenter__ = AsyncMock(return_value=cur)
+                cur.__aexit__ = AsyncMock(return_value=None)
+                cur.fetchone = AsyncMock(return_value=None)
+                cur.fetchall = AsyncMock(return_value=[region_row])
+                return cur
+            return _empty_cursor()
+
+        db.execute = _exec
+        return db
+
+    async def _run(app_state):
+        broadcaster = StatusBroadcaster()
+        mock_hue = _make_mock_hue()
+        capture = make_mock_capture(_solid_orange_frame())
+        registry = _MockRegistry(capture)
+
+        coord = StreamingCoordinator(
+            db=_make_db(),
+            capture_registry=registry,
+            broadcaster=broadcaster,
+            hue_streamer=mock_hue,
+            app_state=app_state,
+        )
+        await coord.start("cfg-correct")
+        await asyncio.sleep(0.15)
+        await coord.stop()
+
+        last_call = mock_hue.render.call_args_list[-1]
+        return last_call.args[0]["r1"][0]
+
+    baseline_px = await _run(None)
+    corrected_px = await _run(SimpleNamespace(color_correction_g=1.5))
+
+    assert int(corrected_px[1]) < int(baseline_px[1])  # green reduced
+    assert int(corrected_px[0]) == int(baseline_px[0])  # red (dominant) invariant
 
 
 @pytest.mark.asyncio
