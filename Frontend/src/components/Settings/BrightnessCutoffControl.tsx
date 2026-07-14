@@ -1,7 +1,10 @@
 // quick-task 260516-kra: single slider for the global brightness-cutoff
 // threshold. 0.00 = disabled (default; existing behavior unchanged). Above
-// 0, lights whose region's mean Rec.709 luma falls below the threshold
-// turn off (Hue sends bri=0; WLED writes (0,0,0) to those LEDs).
+// 0, Hue lights whose region's mean Rec.709 luma falls below the threshold
+// turn off (Hue sends bri=0).
+//
+// quick-task 260714-pzk: the cutoff is Hue-only. WLED always renders its
+// actual computed gradient color and is never gated by this setting.
 //
 // Native <input type="range"> + a small numeric readout — keeps the
 // dependency surface at zero new packages per CLAUDE.md. The Settings tab
@@ -110,7 +113,8 @@ export function BrightnessCutoffControl() {
         disabled={!loaded}
       />
       <p className="text-xs text-muted-foreground">
-        Lights below this brightness will turn off.
+        Lights below this brightness will turn off. Hue only — does not
+        affect WLED.
       </p>
       {error && (
         <p
