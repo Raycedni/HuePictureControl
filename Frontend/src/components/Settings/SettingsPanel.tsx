@@ -61,7 +61,8 @@ export function SettingsPanel({ onClose }: Props) {
           <SettingSlider
             settingKey="saturation_boost"
             label="Saturation boost"
-            description="Increases output color saturation. Brightness is unchanged."
+            description="Adjusts output color saturation: negative desaturates, positive boosts. Brightness is unchanged."
+            min={-1.0}
           />
           <SettingToggle
             settingKey="hdr_input"

@@ -139,4 +139,42 @@ describe('SettingSlider', () => {
     const err = await screen.findByTestId(`setting-error-${KEY}`)
     expect(err.textContent).toMatch(/500/)
   })
+
+  it('renders default min=0 / max=1 when no min/max props are passed', async () => {
+    vi.stubGlobal('fetch', mockFetch(() => jsonResp({ value: 0 })))
+    render(
+      <SettingSlider settingKey={KEY} label="Color vibrancy" description="" />,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId(`setting-slider-${KEY}`)).not.toBeDisabled()
+    })
+    const slider = screen.getByTestId(
+      `setting-slider-${KEY}`,
+    ) as HTMLInputElement
+    expect(slider.min).toBe('0')
+    expect(slider.max).toBe('1')
+  })
+
+  it('renders custom min/max props on the input (e.g. saturation_boost)', async () => {
+    vi.stubGlobal('fetch', mockFetch(() => jsonResp({ value: 0 })))
+    render(
+      <SettingSlider
+        settingKey="saturation_boost"
+        label="Saturation boost"
+        description=""
+        min={-1}
+        max={1}
+      />,
+    )
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('setting-slider-saturation_boost'),
+      ).not.toBeDisabled()
+    })
+    const slider = screen.getByTestId(
+      'setting-slider-saturation_boost',
+    ) as HTMLInputElement
+    expect(slider.min).toBe('-1')
+    expect(slider.max).toBe('1')
+  })
 })
