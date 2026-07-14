@@ -1,9 +1,9 @@
 """Global app-settings KV router (quick-task 260516-kra; extended 260704-iss,
-260704-w88).
+260704-w88, 260714-txt).
 
 Exposes GET/PUT for ``brightness_cutoff_threshold``, ``color_vibrancy``,
-``saturation_boost``, and ``hdr_input``. Each PUT handler updates BOTH the
-persistent SQLite row
+``saturation_boost``, ``hdr_input``, and ``color_correction_{r,g,b}``. Each
+PUT handler updates BOTH the persistent SQLite row
 AND the matching ``request.app.state.<key>`` attribute so the live streaming
 coordinator/sinks see the new value on the NEXT frame without a stream
 restart.
@@ -11,6 +11,10 @@ restart.
 Schema: ``settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)``. Values are
 stored as TEXT (``str(float)``) for forward-compat with future non-numeric
 settings; each handler parses to float on read.
+
+``color_correction_r``/``_g``/``_b`` (quick-task 260714-txt) each validate to
+[0.5, 1.5] and default to 1.0 (identity) rather than the historical [0.0, 1.0]
+range / 0.0 default used by the other settings above.
 
 PUT validation path: the body is parsed manually instead of via a Pydantic
 body-model parameter so that NaN/Infinity rejection produces a clean 422
@@ -38,7 +42,9 @@ class SettingValueResponse(BaseModel):
 BrightnessCutoffResponse = SettingValueResponse
 
 
-async def _get_setting(request: Request, key: str) -> SettingValueResponse:
+async def _get_setting(
+    request: Request, key: str, default: float = 0.0
+) -> SettingValueResponse:
     db = request.app.state.db
     async with await db.execute(
         "SELECT value FROM settings WHERE key = ?",
@@ -46,11 +52,11 @@ async def _get_setting(request: Request, key: str) -> SettingValueResponse:
     ) as cur:
         row = await cur.fetchone()
     if row is None:
-        return SettingValueResponse(value=0.0)
+        return SettingValueResponse(value=default)
     try:
         return SettingValueResponse(value=float(row["value"]))
     except (TypeError, ValueError):
-        return SettingValueResponse(value=0.0)
+        return SettingValueResponse(value=default)
 
 
 async def _put_setting(
@@ -156,3 +162,56 @@ async def get_hdr_input(request: Request) -> SettingValueResponse:
 )
 async def put_hdr_input(request: Request) -> SettingValueResponse:
     return await _put_setting(request, "hdr_input")
+
+
+# quick-task 260714-txt: per-channel color correction gains. Default 1.0
+# (identity), range [0.5, 1.5] -- a hardware-tint compensation knob, not the
+# [0.0, 1.0] range used by the settings above.
+
+
+@router.get(
+    "/color_correction_r",
+    response_model=SettingValueResponse,
+)
+async def get_color_correction_r(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "color_correction_r", 1.0)
+
+
+@router.put(
+    "/color_correction_r",
+    response_model=SettingValueResponse,
+)
+async def put_color_correction_r(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "color_correction_r", 0.5, 1.5)
+
+
+@router.get(
+    "/color_correction_g",
+    response_model=SettingValueResponse,
+)
+async def get_color_correction_g(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "color_correction_g", 1.0)
+
+
+@router.put(
+    "/color_correction_g",
+    response_model=SettingValueResponse,
+)
+async def put_color_correction_g(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "color_correction_g", 0.5, 1.5)
+
+
+@router.get(
+    "/color_correction_b",
+    response_model=SettingValueResponse,
+)
+async def get_color_correction_b(request: Request) -> SettingValueResponse:
+    return await _get_setting(request, "color_correction_b", 1.0)
+
+
+@router.put(
+    "/color_correction_b",
+    response_model=SettingValueResponse,
+)
+async def put_color_correction_b(request: Request) -> SettingValueResponse:
+    return await _put_setting(request, "color_correction_b", 0.5, 1.5)

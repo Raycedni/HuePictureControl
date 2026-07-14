@@ -57,13 +57,25 @@ async def lifespan(app: FastAPI):
     # first frame after startup. Defaults 0.0 (disabled -> byte-identical to
     # pre-feature behavior).
     # quick-task 260704-w88: hdr_input extends the same hydration block.
+    # quick-task 260714-txt: color_correction_{r,g,b} extend the same block,
+    # but default to 1.0 (identity) not 0.0 -- this feature's neutral value.
     app.state.color_vibrancy = 0.0
     app.state.saturation_boost = 0.0
     app.state.hdr_input = 0.0
+    app.state.color_correction_r = 1.0
+    app.state.color_correction_g = 1.0
+    app.state.color_correction_b = 1.0
     try:
         async with db.execute(
-            "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
-            ("color_vibrancy", "saturation_boost", "hdr_input"),
+            "SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?, ?)",
+            (
+                "color_vibrancy",
+                "saturation_boost",
+                "hdr_input",
+                "color_correction_r",
+                "color_correction_g",
+                "color_correction_b",
+            ),
         ) as cur:
             rows = await cur.fetchall()
         for row in rows:

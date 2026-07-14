@@ -277,3 +277,98 @@ def test_saturation_boost_rejects_above_one():
     with _make_client() as client:
         r = client.put("/api/settings/saturation_boost", json={"value": 1.01})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# color_correction_r/g/b (quick-task 260714-txt): default 1.0, range
+# [0.5, 1.5] -- distinct from the [0.0, 1.0] / 0.0-default settings above,
+# so these get their own dedicated parametrized block instead of joining the
+# shared "color_vibrancy"/"saturation_boost"/"hdr_input" parametrize lists.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_get_returns_default_one_on_fresh_db(key):
+    with _make_client() as client:
+        r = client.get(f"/api/settings/{key}")
+    assert r.status_code == 200
+    assert r.json() == {"value": 1.0}
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_put_round_trip(key):
+    with _make_client() as client:
+        r1 = client.put(f"/api/settings/{key}", json={"value": 1.2})
+        assert r1.status_code == 200
+        assert r1.json() == {"value": 1.2}
+
+        r2 = client.get(f"/api/settings/{key}")
+    assert r2.status_code == 200
+    assert r2.json() == {"value": 1.2}
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_accepts_boundary_low(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 0.5})
+    assert r.status_code == 200
+    assert r.json() == {"value": 0.5}
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_accepts_boundary_high(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 1.5})
+    assert r.status_code == 200
+    assert r.json() == {"value": 1.5}
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_rejects_below_min(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 0.49})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_rejects_above_max(key):
+    with _make_client() as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 1.51})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_rejects_nan(key):
+    with _make_client() as client:
+        r = client.put(
+            f"/api/settings/{key}",
+            content=b'{"value": NaN}',
+            headers={"Content-Type": "application/json"},
+        )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "key", ["color_correction_r", "color_correction_g", "color_correction_b"]
+)
+def test_color_correction_put_updates_app_state(key):
+    app = FastAPI(lifespan=_lifespan_with_db)
+    app.include_router(settings_router)
+    with TestClient(app) as client:
+        r = client.put(f"/api/settings/{key}", json={"value": 1.3})
+        assert r.status_code == 200
+        assert math.isclose(getattr(app.state, key), 1.3, rel_tol=1e-9)
