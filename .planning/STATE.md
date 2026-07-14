@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-14 - Completed quick task 260714-ong: Fix v4l2_format struct offset bug (width/height read/written 4 bytes too early, breaking the YUYV decode fallback)
+Last activity: 2026-07-14 - Completed quick task 260714-png: Allow saturation_boost to go negative (-1.0 to 1.0) for desaturating over-vibrant HDR content
 
 ## Performance Metrics
 
@@ -136,6 +136,7 @@ None yet.
 | 260714-nnk | Fix camera selection bug in LightPanel.tsx — re-keyed selection from non-unique device_path to stable_id after Elgato 4K S capture card swap exposed a device_path collision (stale + live records sharing /dev/video0) | 2026-07-14 | 22712b6 | [260714-nnk-fix-camera-selection-bug-in-lightpanel-t](./quick/260714-nnk-fix-camera-selection-bug-in-lightpanel-t/) |
 | 260714-o9r | Fix V4L2 capture format-mismatch — Elgato 4K S negotiates MJPEG successfully but actually delivers raw YUYV payload (cv2.imdecode silently failed forever); added content-sniffed decode path with YUYV fallback + re-encode for /ws/preview | 2026-07-14 | 6bdf8ee | [260714-o9r-fix-v4l2-capture-elgato-4k-s-negotiates-](./quick/260714-o9r-fix-v4l2-capture-elgato-4k-s-negotiates-/) |
 | 260714-ong | Fix v4l2_format struct offset bug — width/height/pixelformat read/written 4 bytes too early in _setup_device (missing 8-byte union alignment padding after `type`), which broke 260714-o9r's YUYV fallback in production; named offset constants added to prevent recurrence | 2026-07-14 | 2f1ec85 | [260714-ong-fix-v4l2-format-struct-offset-bug-in-cap](./quick/260714-ong-fix-v4l2-format-struct-offset-bug-in-cap/) |
+| 260714-png | Allow saturation_boost to go negative (-1.0 to 1.0) — symmetric desaturation formula (s*(1+boost) below 0) so over-vibrant HDR content can be toned down; color_vibrancy/brightness_cutoff_threshold/hdr_input stay [0.0, 1.0] | 2026-07-14 | 82f3e42 | [260714-png-allow-saturation-boost-setting-to-go-neg](./quick/260714-png-allow-saturation-boost-setting-to-go-neg/) |
 
 ## Session Continuity
 
