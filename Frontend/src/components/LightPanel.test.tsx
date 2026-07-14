@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { LightPanel } from './LightPanel'
-import { putLastZone } from '@/api/cameras'
+import { putLastZone, putCameraAssignment } from '@/api/cameras'
 import { useStatusStore } from '@/store/useStatusStore'
 
 // Mock the API and hooks that LightPanel will import
@@ -72,7 +72,7 @@ describe('LightPanel', () => {
   const defaultProps = {
     selectedConfigId: 'config-1',
     onConfigChange: vi.fn(),
-    selectedDevice: '/dev/video0',
+    selectedDevice: 'usb-0403:6010-00000000',
     onDeviceChange: vi.fn(),
     camerasData: mockCamerasData,
     onCamerasRefresh: vi.fn().mockResolvedValue(undefined),
@@ -201,7 +201,7 @@ describe('LightPanel', () => {
           {...defaultProps}
           selectedConfigId="config-1"
           onConfigChange={onConfigChange}
-          selectedDevice="/dev/video0"
+          selectedDevice="usb-0403:6010-00000000"
           onDeviceChange={onDeviceChange}
           camerasData={camerasWithTargetPersisted}
         />,
@@ -213,7 +213,7 @@ describe('LightPanel', () => {
       const cameraSelects = screen.getAllByRole('combobox')
       // Camera select is the second <select> in the panel (zone is first).
       const cameraSelect = cameraSelects[1]
-      fireEvent.change(cameraSelect, { target: { value: '/dev/video2' } })
+      fireEvent.change(cameraSelect, { target: { value: 'usb-1234:5678-00000001' } })
       await waitFor(() => expect(onConfigChange).toHaveBeenCalledWith('config-2'))
     })
 
@@ -225,7 +225,7 @@ describe('LightPanel', () => {
           {...defaultProps}
           selectedConfigId="config-1"
           onConfigChange={onConfigChange}
-          selectedDevice="/dev/video0"
+          selectedDevice="usb-0403:6010-00000000"
           onDeviceChange={onDeviceChange}
           camerasData={mockCamerasData}
         />,
@@ -236,9 +236,11 @@ describe('LightPanel', () => {
       onConfigChange.mockClear()
       const cameraSelects = screen.getAllByRole('combobox')
       const cameraSelect = cameraSelects[1]
-      fireEvent.change(cameraSelect, { target: { value: '/dev/video2' } })
+      fireEvent.change(cameraSelect, { target: { value: 'usb-1234:5678-00000001' } })
       // Allow any pending promises from handleCameraChange to resolve.
-      await waitFor(() => expect(onDeviceChange).toHaveBeenCalledWith('/dev/video2'))
+      await waitFor(() =>
+        expect(onDeviceChange).toHaveBeenCalledWith('usb-1234:5678-00000001'),
+      )
       expect(onConfigChange).not.toHaveBeenCalled()
     })
 
@@ -311,6 +313,111 @@ describe('LightPanel', () => {
   })
 })
 
+describe('device_path collision (BFIX-CAM-STABLEID)', () => {
+  const collisionCamerasData = {
+    ...mockCamerasData,
+    devices: [
+      {
+        device_path: '/dev/video0',
+        stable_id: 'usb-OLD-disconnected',
+        display_name: 'USB Video',
+        connected: false,
+        last_seen_at: null,
+        last_entertainment_config_id: null,
+      },
+      {
+        device_path: '/dev/video0',
+        stable_id: 'usb-NEW-connected',
+        display_name: 'Elgato 4K S',
+        connected: true,
+        last_seen_at: null,
+        last_entertainment_config_id: null,
+      },
+    ],
+    zone_health: [],
+  }
+
+  beforeEach(() => {
+    useStatusStore.setState({
+      activeConfigId: null,
+      activeDevicePath: null,
+      isStreaming: false,
+    })
+    vi.clearAllMocks()
+  })
+
+  it("selecting the connected device persists and reports the connected device's stable_id, never the stale first-match", async () => {
+    const onConfigChange = vi.fn()
+    const onDeviceChange = vi.fn()
+    render(
+      <LightPanel
+        selectedConfigId="config-1"
+        onConfigChange={onConfigChange}
+        selectedDevice={undefined}
+        onDeviceChange={onDeviceChange}
+        camerasData={collisionCamerasData}
+        onCamerasRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('zone-select')).toHaveValue('config-1'),
+    )
+    const cameraSelects = screen.getAllByRole('combobox')
+    const cameraSelect = cameraSelects[1]
+    fireEvent.change(cameraSelect, { target: { value: 'usb-NEW-connected' } })
+
+    await waitFor(() =>
+      expect(vi.mocked(putCameraAssignment)).toHaveBeenCalledWith(
+        'config-1',
+        'usb-NEW-connected',
+        'Elgato 4K S',
+      ),
+    )
+    expect(onDeviceChange).toHaveBeenCalledWith('usb-NEW-connected')
+  })
+
+  it('dropdown lists only the connected device from the collision pair', () => {
+    render(
+      <LightPanel
+        selectedConfigId="config-1"
+        onConfigChange={vi.fn()}
+        selectedDevice={undefined}
+        onDeviceChange={vi.fn()}
+        camerasData={collisionCamerasData}
+        onCamerasRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+    expect(screen.queryByText(/USB Video/)).toBeNull()
+    expect(screen.getByText(/Elgato 4K S/)).toBeInTheDocument()
+  })
+
+  it('Disconnected badge tracks the actually-selected camera, not a stale collision record', () => {
+    const { rerender } = render(
+      <LightPanel
+        selectedConfigId="config-1"
+        onConfigChange={vi.fn()}
+        selectedDevice="usb-NEW-connected"
+        onDeviceChange={vi.fn()}
+        camerasData={collisionCamerasData}
+        onCamerasRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+    expect(screen.queryByText('Disconnected')).toBeNull()
+
+    rerender(
+      <LightPanel
+        selectedConfigId="config-1"
+        onConfigChange={vi.fn()}
+        selectedDevice="usb-OLD-disconnected"
+        onDeviceChange={vi.fn()}
+        camerasData={collisionCamerasData}
+        onCamerasRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+    expect(screen.getByText('Disconnected')).toBeInTheDocument()
+  })
+})
+
 // Phase 19.1 Plan 08 — WLED section tests rewritten for composite-key drag payload.
 
 import { getWledDevices, listSegments, listWledAssignments } from '@/api/wled'
@@ -346,7 +453,7 @@ const mockSeg2 = {
 const wledDefaultProps = {
   selectedConfigId: 'config-1',
   onConfigChange: vi.fn(),
-  selectedDevice: '/dev/video0',
+  selectedDevice: 'usb-0403:6010-00000000',
   onDeviceChange: vi.fn(),
   camerasData: mockCamerasData,
   onCamerasRefresh: vi.fn().mockResolvedValue(undefined),
