@@ -21,6 +21,12 @@ export function EditorPage() {
   const regions = useRegionStore((s) => s.regions)
   const assignedCount = regions.filter((r) => r.light_id !== null).length
 
+  // selectedDevice holds a stable_id; the preview WS (via EditorCanvas/usePreviewWS)
+  // needs a real device_path. Resolve it here, at the single point of use.
+  const selectedDevicePath = cameras.data?.devices.find(
+    (d) => d.stable_id === selectedDevice,
+  )?.device_path
+
   useEffect(() => {
     if (cameras.data) {
       setIdentityMode(cameras.data.identity_mode)
@@ -97,7 +103,7 @@ export function EditorPage() {
             width={canvasDims.width}
             height={canvasDims.height}
             onDeleteRequest={handleEditorDelete}
-            device={selectedDevice}
+            device={selectedDevicePath}
             previewEnabled={previewEnabled}
             selectedConfigId={selectedConfigId}
           />
