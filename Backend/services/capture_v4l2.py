@@ -36,6 +36,15 @@ _V4L2_MEMORY_MMAP = 1
 _V4L2_PIX_FMT_MJPEG = 0x47504A4D  # 'MJPG'
 _V4L2_PIX_FMT_YUYV = 0x56595559  # 'YUYV' (v4l2_fourcc: Y|U<<8|Y<<16|V<<24)
 
+# v4l2_format field offsets. On 64-bit Linux the fmt union contains a
+# v4l2_window variant with a pointer member (v4l2_clip*), forcing 8-byte
+# alignment of the whole union. Since `type` is only 4 bytes, the compiler
+# inserts 4 bytes of padding at offset 4-7 before the union starts at offset 8.
+# Empirically verified via VIDIOC_G_FMT hex dump on the live target device.
+_FMT_OFF_WIDTH = 8
+_FMT_OFF_HEIGHT = 12
+_FMT_OFF_PIXELFORMAT = 16
+
 
 class _timeval(ctypes.Structure):
     _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
@@ -227,8 +236,9 @@ class V4L2Capture(CaptureBackend):
         # Set format: MJPEG 640x480
         fmt = bytearray(208)
         struct.pack_into("<I", fmt, 0, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
-        struct.pack_into("<II", fmt, 4, _WIDTH, _HEIGHT)
-        struct.pack_into("<I", fmt, 12, _V4L2_PIX_FMT_MJPEG)
+        struct.pack_into("<I", fmt, _FMT_OFF_WIDTH, _WIDTH)
+        struct.pack_into("<I", fmt, _FMT_OFF_HEIGHT, _HEIGHT)
+        struct.pack_into("<I", fmt, _FMT_OFF_PIXELFORMAT, _V4L2_PIX_FMT_MJPEG)
         fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
 
         # Read back the driver's ACTUAL negotiated width/height/pixelformat.
@@ -236,8 +246,9 @@ class V4L2Capture(CaptureBackend):
         # still deliver raw YUYV payload over the wire. This readback is used
         # ONLY to size the YUYV reshape buffer — decode path selection happens
         # by sniffing frame content in _decode_frame, not by trusting this fourcc.
-        negotiated_width, negotiated_height = struct.unpack_from("<II", fmt, 4)
-        negotiated_fourcc = struct.unpack_from("<I", fmt, 12)[0]
+        negotiated_width = struct.unpack_from("<I", fmt, _FMT_OFF_WIDTH)[0]
+        negotiated_height = struct.unpack_from("<I", fmt, _FMT_OFF_HEIGHT)[0]
+        negotiated_fourcc = struct.unpack_from("<I", fmt, _FMT_OFF_PIXELFORMAT)[0]
         self._width = negotiated_width
         self._height = negotiated_height
         fourcc_ascii = negotiated_fourcc.to_bytes(4, "little").decode("ascii", errors="replace")

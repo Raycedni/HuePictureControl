@@ -211,6 +211,39 @@ if sys.platform != "win32":
             svc = V4L2Capture("/dev/video2")
             assert svc.device_path == "/dev/video2"
 
+    class TestV4L2SetupDeviceOffsets:
+        """Regression: _setup_device must read width/height from the padded
+        v4l2_format offsets (8/12), not the pre-padding offsets (4/8)."""
+
+        def test_setup_device_resolves_real_width_height(self):
+            import struct
+            from services import capture_v4l2 as v
+
+            svc = V4L2Capture()
+            svc._fd = 99
+
+            def fake_ioctl(fd, request, arg=0):
+                if request == v._VIDIOC_QUERYCAP:
+                    # set device_caps VIDEO_CAPTURE bit at offset 88
+                    struct.pack_into("<I", arg, 88, 0x01)
+                elif request == v._VIDIOC_S_FMT:
+                    # Driver writes the proven layout: width@8, height@12, YUYV@16
+                    struct.pack_into("<I", arg, 0, v._V4L2_BUF_TYPE_VIDEO_CAPTURE)
+                    struct.pack_into("<I", arg, 8, 640)
+                    struct.pack_into("<I", arg, 12, 480)
+                    struct.pack_into("<I", arg, 16, v._V4L2_PIX_FMT_YUYV)
+                elif request == v._VIDIOC_REQBUFS:
+                    struct.pack_into("<I", arg, 0, 0)  # 0 buffers -> skip mmap loop
+                # QUERYBUF/QBUF/S_PARM/STREAMON: no-op
+                return 0
+
+            with patch("services.capture_v4l2.fcntl.ioctl", side_effect=fake_ioctl), \
+                 patch("services.capture_v4l2.mmap.mmap"):
+                svc._setup_device()
+
+            assert svc._width == 640
+            assert svc._height == 480
+
     class TestV4L2Decode:
         """Coverage for the format-aware _decode_frame helper (pure — no ioctl mocking needed)."""
 
