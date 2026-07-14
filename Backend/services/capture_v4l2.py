@@ -34,6 +34,7 @@ _NUM_BUFFERS = 2
 _V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
 _V4L2_MEMORY_MMAP = 1
 _V4L2_PIX_FMT_MJPEG = 0x47504A4D  # 'MJPG'
+_V4L2_PIX_FMT_YUYV = 0x56595559  # 'YUYV' (v4l2_fourcc: Y|U<<8|Y<<16|V<<24)
 
 
 class _timeval(ctypes.Structure):
@@ -180,6 +181,9 @@ class V4L2Capture(CaptureBackend):
         super().__init__(device_path)
         self._fd: Optional[int] = None
         self._buffers: list[mmap.mmap] = []
+        self._width: int = _WIDTH
+        self._height: int = _HEIGHT
+        self._decode_yuyv: Optional[bool] = None  # None = not yet resolved
 
     @property
     def is_open(self) -> bool:
@@ -226,6 +230,21 @@ class V4L2Capture(CaptureBackend):
         struct.pack_into("<II", fmt, 4, _WIDTH, _HEIGHT)
         struct.pack_into("<I", fmt, 12, _V4L2_PIX_FMT_MJPEG)
         fcntl.ioctl(fd, _VIDIOC_S_FMT, fmt)
+
+        # Read back the driver's ACTUAL negotiated width/height/pixelformat.
+        # NOTE: some devices (e.g. Elgato 4K S) report success + MJPG here but
+        # still deliver raw YUYV payload over the wire. This readback is used
+        # ONLY to size the YUYV reshape buffer — decode path selection happens
+        # by sniffing frame content in _decode_frame, not by trusting this fourcc.
+        negotiated_width, negotiated_height = struct.unpack_from("<II", fmt, 4)
+        negotiated_fourcc = struct.unpack_from("<I", fmt, 12)[0]
+        self._width = negotiated_width
+        self._height = negotiated_height
+        fourcc_ascii = negotiated_fourcc.to_bytes(4, "little").decode("ascii", errors="replace")
+        logger.info(
+            "Negotiated V4L2 format: %s %dx%d",
+            fourcc_ascii, negotiated_width, negotiated_height,
+        )
 
         # Request mmap buffers
         reqbufs = bytearray(20)
@@ -288,9 +307,48 @@ class V4L2Capture(CaptureBackend):
             os.close(self._fd)
             self._fd = None
 
+        self._decode_yuyv = None  # force re-detection on reconnect
+
         with self._frame_lock:
             self._latest_frame = None
             self._latest_jpeg = None
+
+    def _decode_frame(self, data: bytes) -> Optional[tuple]:
+        """Decode a raw V4L2 buffer to (bgr_frame, jpeg_bytes), format-aware.
+
+        Some devices (e.g. Elgato 4K S) negotiate/report MJPEG via
+        VIDIOC_S_FMT but actually deliver raw YUYV payload over the wire.
+        Decode mode is resolved once by sniffing frame content (not trusting
+        the negotiated fourcc) and cached on the instance so subsequent
+        frames don't re-sniff.
+
+        Returns None if the frame cannot be decoded (garbage, wrong length,
+        or decode mode not yet resolved).
+        """
+        if self._decode_yuyv is None:
+            if data[:2] == b"\xff\xd8":
+                self._decode_yuyv = False
+            elif len(data) == self._width * self._height * 2:
+                self._decode_yuyv = True
+            else:
+                # Not recognizable yet — don't cache, wait for a usable frame.
+                return None
+
+        if self._decode_yuyv is False:
+            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                return None
+            return frame, data
+
+        # YUYV branch
+        if len(data) != self._width * self._height * 2:
+            return None
+        yuyv = np.frombuffer(data, dtype=np.uint8).reshape((self._height, self._width, 2))
+        frame = cv2.cvtColor(yuyv, cv2.COLOR_YUV2BGR_YUYV)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            return None
+        return frame, buf.tobytes()
 
     def _reader_loop(self) -> None:
         """Background thread: DQBUF -> decode MJPEG -> store latest -> QBUF."""
@@ -315,15 +373,13 @@ class V4L2Capture(CaptureBackend):
                 qbuf.memory = _V4L2_MEMORY_MMAP
                 fcntl.ioctl(self._fd, _VIDIOC_QBUF, qbuf)
 
-                # Decode MJPEG after buffer is re-queued
-                frame = cv2.imdecode(
-                    np.frombuffer(jpeg_data, dtype=np.uint8),
-                    cv2.IMREAD_COLOR,
-                )
-                if frame is not None:
+                # Decode after buffer is re-queued (format-aware, cached mode)
+                decoded = self._decode_frame(jpeg_data)
+                if decoded is not None:
+                    frame, jpeg_out = decoded
                     with self._frame_lock:
                         self._latest_frame = frame
-                        self._latest_jpeg = jpeg_data
+                        self._latest_jpeg = jpeg_out
                         self._last_frame_time = time.monotonic()
                         self._frame_seq += 1
                     self._new_frame_event.set()
