@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-14 - Completed quick task 260714-nnk: Fix camera selection bug in LightPanel.tsx (device_path collision -> wrong stable_id)
+Last activity: 2026-07-14 - Completed quick task 260714-o9r: Fix V4L2 capture format-mismatch (Elgato 4K S negotiates MJPEG but delivers raw YUYV)
 
 ## Performance Metrics
 
@@ -134,6 +134,7 @@ None yet.
 | 260704-w88 | HDR input toggle — HDR10 (BT.2020+PQ) → sRGB conversion on sampled region colors before saturation boost and rgb_to_xy | 2026-07-04 | ea5ce0f | [260704-w88-add-hdr-input-toggle-convert-sampled-reg](./quick/260704-w88-add-hdr-input-toggle-convert-sampled-reg/) |
 | 260704-wy5 | HDR pipeline v2 — limited-range expansion + PQ→linear LUT per-pixel BEFORE averaging (linear-light region means, MS2130 fix) | 2026-07-04 | 4fde109 | [260704-wy5-hdr-pipeline-v2-linear-light-averaging-l](./quick/260704-wy5-hdr-pipeline-v2-linear-light-averaging-l/) |
 | 260714-nnk | Fix camera selection bug in LightPanel.tsx — re-keyed selection from non-unique device_path to stable_id after Elgato 4K S capture card swap exposed a device_path collision (stale + live records sharing /dev/video0) | 2026-07-14 | 22712b6 | [260714-nnk-fix-camera-selection-bug-in-lightpanel-t](./quick/260714-nnk-fix-camera-selection-bug-in-lightpanel-t/) |
+| 260714-o9r | Fix V4L2 capture format-mismatch — Elgato 4K S negotiates MJPEG successfully but actually delivers raw YUYV payload (cv2.imdecode silently failed forever); added content-sniffed decode path with YUYV fallback + re-encode for /ws/preview | 2026-07-14 | 6bdf8ee | [260714-o9r-fix-v4l2-capture-elgato-4k-s-negotiates-](./quick/260714-o9r-fix-v4l2-capture-elgato-4k-s-negotiates-/) |
 
 ## Session Continuity
 
