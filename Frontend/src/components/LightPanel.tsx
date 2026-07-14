@@ -92,7 +92,7 @@ export function LightPanel({
     if (selectedConfigId) return
 
     const selectedCamera = selectedDevice
-      ? camerasData?.devices.find((d) => d.device_path === selectedDevice)
+      ? camerasData?.devices.find((d) => d.stable_id === selectedDevice)
       : undefined
     const persisted = selectedCamera?.last_entertainment_config_id ?? null
     const persistedExists = persisted !== null && configs.some((c) => c.id === persisted)
@@ -123,8 +123,8 @@ export function LightPanel({
     const zoneEntry = camerasData.zone_health.find(
       (zh) => zh.entertainment_config_id === selectedConfigId
     )
-    if (zoneEntry && zoneEntry.device_path) {
-      onDeviceChange(zoneEntry.device_path)
+    if (zoneEntry && zoneEntry.camera_stable_id) {
+      onDeviceChange(zoneEntry.camera_stable_id)
     } else {
       onDeviceChange(undefined) // D-07: no auto-selection
     }
@@ -179,15 +179,16 @@ export function LightPanel({
   }, [selectedConfigId, regions])
 
   async function handleCameraChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const devicePath = e.target.value
-    if (!devicePath) {
+    const stableId = e.target.value
+    if (!stableId) {
       onDeviceChange(undefined)
       return
     }
-    const cam = camerasData?.devices.find((d) => d.device_path === devicePath)
+    const cam = camerasData?.devices.find((d) => d.stable_id === stableId)
     if (!cam) return
-    onDeviceChange(cam.device_path)
-    // Auto-save assignment (D-05) — use stable_id for PUT, device_path for WS
+    onDeviceChange(cam.stable_id)
+    // Auto-save assignment (D-05) — selection is keyed on stable_id end-to-end;
+    // device_path is resolved from the selected stable_id only at the WS call site (EditorPage).
     if (selectedConfigId) {
       try {
         await putCameraAssignment(selectedConfigId, cam.stable_id, cam.display_name)
@@ -213,7 +214,7 @@ export function LightPanel({
     onConfigChange(newConfigId)
     if (isStreaming) return
     if (!selectedDevice || !camerasData) return
-    const cam = camerasData.devices.find((d) => d.device_path === selectedDevice)
+    const cam = camerasData.devices.find((d) => d.stable_id === selectedDevice)
     if (!cam) return
     try {
       await putLastZone(cam.stable_id, newConfigId)
@@ -225,7 +226,7 @@ export function LightPanel({
   // Compute disconnected state for the selected camera — D-10
   const selectedCameraDisconnected = (() => {
     if (!selectedDevice || !camerasData) return false
-    const cam = camerasData.devices.find((d) => d.device_path === selectedDevice)
+    const cam = camerasData.devices.find((d) => d.stable_id === selectedDevice)
     return cam ? !cam.connected : false
   })()
 
@@ -348,7 +349,7 @@ export function LightPanel({
             <>
               <option value="">Select camera...</option>
               {camerasData.devices.filter((d) => d.connected).map((d) => (
-                <option key={d.device_path} value={d.device_path}>
+                <option key={d.stable_id} value={d.stable_id}>
                   {d.display_name} ({d.device_path})
                 </option>
               ))}
