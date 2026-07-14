@@ -437,19 +437,23 @@ def _weighted_region_mean_linear(
 
 
 def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
-    """Boost HSV saturation of an RGB array while leaving HSV V untouched.
+    """Adjust HSV saturation of an RGB array while leaving HSV V untouched.
 
     Args:
         rgb: (N, 3) or (3,) array, RGB order, any numeric dtype.
         boost: 0.0 = identity (returns ``rgb`` unchanged, zero cost).
+            Range [-1.0, 1.0].
             > 0.0 raises saturation; 1.0 fully saturates (S -> 1.0).
+            < 0.0 lowers saturation; -1.0 fully desaturates (S -> 0.0,
+            i.e. full grayscale).
 
     Returns:
         uint8 array of the same shape as ``rgb``. The max channel per pixel
         (== HSV V) is numerically unchanged because ``mx - (mx - mx)*ratio
-        == mx``; only the non-max channels are pulled toward 0.
+        == mx``; only the non-max channels are pulled toward (positive
+        boost) or away from (negative boost) the max channel.
     """
-    if boost <= 0.0:
+    if boost == 0.0:
         return rgb
 
     arr = np.asarray(rgb, dtype=np.float32)
@@ -458,7 +462,10 @@ def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
     chroma = mx - mn
     with np.errstate(invalid="ignore", divide="ignore"):
         s = np.where(mx > 0, chroma / mx, 0.0)
-        s_new = s + boost * (1.0 - s)
+        if boost > 0.0:
+            s_new = s + boost * (1.0 - s)
+        else:
+            s_new = s * (1.0 + boost)
         ratio = np.where(s > 1e-6, s_new / s, 1.0)
     out = mx - (mx - arr) * ratio
     return np.clip(out, 0.0, 255.0).astype(np.uint8)

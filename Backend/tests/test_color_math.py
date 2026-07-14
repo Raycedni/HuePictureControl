@@ -546,12 +546,48 @@ class TestSaturationBoost:
         boosted = boost_saturation_rgb(arr, 1.0)
         assert (boosted == arr).all()
 
+    def test_boost_gray_pixels_stay_gray_negative(self):
+        """Pure-gray (chroma 0) pixels are also unaffected by negative boost."""
+        arr = np.array([[128, 128, 128], [0, 0, 0], [255, 255, 255]], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, -1.0)
+        assert (boosted == arr).all()
+
     def test_boost_works_on_single_pixel_shape(self):
         """boost_saturation_rgb also accepts a (3,) single-pixel shape."""
         px = np.array([200, 50, 50], dtype=np.uint8)
         boosted = boost_saturation_rgb(px, 0.5)
         assert boosted.shape == (3,)
         assert int(boosted.max()) == int(px.max())
+
+    def test_boost_negative_one_fully_desaturates(self):
+        """boost=-1.0 fully desaturates: all channels equal the original max."""
+        arr = np.array([200, 50, 50], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, -1.0)
+        assert boosted.dtype == np.uint8
+        assert int(boosted.max()) == int(boosted.min()) == int(arr.max())
+
+    def test_boost_negative_half_partially_desaturates(self):
+        """boost=-0.5 lowers saturation but does not reach full gray."""
+        arr = np.array([200, 50, 50], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, -0.5)
+
+        def _saturation(px):
+            mx, mn = float(px.max()), float(px.min())
+            return 0.0 if mx == 0 else (mx - mn) / mx
+
+        assert _saturation(boosted) < _saturation(arr)
+        assert _saturation(boosted) > 0.0
+        assert int(boosted.max()) == int(arr.max())
+        assert int(boosted.min()) > int(arr.min())
+
+    def test_boost_negative_preserves_value(self):
+        """Negative boost leaves HSV V (max channel) numerically unchanged."""
+        arr = np.array([[200, 100, 50], [10, 10, 200]], dtype=np.uint8)
+        boosted = boost_saturation_rgb(arr, -0.5)
+
+        v_before = arr.max(axis=-1)
+        v_after = boosted.max(axis=-1)
+        assert (v_after == v_before).all()
 
 
 # ---------------------------------------------------------------------------

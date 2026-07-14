@@ -205,8 +205,13 @@ def test_new_setting_put_rejects_above_one(key):
     assert r.status_code == 422
 
 
-@pytest.mark.parametrize("key", ["color_vibrancy", "saturation_boost", "hdr_input"])
+@pytest.mark.parametrize("key", ["color_vibrancy", "hdr_input"])
 def test_new_setting_put_rejects_below_zero(key):
+    """Regression guard: the DEFAULT range [0.0, 1.0] still rejects negatives.
+
+    saturation_boost is excluded here because it has its own extended
+    [-1.0, 1.0] range — see the dedicated saturation_boost tests below.
+    """
     with _make_client() as client:
         r = client.put(f"/api/settings/{key}", json={"value": -0.01})
     assert r.status_code == 422
@@ -241,3 +246,34 @@ def test_new_setting_put_overwrites_previous_value(key):
         r = client.get(f"/api/settings/{key}")
     assert r.status_code == 200
     assert r.json() == {"value": 0.6}
+
+
+# ---------------------------------------------------------------------------
+# saturation_boost extended range [-1.0, 1.0] (quick-task 260714-png)
+# ---------------------------------------------------------------------------
+
+
+def test_saturation_boost_accepts_negative():
+    with _make_client() as client:
+        r = client.put("/api/settings/saturation_boost", json={"value": -0.5})
+    assert r.status_code == 200
+    assert r.json() == {"value": -0.5}
+
+
+def test_saturation_boost_accepts_boundary_negative_one():
+    with _make_client() as client:
+        r = client.put("/api/settings/saturation_boost", json={"value": -1.0})
+    assert r.status_code == 200
+    assert r.json() == {"value": -1.0}
+
+
+def test_saturation_boost_rejects_below_negative_one():
+    with _make_client() as client:
+        r = client.put("/api/settings/saturation_boost", json={"value": -1.01})
+    assert r.status_code == 422
+
+
+def test_saturation_boost_rejects_above_one():
+    with _make_client() as client:
+        r = client.put("/api/settings/saturation_boost", json={"value": 1.01})
+    assert r.status_code == 422

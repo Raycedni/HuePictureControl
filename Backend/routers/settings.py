@@ -53,7 +53,9 @@ async def _get_setting(request: Request, key: str) -> SettingValueResponse:
         return SettingValueResponse(value=0.0)
 
 
-async def _put_setting(request: Request, key: str) -> SettingValueResponse:
+async def _put_setting(
+    request: Request, key: str, min_value: float = 0.0, max_value: float = 1.0
+) -> SettingValueResponse:
     # Manual body parsing — see module docstring for the NaN-in-422 rationale.
     raw = await request.body()
     try:
@@ -74,9 +76,10 @@ async def _put_setting(request: Request, key: str) -> SettingValueResponse:
         raise HTTPException(
             status_code=422, detail="value must be a finite number"
         )
-    if v < 0.0 or v > 1.0:
+    if v < min_value or v > max_value:
         raise HTTPException(
-            status_code=422, detail="value must be in [0.0, 1.0]"
+            status_code=422,
+            detail=f"value must be in [{min_value}, {max_value}]",
         )
 
     db = request.app.state.db
@@ -136,7 +139,7 @@ async def get_saturation_boost(request: Request) -> SettingValueResponse:
     response_model=SettingValueResponse,
 )
 async def put_saturation_boost(request: Request) -> SettingValueResponse:
-    return await _put_setting(request, "saturation_boost")
+    return await _put_setting(request, "saturation_boost", -1.0, 1.0)
 
 
 @router.get(
