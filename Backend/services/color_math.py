@@ -471,6 +471,52 @@ def boost_saturation_rgb(rgb: np.ndarray, boost: float) -> np.ndarray:
     return np.clip(out, 0.0, 255.0).astype(np.uint8)
 
 
+def correct_channels_rgb(
+    rgb: np.ndarray, gain_r: float, gain_g: float, gain_b: float
+) -> np.ndarray:
+    """Relational per-channel color correction (quick-task 260714-txt).
+
+    Generalizes ``boost_saturation_rgb``'s structural trick (dominant/max
+    channel is invariant, only non-max channels move) to three independent
+    per-channel gains instead of a single scalar saturation ratio. This is a
+    deliberate HARDWARE-tint compensation knob (residual color rendering in
+    the physical Hue/WLED lights), NOT a color-correctness fix -- the
+    computed colors going in are already correct end-to-end.
+
+    Args:
+        rgb: (N, 3) or (3,) array, RGB order, any numeric dtype.
+        gain_r: gain applied to the red channel when red is NOT the
+            per-pixel dominant (max) channel. 1.0 = identity. Suggested UI
+            range [0.5, 1.5].
+        gain_g: same, for green.
+        gain_b: same, for blue.
+
+    Returns:
+        uint8 array of the same shape as ``rgb``. Each pixel's dominant
+        (max) channel is numerically unchanged for ANY gain values, because
+        ``out = mx - (mx - mx) * gain == mx``. For a non-dominant channel,
+        ``gain > 1.0`` pulls it further FROM the max (corrects it down --
+        e.g. reduces a tint's contribution); ``gain < 1.0`` pulls it TOWARD
+        the max (boosts it up). This is the "vibrant green stays vibrant
+        green" guarantee: a pure/near-pure green pixel has green as its
+        dominant channel, so gain_g cannot touch it there, while the SAME
+        gain_g DOES correct green in a mixed pixel (e.g. orange) where green
+        is non-dominant.
+
+        At gain_r == gain_g == gain_b == 1.0 this returns ``rgb`` unchanged
+        (same object, zero cost) -- mirrors ``boost_saturation_rgb``'s
+        ``boost == 0.0`` identity contract.
+    """
+    if gain_r == 1.0 and gain_g == 1.0 and gain_b == 1.0:
+        return rgb
+
+    arr = np.asarray(rgb, dtype=np.float32)
+    mx = arr.max(axis=-1, keepdims=True)
+    gains = np.array([gain_r, gain_g, gain_b], dtype=np.float32)
+    out = mx - (mx - arr) * gains
+    return np.clip(out, 0.0, 255.0).astype(np.uint8)
+
+
 def extract_region_color(
     frame: np.ndarray, region: RegionMask, vibrancy: float = 0.0, hdr: bool = False
 ) -> tuple[int, int, int]:

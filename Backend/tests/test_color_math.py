@@ -10,6 +10,7 @@ from services.color_math import (
     _in_gamut,
     boost_saturation_rgb,
     build_polygon_mask,
+    correct_channels_rgb,
     extract_region_color,
     hdr10_to_srgb,
     rgb_to_xy,
@@ -588,6 +589,57 @@ class TestSaturationBoost:
         v_before = arr.max(axis=-1)
         v_after = boosted.max(axis=-1)
         assert (v_after == v_before).all()
+
+
+# ---------------------------------------------------------------------------
+# correct_channels_rgb (quick-task 260714-txt)
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectChannels:
+    def test_all_gains_one_is_identity(self):
+        """gain_r == gain_g == gain_b == 1.0 is a same-object no-op."""
+        arr = np.array([[200, 100, 50], [128, 128, 128]], dtype=np.uint8)
+        result = correct_channels_rgb(arr, 1.0, 1.0, 1.0)
+        assert result is arr
+
+    def test_vibrant_green_stays_vibrant(self):
+        """THE spec: green is this pixel's dominant channel, so a hard
+        gain_g cannot touch it -- vibrant green stays vibrant green."""
+        px = np.array([10, 250, 15], dtype=np.uint8)
+        out = correct_channels_rgb(px, 1.0, 1.5, 1.0)
+        assert out.dtype == np.uint8
+        assert int(out[1]) == 250
+
+    def test_orange_green_is_corrected(self):
+        """THE spec, paired: the SAME gain_g corrects green when it is
+        NOT the dominant channel (red is dominant here and stays unchanged).
+        """
+        px = np.array([250, 120, 40], dtype=np.uint8)
+        out = correct_channels_rgb(px, 1.0, 1.5, 1.0)
+        assert int(out[1]) < 120
+        assert int(out[1]) == 55
+        assert int(out[0]) == 250
+
+    def test_dominant_channel_invariant(self):
+        """The per-pixel max channel is preserved for arbitrary gains."""
+        arr = np.array([[200, 100, 50], [10, 10, 200]], dtype=np.uint8)
+        out = correct_channels_rgb(arr, 1.3, 0.7, 1.5)
+        assert (out.max(axis=-1) == arr.max(axis=-1)).all()
+
+    def test_gray_pixels_unchanged(self):
+        """Pure-gray (chroma 0) pixels are unaffected by any gains."""
+        arr = np.array(
+            [[128, 128, 128], [0, 0, 0], [255, 255, 255]], dtype=np.uint8
+        )
+        out = correct_channels_rgb(arr, 1.5, 0.5, 1.5)
+        assert (out == arr).all()
+
+    def test_single_pixel_shape(self):
+        """Accepts a (3,) single-pixel shape."""
+        px = np.array([200, 50, 50], dtype=np.uint8)
+        out = correct_channels_rgb(px, 1.2, 1.0, 1.0)
+        assert out.shape == (3,)
 
 
 # ---------------------------------------------------------------------------
