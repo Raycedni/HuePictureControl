@@ -348,20 +348,6 @@ class WledStreamer:
         if led_count <= 0:
             return
 
-        # quick-task 260516-kra: per-frame read of the global brightness
-        # cutoff. 0.0 = disabled (default). `_app_state` may be absent in
-        # unit tests that exercise WledStreamer directly without going
-        # through the coordinator wiring; we read defensively via getattr.
-        threshold = 0.0
-        app_state = getattr(self, "_app_state", None)
-        if app_state is not None:
-            try:
-                threshold = float(
-                    getattr(app_state, "brightness_cutoff_threshold", 0.0)
-                )
-            except (TypeError, ValueError):
-                threshold = 0.0
-
         colors = np.zeros((led_count, 3), dtype=np.uint8)
         populated = False
         for ch in snap["channels"]:
@@ -391,24 +377,9 @@ class WledStreamer:
                 idx = np.linspace(0, src_n - 1, range_len).astype(np.int32)
                 slice_arr = gradient[idx]
 
-            # quick-task 260516-kra: per-channel brightness gating. Decision
-            # is per-region (compute mean Rec.709 luma of the SOURCE
-            # gradient, not the resampled slice — keeps the cost O(N_region)
-            # not O(led_count) for short regions painted to long ranges).
-            # When threshold == 0.0 we skip the luma compute entirely so
-            # users who never enable the feature pay zero per-frame cost.
-            if threshold > 0.0:
-                mean_rgb = gradient.mean(axis=0)
-                luma = (
-                    float(mean_rgb[0]) * 0.2126
-                    + float(mean_rgb[1]) * 0.7152
-                    + float(mean_rgb[2]) * 0.0722
-                ) / 255.0
-                if luma < threshold:
-                    # Zero this channel's LED range. np.zeros((range_len, 3),
-                    # uint8) replaces slice_arr — the subsequent intersect-
-                    # and-clip math then writes zeros into `colors`.
-                    slice_arr = np.zeros((range_len, 3), dtype=np.uint8)
+            # NOTE: brightness_cutoff_threshold intentionally does NOT gate
+            # WLED output (quick-task 260714-pzk) — the cutoff is Hue-only.
+            # WLED always renders its actual computed gradient color.
 
             # Intersect [start, end] with [0, led_count) in one slice op.
             clip_lo = max(start, 0)
