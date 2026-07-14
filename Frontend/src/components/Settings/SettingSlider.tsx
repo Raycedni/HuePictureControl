@@ -8,16 +8,22 @@ import { useCallback, useEffect, useState } from 'react'
 import { getSetting, putSetting, SettingsApiError } from '@/api/settings'
 
 const STEP = 0.01
-const MIN = 0.0
-const MAX = 1.0
 
 interface Props {
   settingKey: string
   label: string
   description: string
+  min?: number
+  max?: number
 }
 
-export function SettingSlider({ settingKey, label, description }: Props) {
+export function SettingSlider({
+  settingKey,
+  label,
+  description,
+  min = 0.0,
+  max = 1.0,
+}: Props) {
   const [value, setValue] = useState<number>(0.0)
   const [loaded, setLoaded] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -102,8 +108,8 @@ export function SettingSlider({ settingKey, label, description }: Props) {
         id={sliderId}
         data-testid={`setting-slider-${settingKey}`}
         type="range"
-        min={MIN}
-        max={MAX}
+        min={min}
+        max={max}
         step={STEP}
         value={value}
         onChange={handleChange}
