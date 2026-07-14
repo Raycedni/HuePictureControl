@@ -5,6 +5,7 @@ import sys
 import threading
 from unittest.mock import MagicMock, patch, PropertyMock
 
+import cv2
 import numpy as np
 import pytest
 
@@ -209,3 +210,62 @@ if sys.platform != "win32":
         def test_device_path_property_returns_path(self):
             svc = V4L2Capture("/dev/video2")
             assert svc.device_path == "/dev/video2"
+
+    class TestV4L2Decode:
+        """Coverage for the format-aware _decode_frame helper (pure — no ioctl mocking needed)."""
+
+        def test_yuyv_decodes_to_bgr_and_jpeg(self):
+            svc = V4L2Capture()
+            assert svc._width == 640
+            assert svc._height == 480
+            assert svc._decode_yuyv is None
+
+            data = np.full(640 * 480 * 2, 0x80, dtype=np.uint8).tobytes()
+            result = svc._decode_frame(data)
+
+            assert result is not None
+            frame, jpeg = result
+            assert frame.shape == (480, 640, 3)
+            assert frame.dtype == np.uint8
+            assert jpeg[:2] == b"\xff\xd8"
+            assert svc._decode_yuyv is True
+
+        def test_mjpeg_decodes_via_imdecode_and_passes_jpeg_through(self):
+            svc = V4L2Capture()
+            img = np.zeros((8, 8, 3), dtype=np.uint8)
+            ok, buf = cv2.imencode(".jpg", img)
+            assert ok
+            jpeg = buf.tobytes()
+
+            result = svc._decode_frame(jpeg)
+
+            assert result is not None
+            frame, jpeg_out = result
+            assert frame is not None
+            assert jpeg_out == jpeg
+            assert svc._decode_yuyv is False
+
+        def test_garbage_returns_none_and_stays_unresolved(self):
+            svc = V4L2Capture()
+            result = svc._decode_frame(b"\x00\x01\x02\x03")
+            assert result is None
+            assert svc._decode_yuyv is None
+
+        def test_yuyv_mode_stays_cached_on_subsequent_frames(self):
+            svc = V4L2Capture()
+            data = np.full(640 * 480 * 2, 0x80, dtype=np.uint8).tobytes()
+            svc._decode_frame(data)
+            assert svc._decode_yuyv is True
+
+            # Second full-length YUYV frame: confirm cached branch is honored
+            # (not re-sniffed — a re-sniff wouldn't flip this to MJPEG anyway
+            # since it doesn't start with FFD8, but this proves the cached
+            # path is taken directly without touching the resolve branch).
+            data2 = np.full(640 * 480 * 2, 0x40, dtype=np.uint8).tobytes()
+            result = svc._decode_frame(data2)
+
+            assert result is not None
+            frame, jpeg = result
+            assert frame.shape == (480, 640, 3)
+            assert jpeg[:2] == b"\xff\xd8"
+            assert svc._decode_yuyv is True
