@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-14 - Completed quick task 260714-txt: Add color_correction_r/g/b hardware-tint compensation sliders (relational, dominant-channel invariant)
+Last activity: 2026-07-19 - Completed quick task 260719-efy: Rework color correction from relational to static flat per-channel gain
 
 ## Performance Metrics
 
@@ -139,6 +139,7 @@ None yet.
 | 260714-png | Allow saturation_boost to go negative (-1.0 to 1.0) — symmetric desaturation formula (s*(1+boost) below 0) so over-vibrant HDR content can be toned down; color_vibrancy/brightness_cutoff_threshold/hdr_input stay [0.0, 1.0] | 2026-07-14 | 82f3e42 | [260714-png-allow-saturation-boost-setting-to-go-neg](./quick/260714-png-allow-saturation-boost-setting-to-go-neg/) |
 | 260714-pzk | Scope brightness_cutoff_threshold to Hue only — removed the matching luma-gating block from WledStreamer._render_one_device (WLED now always renders its real computed color); streaming_service.py (Hue) left byte-identical | 2026-07-14 | 783706a | [260714-pzk-scope-brightness-cutoff-threshold-to-hue](./quick/260714-pzk-scope-brightness-cutoff-threshold-to-hue/) |
 | 260714-txt | Add color_correction_r/g/b sliders (default 1.0, range [0.5,1.5]) — relational correct_channels_rgb generalizes boost_saturation_rgb's dominant-channel invariance to 3 independent gains; applied after saturation boost on the shared gradient for both Hue and WLED sinks | 2026-07-14 | 2616e7a | [260714-txt-color-correction-sliders](./quick/260714-txt-color-correction-sliders/) |
+| 260719-efy | Rework correct_channels_rgb from relational to static flat per-channel gain — out = clip(arr * [gain_r,gain_g,gain_b], 0, 255) applied to every pixel unconditionally (dominant-channel invariance dropped after it failed the user's hardware test); identity fast-path preserved, signature/settings keys/wiring unchanged; TestCorrectChannels rewritten for flat behavior | 2026-07-19 | 18e2027 | [260719-efy-rework-color-correction-from-relational-](./quick/260719-efy-rework-color-correction-from-relational-/) |
 
 ## Session Continuity
 
