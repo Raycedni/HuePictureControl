@@ -603,43 +603,51 @@ class TestCorrectChannels:
         result = correct_channels_rgb(arr, 1.0, 1.0, 1.0)
         assert result is arr
 
-    def test_vibrant_green_stays_vibrant(self):
-        """THE spec: green is this pixel's dominant channel, so a hard
-        gain_g cannot touch it -- vibrant green stays vibrant green."""
-        px = np.array([10, 250, 15], dtype=np.uint8)
-        out = correct_channels_rgb(px, 1.0, 1.5, 1.0)
+    def test_green_is_scaled(self):
+        """Flat behavior: green IS scaled by gain_g regardless of dominance
+        (direct inverse of the deleted vibrant-green-invariance spec)."""
+        px = np.array([10, 200, 15], dtype=np.uint8)
+        out = correct_channels_rgb(px, 1.0, 0.5, 1.0)
         assert out.dtype == np.uint8
-        assert int(out[1]) == 250
+        assert int(out[1]) == 100  # green DID change: 200 * 0.5
+        assert int(out[0]) == 10   # red unchanged (gain 1.0)
+        assert int(out[2]) == 15   # blue unchanged (gain 1.0)
 
-    def test_orange_green_is_corrected(self):
-        """THE spec, paired: the SAME gain_g corrects green when it is
-        NOT the dominant channel (red is dominant here and stays unchanged).
-        """
+    def test_uniform_across_channels_independent_of_max(self):
+        """Gains apply to every channel independent of which is the per-pixel
+        max: a NON-max channel is scaled while the max channel with gain 1.0
+        stays put."""
+        px = np.array([100, 200, 50], dtype=np.uint8)
+        out = correct_channels_rgb(px, 1.5, 1.0, 1.0)
+        assert int(out[0]) == 150  # non-max red scaled: 100 * 1.5
+        assert int(out[1]) == 200  # max green untouched (gain 1.0)
+        assert int(out[2]) == 50   # blue untouched (gain 1.0)
+
+    def test_clips_at_255(self):
+        """gain > 1.0 saturates a channel at 255."""
         px = np.array([250, 120, 40], dtype=np.uint8)
-        out = correct_channels_rgb(px, 1.0, 1.5, 1.0)
-        assert int(out[1]) < 120
-        assert int(out[1]) == 55
-        assert int(out[0]) == 250
+        out = correct_channels_rgb(px, 1.5, 1.0, 1.0)
+        assert int(out[0]) == 255  # 250 * 1.5 = 375 -> clipped to 255
+        assert int(out[1]) == 120
+        assert int(out[2]) == 40
 
-    def test_dominant_channel_invariant(self):
-        """The per-pixel max channel is preserved for arbitrary gains."""
-        arr = np.array([[200, 100, 50], [10, 10, 200]], dtype=np.uint8)
-        out = correct_channels_rgb(arr, 1.3, 0.7, 1.5)
-        assert (out.max(axis=-1) == arr.max(axis=-1)).all()
-
-    def test_gray_pixels_unchanged(self):
-        """Pure-gray (chroma 0) pixels are unaffected by any gains."""
-        arr = np.array(
-            [[128, 128, 128], [0, 0, 0], [255, 255, 255]], dtype=np.uint8
-        )
-        out = correct_channels_rgb(arr, 1.5, 0.5, 1.5)
-        assert (out == arr).all()
+    def test_scale_down_stays_in_range(self):
+        """A gain < 1.0 scales down and output stays within [0, 255]."""
+        px = np.array([200, 0, 0], dtype=np.uint8)
+        out = correct_channels_rgb(px, 0.5, 0.5, 0.5)
+        assert int(out[0]) == 100  # 200 * 0.5
+        assert int(out[1]) == 0    # 0 * 0.5
+        assert int(out[2]) == 0
+        assert (out >= 0).all()
+        assert (out <= 255).all()
+        assert out.dtype == np.uint8
 
     def test_single_pixel_shape(self):
-        """Accepts a (3,) single-pixel shape."""
+        """Accepts a (3,) single-pixel shape and returns uint8."""
         px = np.array([200, 50, 50], dtype=np.uint8)
         out = correct_channels_rgb(px, 1.2, 1.0, 1.0)
         assert out.shape == (3,)
+        assert out.dtype == np.uint8
 
 
 # ---------------------------------------------------------------------------

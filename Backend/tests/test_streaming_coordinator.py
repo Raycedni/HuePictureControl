@@ -320,8 +320,9 @@ async def test_frame_loop_passes_region_gradients_to_hue_render():
 async def test_frame_loop_applies_color_correction_gain_to_hue_gradient():
     """A non-identity color_correction_g gain reaches the shared gradient
     handed to hue.render, applied AFTER boost_saturation_rgb (quick-task
-    260714-txt). Uses an orange-ish frame (red dominant, green non-dominant)
-    so gain_g measurably reduces green while red stays exactly unchanged.
+    260714-txt, reworked to flat multiplicative in 260719-efy). Uses an
+    orange-ish frame so gain_g > 1.0 measurably SCALES green UP (flat
+    per-channel multiplier) while red stays unchanged (gain_r defaults 1.0).
     """
     polygon = json.dumps([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
 
@@ -377,8 +378,8 @@ async def test_frame_loop_applies_color_correction_gain_to_hue_gradient():
     baseline_px = await _run(None)
     corrected_px = await _run(SimpleNamespace(color_correction_g=1.5))
 
-    assert int(corrected_px[1]) < int(baseline_px[1])  # green reduced
-    assert int(corrected_px[0]) == int(baseline_px[0])  # red (dominant) invariant
+    assert int(corrected_px[1]) > int(baseline_px[1])  # green scaled up (flat gain_g=1.5)
+    assert int(corrected_px[0]) == int(baseline_px[0])  # red unchanged (gain_r=1.0)
 
 
 @pytest.mark.asyncio
