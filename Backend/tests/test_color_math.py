@@ -7,7 +7,10 @@ from services.color_math import (
     RegionMask,
     _LINEAR_LUT,
     _clamp_to_gamut,
+    _compress_to_gamut_709,
+    _finish_linear_bt2020_to_srgb,
     _in_gamut,
+    _tone_map_max_rgb,
     boost_saturation_rgb,
     build_polygon_mask,
     correct_channels_rgb,
@@ -664,12 +667,44 @@ class TestHdr10ToSrgb:
         assert abs(r - g) <= 2
         assert abs(g - b) <= 2
 
-    def test_saturated_orange_maps_to_orange_hue_not_green(self):
-        """A BT.2020-encoded saturated orange stays orange-ish (R > G > B)."""
+    def test_bright_saturated_red_stays_red_not_green_or_white(self):
+        """A bright, near-primary red stays a saturated red -- never green
+        or washed-out near-white.
+
+        Byte [220,130,40] LOOKS orange, but under the (unchanged) PQ /
+        limited-range LUT it decodes to linear ~[25.8, 0.56, 0.002] ==
+        ~[5250, 113, 0.4] nits -- i.e. a near-primary RED, not an orange.
+        BT.2020 red maps to BT.709 with G more negative than B, so any
+        hue-preserving gamut map lands B marginally >= G (the old per-channel
+        Reinhard only produced g > b by distorting the channel ratios -- the
+        very bug quick-task 260723-udg removes). We therefore assert what is
+        colorimetrically true and what the user actually cares about: R is
+        strongly dominant, and the result is neither green nor near-white.
+        Genuine oranges (where G is a real fraction of R) still resolve
+        R > G > B -- see test_genuine_orange_stays_r_gt_g_gt_b below.
+        """
         px = np.array([220, 130, 40], dtype=np.uint8)
         out = hdr10_to_srgb(px)
         r, g, b = int(out[0]), int(out[1]), int(out[2])
-        assert r > g > b
+        assert r > g and r > b, f"R must dominate, got {(r, g, b)}"
+        assert r >= 200, f"a bright red must stay bright, got {(r, g, b)}"
+        # Not green: red channel clearly exceeds green.
+        assert r - g >= 60, f"must not shift toward green, got {(r, g, b)}"
+        # Not near-white: strong HSV saturation (not collapsed to grey/white).
+        sat = (r - min(g, b)) / r
+        assert sat >= 0.45, f"must not wash out to near-white, sat={sat:.3f}"
+
+    def test_genuine_orange_stays_r_gt_g_gt_b(self):
+        """A genuine orange (G a real fraction of R) resolves R > G > B.
+
+        Byte [192,176,132] decodes to linear ~[7.9, 4.1, 0.6] -- a true
+        orange (unlike the near-primary red fixture above). The hue-preserving
+        pipeline keeps its ordering intact.
+        """
+        px = np.array([192, 176, 132], dtype=np.uint8)
+        out = hdr10_to_srgb(px)
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert r > g > b, f"genuine orange must stay R > G > B, got {(r, g, b)}"
 
     def test_black_stays_black(self):
         """[0,0,0] -> [0,0,0], no NaN/negative artifacts from the PQ/matrix path."""
@@ -761,24 +796,28 @@ class TestHdrLinearAveraging:
         r, g, b = extract_region_color(frame, region, hdr=True)
         assert r > b, f"expected orange-dominant mean, got {(r, g, b)}"
 
-    def test_hdr_true_beats_convert_after_average(self):
-        """Linear-before-average (hdr=True) produces a markedly larger R-B
-        spread than convert-after-average (byte-space mean piped through
-        hdr10_to_srgb) -- proving the v2 fix for the v1 warm-gray defect."""
+    def test_hdr_true_stays_strongly_orange_dominant(self):
+        """Linear-before-average (hdr=True) keeps the bright-orange half
+        dominating the region mean, yielding a strongly orange-dominant
+        result (large R-B spread, R > G > B).
+
+        (Pre-260723-udg this asserted the linear spread strictly EXCEEDED the
+        convert-after-average byte spread, which relied on the OLD finish
+        collapsing the byte-average path to warm-grey. The v3 hue-preserving
+        finish no longer collapses mid-oranges, so the byte path is now also
+        saturated and that strict inequality no longer holds -- the finish got
+        better, not worse. We instead pin the property that actually matters:
+        the linear path stays strongly orange-dominant.)
+        """
         frame, region = _hdr_orange_gray_fixture()
 
         r_lin, g_lin, b_lin = extract_region_color(frame, region, hdr=True)
         spread_linear = r_lin - b_lin
 
-        r_byte, g_byte, b_byte = extract_region_color(frame, region, hdr=False)
-        converted = hdr10_to_srgb(
-            np.array([r_byte, g_byte, b_byte], dtype=np.uint8)
-        )
-        spread_byte = int(converted[0]) - int(converted[2])
-
-        assert spread_linear > spread_byte, (
-            f"linear-before-average spread {spread_linear} should exceed "
-            f"convert-after-average spread {spread_byte}"
+        assert r_lin > g_lin > b_lin, f"expected R > G > B, got {(r_lin, g_lin, b_lin)}"
+        assert spread_linear >= 80, (
+            f"linear-before-average result should stay strongly orange-dominant, "
+            f"got R-B spread {spread_linear}"
         )
 
     def test_extract_region_color_hdr_empty_mask_returns_black(self):
@@ -829,3 +868,114 @@ class TestHdrLinearAveraging:
         assert gradient.shape == (5, 3)
         assert gradient.dtype == np.uint8
         assert gradient.min() >= 0 and gradient.max() <= 255
+
+
+# ---------------------------------------------------------------------------
+# HDR finishing v3: hue-preserving tone map + gamut compression
+# (quick-task 260723-udg)
+# ---------------------------------------------------------------------------
+
+
+class TestHuePreservingToneMap:
+    """v3 finishing: uniform max-RGB tone map + hue-preserving gamut compress."""
+
+    def test_tone_map_preserves_channel_ratios(self):
+        """A bright sample is scaled UNIFORMLY -- R/G and R/B ratios survive
+        the tone map (within 1e-4 relative tolerance) and max channel <= 1.0."""
+        rel = np.array([40.0, 13.0, 2.0], dtype=np.float32)
+        out = _tone_map_max_rgb(rel)
+        assert out.max() <= 1.0 + 1e-6
+        in_rg, in_rb = rel[0] / rel[1], rel[0] / rel[2]
+        out_rg, out_rb = out[0] / out[1], out[0] / out[2]
+        assert abs(out_rg - in_rg) / in_rg < 1e-4
+        assert abs(out_rb - in_rb) / in_rb < 1e-4
+
+    def test_tone_map_sub_knee_passthrough_bit_identical(self):
+        """A sample whose max channel is below the knee is returned unchanged
+        (bit-identical -- no compression below the knee)."""
+        rel = np.array([0.5, 0.25, 0.1], dtype=np.float32)
+        out = _tone_map_max_rgb(rel)
+        assert np.array_equal(out, rel)
+
+    def test_tone_map_fixes_midtone_crush(self):
+        """Diffuse-white linear input maps to a max channel > 0.85 (the old
+        per-channel Reinhard produced ~0.5 -- the midtone crush)."""
+        out = _tone_map_max_rgb(np.array([1.0, 1.0, 1.0], dtype=np.float32))
+        assert out.max() > 0.85
+
+    def test_tone_map_max_is_monotonic_in_brightness(self):
+        """For a fixed chromaticity scaled by k, the tone-mapped max channel
+        is non-decreasing in k and never exceeds 1.0."""
+        base = np.array([2.0, 1.0, 0.2], dtype=np.float32)
+        maxes = [float(_tone_map_max_rgb(base * k).max()) for k in (1, 4, 16)]
+        assert maxes[0] <= maxes[1] <= maxes[2]
+        assert all(m <= 1.0 + 1e-6 for m in maxes)
+
+    def test_finish_bright_orange_keeps_saturation(self):
+        """A very bright saturated orange survives the full finish as a
+        saturated orange (R > G > B, HSV saturation well above near-white),
+        proving no collapse toward white -- the root cause of the old
+        orange->green shift after saturation_boost."""
+        out = _finish_linear_bt2020_to_srgb(np.array([40.0, 13.0, 2.0], dtype=np.float32))
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert r > g > b, f"expected R > G > B, got {(r, g, b)}"
+        sat = (r - min(g, b)) / r
+        assert sat >= 0.45, f"orange must not collapse toward white, sat={sat:.3f}"
+
+    def test_finish_brown_stays_brown_not_red(self):
+        """A dark orange / brown (sub-knee) keeps R > G > B and a warm r/g
+        ratio -- no red shift from channel crush.
+
+        The output r/g reflects the (correct, unchanged) BT.2020->BT.709
+        primaries matrix, which legitimately warms the ratio by ~20% relative
+        to the raw-input sRGB encoding; we allow 25% so the assertion pins
+        'stays warm brown' without demanding the matrix be a no-op.
+        """
+        rel = np.array([0.35, 0.18, 0.06], dtype=np.float32)
+        out = _finish_linear_bt2020_to_srgb(rel)
+        r, g, b = int(out[0]), int(out[1]), int(out[2])
+        assert r > g > b, f"brown must stay R > G > B, got {(r, g, b)}"
+        # sRGB-encoded expectation of the un-tone-mapped (raw) input.
+        srgb_in = np.where(
+            rel > 0.0031308, 1.055 * (rel ** (1.0 / 2.4)) - 0.055, 12.92 * rel
+        )
+        raw = np.round(np.clip(srgb_in, 0.0, 1.0) * 255.0).astype(int)
+        expected_rg = raw[0] / raw[1]
+        out_rg = r / g
+        assert abs(out_rg - expected_rg) / expected_rg <= 0.25, (
+            f"brown r/g {out_rg:.3f} drifted too far from raw expectation "
+            f"{expected_rg:.3f} -- looks like a red shift"
+        )
+
+    def test_gamut_compress_negative_is_hue_preserving(self):
+        """An out-of-gamut sample with a negative channel is lerped toward the
+        achromatic axis: all channels land in [0,1], the dominant channel stays
+        dominant, and Rec.709 luma is preserved (not a per-channel clip)."""
+        rel709 = np.array([-0.1, 0.8, 0.2], dtype=np.float32)
+        out = _compress_to_gamut_709(rel709)
+        assert (out >= 0.0).all() and (out <= 1.0).all()
+        assert int(out.argmax()) == 1, f"G must stay dominant, got {out}"
+        luma_in = float(rel709 @ np.array([0.2126, 0.7152, 0.0722]))
+        luma_out = float(out @ np.array([0.2126, 0.7152, 0.0722]))
+        assert abs(luma_in - luma_out) < 1e-3
+
+    def test_gamut_compress_in_gamut_passthrough(self):
+        """An in-gamut sample passes through _compress_to_gamut_709 unchanged."""
+        rel709 = np.array([0.5, 0.3, 0.1], dtype=np.float32)
+        out = _compress_to_gamut_709(rel709)
+        assert np.allclose(out, rel709)
+
+    def test_finish_black_is_safe(self):
+        """Linear black finishes to [0,0,0] uint8 with no NaN / warnings."""
+        out = _finish_linear_bt2020_to_srgb(np.zeros(3, dtype=np.float32))
+        assert out.tolist() == [0, 0, 0]
+        assert out.dtype == np.uint8
+
+    def test_finish_shape_contracts(self):
+        """(3,) in -> (3,) uint8 out; (N,3) in -> (N,3) uint8 out."""
+        single = _finish_linear_bt2020_to_srgb(np.array([1.0, 0.5, 0.2], dtype=np.float32))
+        assert single.shape == (3,) and single.dtype == np.uint8
+        multi = _finish_linear_bt2020_to_srgb(
+            np.array([[1.0, 0.5, 0.2], [0.3, 0.3, 0.3]], dtype=np.float32)
+        )
+        assert multi.shape == (2, 3) and multi.dtype == np.uint8
