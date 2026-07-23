@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 Phase: 19.1
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-19 - Completed quick task 260719-efy: Rework color correction from relational to static flat per-channel gain
+Last activity: 2026-07-23 - Completed quick task 260723-udg: Rework HDR mapping to hue-preserving tone map + gamut compression
 
 ## Performance Metrics
 
@@ -140,6 +140,7 @@ None yet.
 | 260714-pzk | Scope brightness_cutoff_threshold to Hue only — removed the matching luma-gating block from WledStreamer._render_one_device (WLED now always renders its real computed color); streaming_service.py (Hue) left byte-identical | 2026-07-14 | 783706a | [260714-pzk-scope-brightness-cutoff-threshold-to-hue](./quick/260714-pzk-scope-brightness-cutoff-threshold-to-hue/) |
 | 260714-txt | Add color_correction_r/g/b sliders (default 1.0, range [0.5,1.5]) — relational correct_channels_rgb generalizes boost_saturation_rgb's dominant-channel invariance to 3 independent gains; applied after saturation boost on the shared gradient for both Hue and WLED sinks | 2026-07-14 | 2616e7a | [260714-txt-color-correction-sliders](./quick/260714-txt-color-correction-sliders/) |
 | 260719-efy | Rework correct_channels_rgb from relational to static flat per-channel gain — out = clip(arr * [gain_r,gain_g,gain_b], 0, 255) applied to every pixel unconditionally (dominant-channel invariance dropped after it failed the user's hardware test); identity fast-path preserved, signature/settings keys/wiring unchanged; TestCorrectChannels rewritten for flat behavior | 2026-07-19 | 18e2027 | [260719-efy-rework-color-correction-from-relational-](./quick/260719-efy-rework-color-correction-from-relational-/) |
+| 260723-udg | Rework HDR mapping — replaced per-channel extended-Reinhard finish with hue-preserving pipeline (_tone_map_max_rgb uniform scale with knee 0.75 + exponential shoulder, _compress_to_gamut_709 luma-preserving lerp toward achromatic axis); fixes blown-out midtones (diffuse white ~0.5→~0.91), orange→green and brown→red hue rotation; hdr=False paths byte-identical | 2026-07-23 | 19847cf | [260723-udg-rework-hdr-mapping-colors-blown-out-brig](./quick/260723-udg-rework-hdr-mapping-colors-blown-out-brig/) |
 
 ## Session Continuity
 
