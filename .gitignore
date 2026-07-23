@@ -10,3 +10,6 @@
 /.claude/proxmox access.txt
 /.claude/vm-run.sh
 /node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/

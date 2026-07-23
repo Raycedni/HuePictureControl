@@ -763,8 +763,24 @@ def sub_sample_gradient(
 # remaining direct callers. `extract_region_color`/`sub_sample_gradient`'s
 # new `hdr=True` path calls the LUT once over the whole ROI and averages in
 # linear light BEFORE calling the finishing half, which is the actual v2 fix.
+#
+# v3 (260723-udg) reworks ONLY the finishing curve (`_finish_linear_bt2020_to_srgb`);
+# `_LINEAR_LUT` and the linear-averaging paths are untouched. The v2 finish used
+# per-channel extended Reinhard, which destroyed channel ratios on bright colors:
+# bright orange collapsed to near-white yellow (which `saturation_boost` then
+# rotated toward green), diffuse white crushed to ~0.5 (users compensated by
+# blowing out brightness), and the post-matrix per-channel negative clip rotated
+# brown toward red. v3 replaces it with a hue-preserving pipeline: a scalar
+# max-RGB tone map (uniform per-sample scale with a knee + exponential shoulder,
+# so diffuse white lands ~0.91 and ratios/saturation survive) followed by
+# hue-preserving gamut compression toward the achromatic axis (a luma-preserving
+# lerp) instead of a per-channel clip -- preserving hue end-to-end. See
+# `_tone_map_max_rgb` and `_compress_to_gamut_709`.
 
 HDR_REF_WHITE_NITS = 203.0  # SDR reference white per ITU-R BT.2408
+# Linear-light knee below which the tone map is identity; SDR-range HDR
+# content (max channel <= this) passes through untouched (quick-task 260723-udg).
+_TONE_KNEE = np.float32(0.75)
 
 # ST 2084 (PQ) EOTF constants.
 _PQ_M1 = 0.1593017578125
@@ -808,13 +824,106 @@ def _build_linear_lut() -> np.ndarray:
 _LINEAR_LUT = _build_linear_lut()
 
 
+def _tone_map_max_rgb(rel: np.ndarray) -> np.ndarray:
+    """Hue-preserving max-RGB tone map (quick-task 260723-udg).
+
+    Compresses only the per-sample MAX channel with a knee + C1-continuous
+    exponential shoulder, then applies that same scale factor UNIFORMLY to
+    all three channels. Because every channel is scaled by the identical
+    factor ``f(m)/m``, both hue AND saturation are preserved exactly, and no
+    channel can exceed 1.0 before the BT.2020->BT.709 primaries matrix.
+
+    The shoulder is ``f(m) = 1 - (1 - k) * exp(-(m - k) / (1 - k))`` for
+    ``m > k`` (identity for ``m <= k``), with ``k = _TONE_KNEE``. It is
+    C1-continuous at the knee (``f(k) = k``, ``f'(k) = 1``) and asymptotes to
+    1.0, so linear-light HDR white (~49.26) lands just under 1.0 instead of
+    the ~0.5 midtone the old per-channel extended-Reinhard produced.
+
+    Args:
+        rel: (N, 3) or (3,) float32 array, RGB order, linear-light BT.2020.
+
+    Returns:
+        float32 array of the same shape, every channel <= 1.0.
+    """
+    arr = np.asarray(rel, dtype=np.float32)
+    single = arr.ndim == 1
+    if single:
+        arr = arr[np.newaxis, :]
+
+    k = _TONE_KNEE
+    m = arr.max(axis=-1, keepdims=True)
+    shoulder = np.float32(1.0) - (np.float32(1.0) - k) * np.exp(
+        -(m - k) / (np.float32(1.0) - k)
+    )
+    fm = np.where(m > k, shoulder, m)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # Guard the achromatic-black sample: scale 1.0 keeps it black.
+        scale = np.where(m > np.float32(1e-6), fm / m, np.float32(1.0))
+    out = (arr * scale).astype(np.float32)
+    if single:
+        out = out[0]
+    return out
+
+
+def _compress_to_gamut_709(rel709: np.ndarray) -> np.ndarray:
+    """Hue-preserving BT.709 gamut compression (quick-task 260723-udg).
+
+    Replaces the old per-channel ``np.maximum(rel709, 0.0)`` clip -- which
+    rotated hue (e.g. brown -> red) whenever the BT.2020->BT.709 matrix
+    pushed a channel negative. Instead, out-of-[0,1] samples are lerped
+    toward their own achromatic point (Rec.709 luma ``Y`` on all three
+    channels) by the largest ``s in [0, 1]`` that lands every channel inside
+    [0, 1]. Because the lerp is uniform per sample and the achromatic point
+    has luma ``Y``, Rec.709 luma is preserved exactly and channel ordering is
+    monotonically preserved. In-gamut samples pass through untouched.
+
+    Args:
+        rel709: (N, 3) or (3,) float32 array, RGB order, post-matrix values
+            (roughly in [-0.3 .. 1.2]).
+
+    Returns:
+        float32 array of the same shape, every channel in [0, 1].
+    """
+    arr = np.asarray(rel709, dtype=np.float32)
+    single = arr.ndim == 1
+    if single:
+        arr = arr[np.newaxis, :]
+
+    y = (arr.astype(np.float64) @ _REC709_LUMA).astype(np.float32)[..., np.newaxis]
+    out_of_gamut = np.any((arr < 0.0) | (arr > 1.0), axis=-1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # Per-channel feasible s: Y/(Y-c) for c<0, (1-Y)/(c-Y) for c>1.
+        s_low = np.where(arr < 0.0, y / (y - arr), np.float32(np.inf))
+        s_high = np.where(
+            arr > 1.0, (np.float32(1.0) - y) / (arr - y), np.float32(np.inf)
+        )
+        s = np.minimum(s_low, s_high).min(axis=-1, keepdims=True)
+    s = np.clip(s, 0.0, 1.0)
+
+    compressed = y + (arr - y) * s
+    result = np.where(out_of_gamut, compressed, arr)
+    # Degenerate achromatic luma (Y<=0 or Y>=1): plain clip for that sample.
+    degenerate = (y <= 0.0) | (y >= np.float32(1.0))
+    result = np.where(out_of_gamut & degenerate, np.clip(arr, 0.0, 1.0), result)
+    result = np.clip(result, 0.0, 1.0).astype(np.float32)
+    if single:
+        result = result[0]
+    return result
+
+
 def _finish_linear_bt2020_to_srgb(rel: np.ndarray) -> np.ndarray:
     """Finish a linear-light BT.2020 (N,3)/(3,) array into sRGB uint8.
 
-    Implements v1 hdr10_to_srgb's steps 4-7: extended-Reinhard highlight
-    roll-off (in the native BT.2020 gamut, BEFORE the primaries matrix --
-    see module docstring above for the hue-rotation rationale) ->
-    BT.2020->BT.709 matrix -> clip negative excursions -> sRGB OETF encode.
+    v3 (quick-task 260723-udg): the old per-channel extended-Reinhard roll-off
+    rotated hue and collapsed saturation on highlights (bright orange ->
+    near-white yellow, which ``boost_saturation_rgb`` then rotated toward
+    green; brown -> red via per-channel channel crush + the post-matrix
+    negative clip). v3 instead (a) tone-maps the max-RGB scalar with a knee +
+    exponential shoulder applied UNIFORMLY across channels (hue- and
+    saturation-preserving, midtone crush eliminated -- diffuse white now lands
+    ~0.91 instead of ~0.5), then (b) applies the BT.2020->BT.709 matrix, then
+    (c) gamut-compresses toward the achromatic axis (hue-preserving lerp)
+    instead of a per-channel negative clip, and finally (d) sRGB OETF encodes.
 
     Args:
         rel: (N, 3) or (3,) float32 array, RGB order, linear light relative
@@ -829,16 +938,16 @@ def _finish_linear_bt2020_to_srgb(rel: np.ndarray) -> np.ndarray:
     if single:
         arr = arr[np.newaxis, :]
 
-    # Extended-Reinhard highlight roll-off in native BT.2020 gamut; maps
-    # HDR white -> 1.0.
-    white = np.float32(10000.0 / HDR_REF_WHITE_NITS)
-    toned = arr * (1.0 + arr / (white * white)) / (1.0 + arr)
+    # Hue-preserving max-RGB tone map (uniform per-sample scale); every
+    # channel <= 1.0 afterward.
+    toned = _tone_map_max_rgb(arr)
 
     # BT.2020 -> BT.709 primaries matrix.
     rel709 = toned @ _BT2020_TO_BT709.T
 
-    # Clip negative excursions introduced by the matrix.
-    rel709 = np.maximum(rel709, 0.0)
+    # Hue-preserving gamut compression toward the achromatic axis (replaces
+    # the old per-channel negative clip).
+    rel709 = _compress_to_gamut_709(rel709)
 
     # sRGB OETF encode (inverse of _gamma_expand).
     srgb = np.where(
